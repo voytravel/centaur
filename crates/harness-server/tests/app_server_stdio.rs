@@ -420,7 +420,7 @@ fn fake_codex_blocks_mode_ignores_legacy_provider_selection() {
         .unwrap_or_else(|| panic!("blocks mode did not send turn/start; requests={requests:?}"));
     assert_eq!(
         turn_start.pointer("/params/model").and_then(Value::as_str),
-        Some("anthropic.claude-sonnet-4-5")
+        Some("DARKMATTER/GLM-5.2-FP8")
     );
 
     let _ = std::fs::remove_file(fake_codex);
