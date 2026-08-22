@@ -562,6 +562,9 @@ slackbotv2:
   mcpPublicUrl: "http://localhost:3000"
   externalOrgAllowlist: ""
   triggerBotAllowlist: ""
+  # Slack member IDs allowed to start a one-to-one direct-message session.
+  # Empty keeps DMs disabled. Group DMs are never treated as direct messages.
+  directMessageUserAllowlist: ""
   # Per-channel default harness / model / provider / reasoning, keyed by Slack
   # conversation id (the C…/G…/D… id). Each value is an object of optional
   # harness / model / provider / reasoning fields, using the same vocabulary as

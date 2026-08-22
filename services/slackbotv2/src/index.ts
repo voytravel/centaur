@@ -66,6 +66,7 @@ import { resolveChannelDefault } from './channel-defaults'
 import { extractMessageOverrides, type HarnessOverrides } from './overrides'
 import { createFlagMessageOverridesStrategy } from './message-overrides-strategy'
 import {
+  isAllowedSlackDirectMessage,
   isAllowedSlackMessage,
   isAllowedSlackWebhookBody,
   parseSlackWebhookPayload
@@ -351,9 +352,11 @@ export function createSlackbotV2(options: SlackbotV2Options): SlackbotV2 {
 
   // Slack does not classify mentions inside Block Kit or legacy attachments as
   // app_mention events. Alertmanager uses attachment.pretext, so inspect rich
-  // payloads after Chat SDK has verified the webhook and before executing.
+  // payloads after Chat SDK has verified the webhook and before executing. An
+  // allowlisted one-to-one DM is also an explicit execution trigger.
   chat.onNewMessage(/^.*$/s, async (thread, message) => {
-    if (!slackRichTextMentionsUser(message.raw, options.botUserId)) return
+    const directMessage = isAllowedSlackDirectMessage(message, options, logger)
+    if (!directMessage && !slackRichTextMentionsUser(message.raw, options.botUserId)) return
     if (!(await isAllowedSlackMessage(message, options, logger))) return
     message.isMention = true
     await handleSlackMessageHandoff(thread, message, {
@@ -362,13 +365,16 @@ export function createSlackbotV2(options: SlackbotV2Options): SlackbotV2 {
       options,
       state,
       subscribe: true,
-      trigger: 'new_mention'
+      trigger: directMessage ? 'direct_message' : 'new_mention'
     })
   })
 
   chat.onSubscribedMessage(async (thread, message) => {
+    const directMessage = isAllowedSlackDirectMessage(message, options, logger)
     if (!(await isAllowedSlackMessage(message, options, logger))) return
-    if (slackRichTextMentionsUser(message.raw, options.botUserId)) message.isMention = true
+    if (directMessage || slackRichTextMentionsUser(message.raw, options.botUserId)) {
+      message.isMention = true
+    }
     if (message.isMention !== true) {
       traceLog(
         options,
@@ -384,7 +390,7 @@ export function createSlackbotV2(options: SlackbotV2Options): SlackbotV2 {
       mode: 'execute',
       options,
       state,
-      trigger: 'subscribed_message'
+      trigger: directMessage ? 'direct_message' : 'subscribed_message'
     })
   })
 

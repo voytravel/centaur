@@ -163,6 +163,11 @@ export type SlackbotV2Options = {
    * nanocodex | hermes). Defaults to codex.
    */
   defaultHarnessType?: string
+  /**
+   * Slack member IDs allowed to start sessions from a one-to-one direct
+   * message. Empty or omitted stays fail-closed: direct messages are ignored.
+   */
+  directMessageUserAllowlist?: readonly string[]
   fetch?: SlackbotV2Fetch
   /**
    * Deployment-configured default model per harness wire value (claudecode |
