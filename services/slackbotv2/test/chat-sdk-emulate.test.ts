@@ -124,6 +124,88 @@ afterAll(async () => {
 })
 
 describe('slackbotv2', () => {
+  it('allows one-to-one direct messages only from configured users', async () => {
+    bot = createTestBot({ directMessageUserAllowlist: [USER_ID] })
+
+    const allowed = await postUserMessage('Answer from an allowed direct message.')
+    const allowedWaits: Promise<unknown>[] = []
+    const allowedResponse = await bot.app.request(
+      '/api/webhooks/slack',
+      signedSlackEvent({
+        event_id: 'Ev-slackbotv2-allowed-direct-message',
+        event: {
+          type: 'message',
+          channel: CHANNEL_ID,
+          channel_type: 'im',
+          team: TEAM_ID,
+          text: 'Answer from an allowed direct message.',
+          ts: allowed.ts,
+          user: USER_ID
+        }
+      }),
+      {},
+      waitUntilContext(allowedWaits)
+    )
+
+    expect(allowedResponse.status).toBe(200)
+    await Promise.all(allowedWaits)
+    expect(codexApi.creates.map(create => create.threadKey)).toEqual([`slack:${CHANNEL_ID}:`])
+    expect(codexApi.executes).toHaveLength(1)
+
+    const followUp = await postUserMessage('Continue the allowed direct-message session.')
+    const followUpWaits: Promise<unknown>[] = []
+    const followUpResponse = await bot.app.request(
+      '/api/webhooks/slack',
+      signedSlackEvent({
+        event_id: 'Ev-slackbotv2-allowed-direct-message-follow-up',
+        event: {
+          type: 'message',
+          channel: CHANNEL_ID,
+          channel_type: 'im',
+          team: TEAM_ID,
+          text: 'Continue the allowed direct-message session.',
+          ts: followUp.ts,
+          user: USER_ID
+        }
+      }),
+      {},
+      waitUntilContext(followUpWaits)
+    )
+
+    expect(followUpResponse.status).toBe(200)
+    await Promise.all(followUpWaits)
+    expect(codexApi.creates.map(create => create.threadKey)).toEqual([
+      `slack:${CHANNEL_ID}:`,
+      `slack:${CHANNEL_ID}:`
+    ])
+    expect(codexApi.executes).toHaveLength(2)
+
+    const denied = await postUserMessage('This direct message must be ignored.', undefined, slackB)
+    const deniedWaits: Promise<unknown>[] = []
+    const deniedResponse = await bot.app.request(
+      '/api/webhooks/slack',
+      signedSlackEvent({
+        event_id: 'Ev-slackbotv2-denied-direct-message',
+        event: {
+          type: 'message',
+          channel: CHANNEL_ID,
+          channel_type: 'im',
+          team: TEAM_ID,
+          text: 'This direct message must be ignored.',
+          ts: denied.ts,
+          user: USER_B_ID
+        }
+      }),
+      {},
+      waitUntilContext(deniedWaits)
+    )
+
+    expect(deniedResponse.status).toBe(200)
+    await Promise.all(deniedWaits)
+    expect(codexApi.creates).toHaveLength(2)
+    expect(codexApi.executes).toHaveLength(2)
+  })
+
   it('accepts Slack events on the legacy route', async () => {
     const parent = await postUserMessage('Legacy route context.')
     const mention = await postUserMessage(`<@${BOT_USER_ID}> use the legacy route`, parent.ts)

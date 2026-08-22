@@ -13,6 +13,7 @@ type RawSlackEvent = {
   app_id?: JsonValue
   bot_id?: JsonValue
   bot_profile?: RawSlackBotProfile
+  channel_type?: JsonValue
   source_team?: JsonValue
   subtype?: JsonValue
   team?: JsonValue
@@ -151,6 +152,32 @@ export async function isAllowedSlackMessage(
   }
 
   return true
+}
+
+/**
+ * Returns true only for one-to-one Slack direct messages from an explicitly
+ * configured member. This is intentionally separate from the generic message
+ * policy: the generic policy permits human messages, while DMs are opt-in.
+ */
+export function isAllowedSlackDirectMessage(
+  message: Message,
+  options: SlackbotV2Options,
+  logger: Logger
+): boolean {
+  const raw = isRawSlackEvent(message.raw) ? message.raw : undefined
+  if (!raw || stringValue(raw.channel_type) !== 'im') return false
+
+  const allowedUserIds =
+    options.directMessageUserAllowlist
+    ?? splitEnvList(process.env.SLACKBOT_DIRECT_MESSAGE_USER_ALLOWLIST)
+  const userId = stringValue(raw.user)
+  if (userId && new Set(allowedUserIds).has(userId)) return true
+
+  logger.warn('slackbotv2_direct_message_ignored_user_not_allowlisted', {
+    message_id: message.id,
+    thread_id: message.threadId
+  })
+  return false
 }
 
 function externalSlackTeamId(event: RawSlackEvent): string | undefined {
