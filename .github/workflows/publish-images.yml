@@ -111,3 +111,98 @@ jobs:
             RUST_BUILD_PROFILE=release
           cache-from: type=gha,scope=${{ matrix.image }}
           cache-to: type=gha,mode=max,scope=${{ matrix.image }}
+
+  publish-release-manifest:
+    if: github.ref == 'refs/heads/main'
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: read
+
+    steps:
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
+      - name: Log in to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish immutable HZ release manifest
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          [[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]]
+          image_tag="main-sha-${GITHUB_SHA:0:7}"
+          release_tag="hz-images-${GITHUB_SHA}"
+          manifest_path="$RUNNER_TEMP/centaur-hz-images.json"
+          images_json='{}'
+          images=(
+            centaur-api-rs
+            centaur-agent
+            centaur-iron-proxy
+            centaur-slackbotv2
+            centaur-linearbot
+            centaur-console
+          )
+
+          for image in "${images[@]}"; do
+            repository="${REGISTRY}/${IMAGE_NAMESPACE}/${image}"
+            reference="${repository}:${image_tag}"
+            digest="$(
+              docker buildx imagetools inspect "$reference" \
+                --format '{{json .Manifest}}' | jq -er '.digest'
+            )"
+            if ! [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+              echo "::error::Unexpected digest for ${reference}"
+              exit 1
+            fi
+            images_json="$(
+              jq -c \
+                --arg image "$image" \
+                --arg repository "$repository" \
+                --arg tag "$image_tag" \
+                --arg digest "$digest" \
+                '. + {($image): {repository: $repository, tag: $tag, digest: $digest}}' \
+                <<<"$images_json"
+            )"
+          done
+
+          jq -n \
+            --arg source_repository "$GITHUB_REPOSITORY" \
+            --arg source_sha "$GITHUB_SHA" \
+            --arg image_tag "$image_tag" \
+            --argjson images "$images_json" \
+            '{
+              schema_version: 1,
+              source_repository: $source_repository,
+              source_sha: $source_sha,
+              image_tag: $image_tag,
+              images: $images
+            }' >"$manifest_path"
+
+          if gh release view "$release_tag" >/dev/null 2>&1; then
+            existing_dir="$RUNNER_TEMP/existing-release"
+            mkdir -p "$existing_dir"
+            gh release download "$release_tag" \
+              --pattern centaur-hz-images.json \
+              --dir "$existing_dir"
+            if ! cmp -s "$manifest_path" \
+              "$existing_dir/centaur-hz-images.json"; then
+              echo "::error::${release_tag} already has a different immutable manifest"
+              exit 1
+            fi
+            echo "${release_tag} already contains the same immutable manifest"
+          else
+            gh release create "$release_tag" \
+              "$manifest_path#centaur-hz-images.json" \
+              --target "$GITHUB_SHA" \
+              --title "Centaur HZ images ${GITHUB_SHA:0:7}" \
+              --notes "Immutable image manifest produced from ${GITHUB_SHA}." \
+              --prerelease
+          fi
