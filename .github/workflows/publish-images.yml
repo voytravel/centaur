@@ -186,10 +186,11 @@ jobs:
               images: $images
             }' >"$manifest_path"
 
-          if gh release view "$release_tag" >/dev/null 2>&1; then
+          if gh release view "$release_tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             existing_dir="$RUNNER_TEMP/existing-release"
             mkdir -p "$existing_dir"
             gh release download "$release_tag" \
+              --repo "$GITHUB_REPOSITORY" \
               --pattern centaur-hz-images.json \
               --dir "$existing_dir"
             if ! cmp -s "$manifest_path" \
@@ -200,6 +201,7 @@ jobs:
             echo "${release_tag} already contains the same immutable manifest"
           else
             gh release create "$release_tag" \
+              --repo "$GITHUB_REPOSITORY" \
               "$manifest_path#centaur-hz-images.json" \
               --target "$GITHUB_SHA" \
               --title "Centaur HZ images ${GITHUB_SHA:0:7}" \
