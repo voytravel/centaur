@@ -148,19 +148,14 @@ describe("extractMessageOverrides", () => {
 });
 
 describe("resolveStickyProvider", () => {
-  test("persists a selected provider and reuses it on later turns", () => {
+  test("clears selected providers so legacy sessions use the gateway", () => {
     expect(
       resolveStickyProvider(undefined, {
         harnessType: "codex",
         provider: "private_responses",
       }),
-    ).toEqual({
-      provider: "private_responses",
-      update: "private_responses",
-    });
-    expect(resolveStickyProvider("private_responses", {})).toEqual({
-      provider: "private_responses",
-    });
+    ).toEqual({ update: null });
+    expect(resolveStickyProvider("private_responses", {})).toEqual({ update: null });
   });
 
   test("an explicit harness switch clears a previous provider", () => {

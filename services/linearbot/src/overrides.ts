@@ -97,20 +97,15 @@ export function extractMessageOverrides(text: string): MessageOverrides {
 }
 
 /**
- * Resolve the provider fixed at Codex thread start. A provider selection stays
- * sticky across later turns, while an explicit harness switch clears it.
- * `update` is omitted when persisted state should remain unchanged; null is a
- * deliberate tombstone for a previous selection.
+ * Clear provider state from older sessions. New provider selection is disabled
+ * and every Codex turn must use the configured OpenAI-compatible gateway.
  */
 export function resolveStickyProvider(
   current: string | null | undefined,
   overrides: Pick<MessageOverrides, "harnessType" | "provider">,
 ): StickyProviderResolution {
-  if (overrides.provider) {
-    return { provider: overrides.provider, update: overrides.provider };
-  }
-  if (overrides.harnessType) return { update: null };
-  return current ? { provider: current } : {};
+  if (current || overrides.provider || overrides.harnessType) return { update: null };
+  return {};
 }
 
 function flagPattern(flag: string): RegExp {

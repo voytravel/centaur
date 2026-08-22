@@ -190,7 +190,7 @@ describe("linearbot comment-thread pipeline", () => {
     ).toBe(false);
   });
 
-  it("reuses a persisted Codex provider on a later turn", async () => {
+  it("clears a removed direct provider on a later turn", async () => {
     const threadKey = `linear:${ISSUE_ID}:c:comment-provider`;
     await postWebhook(
       commentCreatedPayload({
@@ -225,7 +225,7 @@ describe("linearbot comment-thread pipeline", () => {
     const secondInput = JSON.parse(secondExecute.body.input_lines.at(-1)!) as {
       provider?: string;
     };
-    expect(secondInput.provider).toBe("private_responses");
+    expect(secondInput.provider).toBeUndefined();
 
     codexApi.emitOutputLines(threadKey, sampleCodexOutputLines("Two."));
     await waitFor(() =>
