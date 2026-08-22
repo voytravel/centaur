@@ -20,8 +20,7 @@ use centaur_iron_control::{
     SessionRegistrar, register_role,
 };
 use centaur_iron_proxy::{
-    ProxyFragment, SourceKind, SourcePolicy, custom_provider_auth_fragments, harness_auth_fragment,
-    infra_fragment,
+    ProxyFragment, SourceKind, SourcePolicy, harness_auth_fragment, infra_fragment,
 };
 use centaur_sandbox_agent_k8s::{
     AgentSandboxBackend, AgentSandboxConfig, GitHubTokenRef, IronControlSettings, IronProxyConfig,

@@ -1150,21 +1150,11 @@ class Console::ThreadsControllerTest < ActionDispatch::IntegrationTest
     assert_equal "gpt-5.5", create[:metadata][:model]
   end
 
-  test "a removed custom provider pick is rejected" do
+  test "a removed direct provider pick is rejected" do
     client = RecordingApiClient.new
-    config = {
-      private_responses: {
-        name: "Private Responses",
-        baseUrl: "https://inference.example.com/v1",
-        apiKeyEnv: "PRIVATE_RESPONSES_API_KEY",
-        defaultModel: "example-model"
-      }
-    }.to_json
-    with_env("CODEX_CUSTOM_PROVIDERS" => config) do
-      with_composer(client: client) do
-        post console_threads_url,
-             params: { prompt: "Reply with PONG.", model: "provider:private_responses" }
-      end
+    with_composer(client: client) do
+      post console_threads_url,
+           params: { prompt: "Reply with PONG.", model: "provider:private_responses" }
     end
 
     assert_empty client.calls
