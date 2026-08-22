@@ -192,7 +192,9 @@ export function validateStrategyOverrides(
     harnessType = normalized
   }
 
-  if (cleanString(raw.provider)) return {}
+  // Provider routing is retired. Older strategy responses may still include a
+  // provider field, but it must neither reach the session nor discard valid,
+  // independently safe harness/model/reasoning controls.
 
   const modelRaw = cleanString(raw.model)
   if (modelRaw) {

@@ -220,7 +220,6 @@ transforms:
           rules: [{ host: inference-api.nousresearch.com }]
 "#;
 
-
 // The `openai-codex` broker credential this references is managed by
 // iron-control and provisioned out of band (see `centaur-perms broker create`).
 const CODEX_ACCESS_TOKEN_FRAGMENT: &str = r#"

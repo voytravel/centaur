@@ -371,6 +371,22 @@ describe('validateStrategyOverrides', () => {
     expect(validateStrategyOverrides({ reasoning: 'turbo' })).toEqual({})
   })
 
+  test('ignores retired provider fields without discarding safe controls', () => {
+    expect(
+      validateStrategyOverrides({
+        harness: 'codex',
+        model: 'gpt-5.6-sol',
+        provider: 'responses',
+        reasoning: 'max'
+      })
+    ).toEqual({
+      harnessType: 'codex',
+      model: 'gpt-5.6-sol',
+      provider: undefined,
+      reasoning: 'max'
+    })
+  })
+
   test('drops reasoning when the resolved strategy harness cannot use it', () => {
     expect(validateStrategyOverrides({ reasoning: 'max' })).toEqual({
       harnessType: undefined,

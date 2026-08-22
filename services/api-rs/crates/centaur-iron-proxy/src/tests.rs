@@ -16,7 +16,11 @@ fn harness_auth_fragments_are_baked_in() {
         .unwrap();
     assert!(placeholder_env(&[codex_access]).is_empty());
 
-    assert!(harness_auth_fragment("openrouter", "api_key").unwrap().is_none());
+    assert!(
+        harness_auth_fragment("openrouter", "api_key")
+            .unwrap()
+            .is_none()
+    );
 
     let hermes = harness_auth_fragment("hermes", "api_key").unwrap().unwrap();
     assert_eq!(
@@ -29,7 +33,11 @@ fn harness_auth_fragments_are_baked_in() {
         Some("NOUS_API_KEY")
     );
 
-    assert!(harness_auth_fragment("meta-ai", "api_key").unwrap().is_none());
+    assert!(
+        harness_auth_fragment("meta-ai", "api_key")
+            .unwrap()
+            .is_none()
+    );
 
     let claude_code = harness_auth_fragment("claude-code", "api_key")
         .unwrap()
