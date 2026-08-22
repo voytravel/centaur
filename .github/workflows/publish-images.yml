@@ -37,7 +37,9 @@ jobs:
     # Production image tags must always correspond to a commit on the protected
     # main branch. This also makes a manual run from a feature branch a no-op.
     if: github.ref == 'refs/heads/main'
-    runs-on: arc-dind
+    # Standard hosted runners include Docker/Buildx and give each public-repo
+    # build a fresh VM, avoiding reliance on the shared ARC runner group.
+    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
