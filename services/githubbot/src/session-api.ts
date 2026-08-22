@@ -71,7 +71,7 @@ type ForwardSessionApiCallbacks = {
   onMessagesAppended?(): Promise<void>;
   /**
    * Fires when session creation restarted the thread onto a new harness
-   * (explicit --claude/--amp/--codex on a thread pinned to another harness).
+   * (explicit --claude/--codex on a thread pinned to another harness).
    * Runs before append/execute, so the callback may set `input.contextPreamble`
    * to re-feed the issue + comment history to the fresh harness.
    */
@@ -389,7 +389,7 @@ async function createSession(
 ): Promise<CreateSessionOutcome> {
   const requested =
     harnessType ?? options.defaultHarnessType ?? DEFAULT_HARNESS_TYPE;
-  // An explicit --claude/--amp/--codex restarts a thread pinned to another
+  // An explicit --claude/--codex restarts a thread pinned to another
   // harness; the implicit default never forces a switch.
   const response = await postCreateSession(
     options,

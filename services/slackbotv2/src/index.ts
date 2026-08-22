@@ -1080,7 +1080,7 @@ async function syncThreadMessageToSession(
   const requestedStickyOverrides = stickyThreadOverrideUpdate(overrides)
   // Once a thread is pinned, only another explicit flag may move it. The LLM
   // strategy can still infer per-turn reasoning, but a false-positive harness,
-  // model, or provider selection must not replace --claude/--amp/--codex/
+  // model selection must not replace --claude/--codex/
   // --nanocodex state.
   const preserveStickyOverrides = Boolean(
     requestedStickyOverrides &&
