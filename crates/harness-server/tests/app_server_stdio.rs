@@ -249,9 +249,9 @@ fn fake_claude_subagent_sidechain_stop_does_not_complete_the_turn() {
 }
 
 #[test]
-fn fake_codex_blocks_mode_uses_openrouter_provider_when_model_is_configured() {
-    let fake_codex = temp_path("fake-openrouter-codex.sh");
-    let fake_codex_log = temp_path("fake-openrouter-codex-requests.jsonl");
+fn fake_codex_blocks_mode_uses_openai_provider_when_model_is_configured() {
+    let fake_codex = temp_path("fake-openai-codex.sh");
+    let fake_codex_log = temp_path("fake-openai-codex-requests.jsonl");
     let script = fake_codex_app_server_script(&fake_codex_log);
     std::fs::write(&fake_codex, script).expect("write fake codex script");
     let mut permissions = std::fs::metadata(&fake_codex)
@@ -267,9 +267,9 @@ fn fake_codex_blocks_mode_uses_openrouter_provider_when_model_is_configured() {
             "CODEX_BIN",
             fake_codex.to_str().expect("utf-8 fake codex path"),
         )),
-        &[("OPENROUTER_MODEL", "openrouter/auto")],
+        &[("CODEX_MODEL", "DARKMATTER/GLM-5.2-FP8")],
     );
-    let turn = bridge.run_blocks_user_turn("say openrouter blocks", Duration::from_secs(10));
+    let turn = bridge.run_blocks_user_turn("say LiteLLM blocks", Duration::from_secs(10));
     bridge.finish_successfully();
 
     assert_completed_turn(&turn);
@@ -288,7 +288,7 @@ fn fake_codex_blocks_mode_uses_openrouter_provider_when_model_is_configured() {
         thread_start
             .pointer("/params/modelProvider")
             .and_then(Value::as_str),
-        Some("openrouter")
+        Some("openai")
     );
     let turn_start = requests
         .iter()
@@ -296,7 +296,7 @@ fn fake_codex_blocks_mode_uses_openrouter_provider_when_model_is_configured() {
         .unwrap_or_else(|| panic!("blocks mode did not send turn/start; requests={requests:?}"));
     assert_eq!(
         turn_start.pointer("/params/model").and_then(Value::as_str),
-        Some("openrouter/auto")
+        Some("DARKMATTER/GLM-5.2-FP8")
     );
 
     let _ = std::fs::remove_file(fake_codex);
@@ -304,7 +304,7 @@ fn fake_codex_blocks_mode_uses_openrouter_provider_when_model_is_configured() {
 }
 
 #[test]
-fn fake_codex_blocks_mode_uses_openrouter_provider_for_explicit_model_slug() {
+fn fake_codex_blocks_mode_uses_openai_provider_for_provider_style_model_slug() {
     let fake_codex = temp_path("fake-openrouter-flag-codex.sh");
     let fake_codex_log = temp_path("fake-openrouter-flag-codex-requests.jsonl");
     let script = fake_codex_app_server_script(&fake_codex_log);
@@ -324,7 +324,7 @@ fn fake_codex_blocks_mode_uses_openrouter_provider_for_explicit_model_slug() {
         )),
     );
     let turn = bridge.run_blocks_user_turn_with_model(
-        "say explicit openrouter blocks",
+        "say provider-style LiteLLM model blocks",
         Some("anthropic/claude-fable-5"),
         Duration::from_secs(10),
     );
@@ -346,7 +346,7 @@ fn fake_codex_blocks_mode_uses_openrouter_provider_for_explicit_model_slug() {
         thread_start
             .pointer("/params/modelProvider")
             .and_then(Value::as_str),
-        Some("openrouter")
+        Some("openai")
     );
     let turn_start = requests
         .iter()
@@ -362,9 +362,9 @@ fn fake_codex_blocks_mode_uses_openrouter_provider_for_explicit_model_slug() {
 }
 
 #[test]
-fn fake_codex_blocks_mode_uses_bedrock_provider_when_selected() {
-    let fake_codex = temp_path("fake-bedrock-codex.sh");
-    let fake_codex_log = temp_path("fake-bedrock-codex-requests.jsonl");
+fn fake_codex_blocks_mode_ignores_legacy_provider_selection() {
+    let fake_codex = temp_path("fake-legacy-provider-codex.sh");
+    let fake_codex_log = temp_path("fake-legacy-provider-codex-requests.jsonl");
     let script = fake_codex_app_server_script(&fake_codex_log);
     std::fs::write(&fake_codex, script).expect("write fake codex script");
     let mut permissions = std::fs::metadata(&fake_codex)
@@ -381,17 +381,16 @@ fn fake_codex_blocks_mode_uses_bedrock_provider_when_selected() {
             fake_codex.to_str().expect("utf-8 fake codex path"),
         )),
     );
-    // The `--bedrock` Slack flag rides the blocks `provider` field; it must pin
-    // codex's `amazon-bedrock` provider even though the Bedrock model id carries
-    // no `/` slug (which would otherwise route nowhere special).
+    // Old persisted threads may still carry a provider field. It must not
+    // redirect the configured OpenAI-compatible LiteLLM client.
     let user_line = json!({
         "type": "user",
         "thread_key": "slack:C123:123.456",
         "provider": "amazon-bedrock",
-        "model": "anthropic.claude-sonnet-4-5",
+        "model": "DARKMATTER/GLM-5.2-FP8",
         "message": {
             "role": "user",
-            "content": [{"type": "text", "text": "say bedrock blocks"}],
+            "content": [{"type": "text", "text": "say LiteLLM blocks"}],
         },
     });
     let turn = bridge.run_blocks_user_line(user_line, Duration::from_secs(10));
@@ -413,7 +412,7 @@ fn fake_codex_blocks_mode_uses_bedrock_provider_when_selected() {
         thread_start
             .pointer("/params/modelProvider")
             .and_then(Value::as_str),
-        Some("amazon-bedrock")
+        Some("openai")
     );
     let turn_start = requests
         .iter()

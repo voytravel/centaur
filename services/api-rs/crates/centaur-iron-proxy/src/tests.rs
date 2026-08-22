@@ -16,16 +16,7 @@ fn harness_auth_fragments_are_baked_in() {
         .unwrap();
     assert!(placeholder_env(&[codex_access]).is_empty());
 
-    let openrouter = harness_auth_fragment("openrouter", "api_key")
-        .unwrap()
-        .unwrap();
-    let openrouter_placeholders = placeholder_env(&[openrouter]);
-    assert_eq!(
-        openrouter_placeholders
-            .get("OPENROUTER_API_KEY")
-            .map(String::as_str),
-        Some("OPENROUTER_API_KEY")
-    );
+    assert!(harness_auth_fragment("openrouter", "api_key").unwrap().is_none());
 
     let hermes = harness_auth_fragment("hermes", "api_key").unwrap().unwrap();
     assert_eq!(
@@ -38,16 +29,7 @@ fn harness_auth_fragments_are_baked_in() {
         Some("NOUS_API_KEY")
     );
 
-    let meta_ai = harness_auth_fragment("meta-ai", "api_key")
-        .unwrap()
-        .unwrap();
-    let meta_ai_placeholders = placeholder_env(&[meta_ai]);
-    assert_eq!(
-        meta_ai_placeholders
-            .get("META_AI_API_KEY")
-            .map(String::as_str),
-        Some("META_AI_API_KEY")
-    );
+    assert!(harness_auth_fragment("meta-ai", "api_key").unwrap().is_none());
 
     let claude_code = harness_auth_fragment("claude-code", "api_key")
         .unwrap()

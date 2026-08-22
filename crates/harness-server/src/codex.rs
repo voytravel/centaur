@@ -32,37 +32,18 @@ impl CodexHarnessServer {
     fn default_model(&self) -> Option<String> {
         env::var("CODEX_MODEL")
             .ok()
-            .or_else(|| env::var("OPENROUTER_MODEL").ok())
             .map(|model| model.trim().to_owned())
             .filter(|model| !model.is_empty())
     }
 
-    fn model_provider_for(&self, provider_override: Option<&str>, model: Option<&str>) -> String {
-        provider_override
-            .map(str::trim)
-            .filter(|provider| !provider.is_empty())
-            .map(str::to_owned)
-            .or_else(|| {
-                env::var("CODEX_MODEL_PROVIDER")
-                    .ok()
-                    .map(|provider| provider.trim().to_owned())
-                    .filter(|provider| !provider.is_empty())
-            })
-            .or_else(|| {
-                model
-                    .map(str::trim)
-                    .filter(|model| !model.is_empty())
-                    .filter(|model| model.contains('/'))
-                    .map(|_| "openrouter".to_string())
-            })
-            .or_else(|| {
-                env::var("OPENROUTER_MODEL")
-                    .ok()
-                    .map(|model| model.trim().to_owned())
-                    .filter(|model| !model.is_empty())
-                    .map(|_| "openrouter".to_string())
-            })
-            .unwrap_or_else(|| self.fallback_model_provider.to_string())
+    /// All Codex models use the deployment's OpenAI-compatible endpoint.
+    ///
+    /// Provider-style model ids (for example `DARKMATTER/GLM-5.2-FP8`) are
+    /// valid LiteLLM model identifiers, not a request to select an alternate
+    /// upstream. Ignoring the legacy provider override keeps a persisted Slack
+    /// thread from bypassing the configured `OPENAI_BASE_URL`.
+    fn model_provider_for(&self, _provider_override: Option<&str>, _model: Option<&str>) -> String {
+        self.fallback_model_provider.to_string()
     }
 }
 
@@ -933,30 +914,25 @@ fn codex_supports_stdio_listen(bin: &str) -> bool {
 mod tests {
     use super::*;
 
-    // A non-empty explicit provider override (the `--bedrock` blocks `provider`
-    // field) short-circuits before any env/model heuristic, so these assertions
-    // are deterministic regardless of CODEX_MODEL_PROVIDER / OPENROUTER_MODEL.
     #[test]
-    fn explicit_provider_override_wins_over_model_heuristic() {
+    fn configured_openai_provider_wins_over_legacy_selection_inputs() {
         let codex = CodexHarnessServer::codex();
         assert_eq!(
             codex.model_provider_for(Some("amazon-bedrock"), None),
-            "amazon-bedrock"
+            "openai"
         );
         assert_eq!(
             codex.model_provider_for(Some("amazon-bedrock"), Some("anthropic/claude-fable-5")),
-            "amazon-bedrock"
+            "openai"
         );
     }
 
     #[test]
     fn blank_provider_override_is_ignored() {
-        // A blank override falls through to the model `/`-slug heuristic, which
-        // selects openrouter — i.e. the override does not pin an empty provider.
         let codex = CodexHarnessServer::codex();
         assert_eq!(
             codex.model_provider_for(Some("   "), Some("vendor/model")),
-            "openrouter"
+            "openai"
         );
     }
 
