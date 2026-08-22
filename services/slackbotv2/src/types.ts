@@ -158,8 +158,8 @@ export type SlackbotV2Options = {
   /** Percentage of otherwise-default Codex threads assigned to Nanocodex. */
   codexNanocodexRolloutPercent?: number
   /**
-   * Harness for new threads when no --claude/--amp/--codex/--nanocodex/--hermes
-   * flag is given (HarnessType wire value: codex | amp | claudecode |
+   * Harness for new threads when no --claude/--codex/--nanocodex/--hermes
+   * flag is given (HarnessType wire value: codex | claudecode |
    * nanocodex | hermes). Defaults to codex.
    */
   defaultHarnessType?: string
@@ -299,7 +299,7 @@ export type ForwardSessionInput = {
    * default. Metadata only — never forwarded to the harness (that is `model`).
    */
   metadataModel?: string
-  /** Effective model provider selected by sticky thread flags (--bedrock); codex only. */
+  /** Legacy model provider persisted by older sessions; new selection is disabled. */
   provider?: string
   /** Per-turn reasoning effort parsed from the `-rsn` flag (Codex/Nanocodex). */
   reasoning?: string

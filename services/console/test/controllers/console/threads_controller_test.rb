@@ -854,7 +854,7 @@ class Console::ThreadsControllerTest < ActionDispatch::IntegrationTest
       # The model picker is a custom menu (account-dropdown style) posting
       # through a hidden field, not a native select.
       assert_select "input[type=hidden][name=model]", count: 1
-      assert_select "[data-console-model-option][data-value=?]", "amp"
+      assert_select "[data-console-model-option][data-value=?]", "amp", count: 0
       assert_select "[data-console-model-option][data-value=?]", "claude-opus-5"
       assert_select "select", count: 0
     end
@@ -1110,20 +1110,22 @@ class Console::ThreadsControllerTest < ActionDispatch::IntegrationTest
     refute_includes requester_context, "Prompted by: Goksu Toprak"
   end
 
-  test "picking Amp starts an amp chat and sends no model" do
+  test "a configured Codex model is selected by default" do
     client = RecordingApiClient.new
-    with_composer(client: client) do
-      post console_threads_url, params: { prompt: "Reply with PONG.", model: "amp" }
+    with_env("CODEX_MODEL" => "glm-5.2-fp8") do
+      with_composer(client: client) do
+        post console_threads_url, params: { prompt: "Reply with PONG." }
+      end
     end
 
     create = client.calls[0].last
-    assert_equal "amp", create[:harness_type]
-    assert_not create[:metadata].key?(:model)
+    assert_equal "codex", create[:harness_type]
+    assert_equal "glm-5.2-fp8", create[:metadata][:model]
 
     execute = client.calls[2].last
-    assert_not execute[:metadata].key?(:model)
+    assert_equal "glm-5.2-fp8", execute[:metadata][:model]
     line = JSON.parse(execute[:input_lines].first)
-    assert_not line.key?("model")
+    assert_equal "glm-5.2-fp8", line["model"]
   end
 
   test "starting a chat with an unknown model is rejected" do
@@ -1148,32 +1150,16 @@ class Console::ThreadsControllerTest < ActionDispatch::IntegrationTest
     assert_equal "gpt-5.5", create[:metadata][:model]
   end
 
-  test "a configured custom inference model pick uses its codex provider" do
+  test "a removed direct provider pick is rejected" do
     client = RecordingApiClient.new
-    config = {
-      private_responses: {
-        name: "Private Responses",
-        baseUrl: "https://inference.example.com/v1",
-        apiKeyEnv: "PRIVATE_RESPONSES_API_KEY",
-        defaultModel: "example-model"
-      }
-    }.to_json
-    with_env("CODEX_CUSTOM_PROVIDERS" => config) do
-      with_composer(client: client) do
-        post console_threads_url,
-             params: { prompt: "Reply with PONG.", model: "provider:private_responses" }
-      end
+    with_composer(client: client) do
+      post console_threads_url,
+           params: { prompt: "Reply with PONG.", model: "provider:private_responses" }
     end
 
-    create = client.calls[0].last
-    assert_equal "codex", create[:harness_type]
-    assert_equal "example-model", create[:metadata][:model]
-    assert_equal "private_responses", create[:metadata][:provider]
-
-    execute = client.calls[2].last
-    assert_equal "private_responses", execute[:metadata][:provider]
-    line = JSON.parse(execute[:input_lines].first)
-    assert_equal "private_responses", line["provider"]
+    assert_empty client.calls
+    assert_redirected_to console_threads_path(new: 1)
+    assert_match(/Unknown model/, flash[:alert])
   end
 
   test "a codex chat carries the picked reasoning effort" do

@@ -25,9 +25,7 @@ describe("extractMessageOverrides", () => {
     expect(
       extractMessageOverrides("--claude-code review this").harnessType,
     ).toBe("claudecode");
-    expect(extractMessageOverrides("--amp review this").harnessType).toBe(
-      "amp",
-    );
+    expect(extractMessageOverrides("--amp review this").harnessType).toBeUndefined();
     expect(extractMessageOverrides("--codex review this").harnessType).toBe(
       "codex",
     );
@@ -36,10 +34,10 @@ describe("extractMessageOverrides", () => {
     );
   });
 
-  test("parses harness flag anywhere in the message", () => {
+  test("leaves removed harness flags in the prompt", () => {
     expect(extractMessageOverrides("review this --amp please")).toEqual({
-      cleanedText: "review this please",
-      harnessType: "amp",
+      cleanedText: "review this --amp please",
+      harnessType: undefined,
       model: undefined,
     });
   });
@@ -82,44 +80,12 @@ describe("extractMessageOverrides", () => {
     );
   });
 
-  test("--meta selects the Meta provider and codex harness", () => {
-    expect(extractMessageOverrides("--meta fix it")).toEqual({
-      cleanedText: "fix it",
-      harnessType: "codex",
+  test("leaves removed provider flags in the prompt", () => {
+    expect(extractMessageOverrides("--provider private_responses audit this")).toEqual({
+      cleanedText: "--provider private_responses audit this",
+      harnessType: undefined,
       model: undefined,
-      provider: "responses",
     });
-  });
-
-  test("--provider selects an arbitrary codex provider", () => {
-    expect(
-      extractMessageOverrides(
-        "--provider private_responses --model example-model audit this",
-      ),
-    ).toEqual({
-      cleanedText: "audit this",
-      harnessType: "codex",
-      model: "example-model",
-      provider: "private_responses",
-    });
-  });
-
-  test("--provider uses the configured provider default model", () => {
-    const previous = process.env.CODEX_CUSTOM_PROVIDERS;
-    process.env.CODEX_CUSTOM_PROVIDERS = JSON.stringify({
-      private_responses: { defaultModel: "configured-model" },
-    });
-    try {
-      expect(extractMessageOverrides("--provider=private_responses audit this")).toEqual({
-        cleanedText: "audit this",
-        harnessType: "codex",
-        model: "configured-model",
-        provider: "private_responses",
-      });
-    } finally {
-      if (previous === undefined) delete process.env.CODEX_CUSTOM_PROVIDERS;
-      else process.env.CODEX_CUSTOM_PROVIDERS = previous;
-    }
   });
 
   test("--model expands claude aliases to full model ids", () => {
@@ -167,7 +133,7 @@ describe("extractMessageOverrides", () => {
     expect(
       extractMessageOverrides("--codex --model gpt-5.2-codex go").model,
     ).toBe("gpt-5.2-codex");
-    expect(extractMessageOverrides("--amp --model fast go").model).toBe("fast");
+    expect(extractMessageOverrides("--codex --model fast go").model).toBe("fast");
   });
 
   test("explicit flags win over shortcut implications", () => {
@@ -214,19 +180,14 @@ describe("extractMessageOverrides", () => {
 });
 
 describe("resolveStickyProvider", () => {
-  test("persists a selected provider and reuses it on later turns", () => {
+  test("clears selected providers so legacy sessions use the gateway", () => {
     expect(
       resolveStickyProvider(undefined, {
         harnessType: "codex",
         provider: "private_responses",
       }),
-    ).toEqual({
-      provider: "private_responses",
-      update: "private_responses",
-    });
-    expect(resolveStickyProvider("private_responses", {})).toEqual({
-      provider: "private_responses",
-    });
+    ).toEqual({ update: null });
+    expect(resolveStickyProvider("private_responses", {})).toEqual({ update: null });
   });
 
   test("an explicit harness switch clears a previous provider", () => {

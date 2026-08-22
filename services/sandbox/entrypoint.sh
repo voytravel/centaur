@@ -59,17 +59,6 @@ if [ -d "$STATE_DIR" ] && [ -w "$STATE_DIR" ]; then
     export CENTAUR_PERSISTENT_STATE=1
 fi
 
-mkdir -p "$HOME_DIR/.config/amp"
-
-# ── Write harness configs (no MCP — adds ~10s startup overhead) ───────────────
-cat > "$HOME_DIR/.config/amp/settings.json" <<EOF
-{
-  "amp.experimental.compaction": 95,
-  "amp.proxy": "http://${FIREWALL_HOSTNAME}:8080",
-  "amp.git.commit.coauthor.enabled": false
-}
-EOF
-
 # ── Mock Google ADC for sandbox-only SDK initialization ─────────────────────
 # Some Google client libraries refuse to initialize without ADC, even when the
 # per-sandbox proxy is responsible for attaching the real auth headers.
@@ -224,84 +213,6 @@ if effort:
 
 text = "\n".join(lines).rstrip() + "\n"
 
-# CODEX_BEDROCK_REGION: when codex's built-in `amazon-bedrock` provider is enabled
-# (the api-rs sandbox env injects this), pin its AWS region from the SAME env var
-# that scopes iron-proxy's SigV4 re-signing, so the in-sandbox client signs/sends
-# for the region the proxy is bound to. One source of truth instead of a
-# hand-written CODEX_CONFIG_OVERLAY that can silently disagree and fail signing.
-# Applied before the overlay below, so an operator can still override it. tomli_w
-# quotes the value (no TOML injection); a parse failure just skips the patch.
-bedrock_region = (os.environ.get("CODEX_BEDROCK_REGION") or "").strip()
-if bedrock_region:
-    import tomllib
-    import tomli_w
-
-    try:
-        config = tomllib.loads(text)
-    except tomllib.TOMLDecodeError as exc:
-        print(f"ignoring CODEX_BEDROCK_REGION patch: {exc}", file=sys.stderr)
-    else:
-        config.setdefault("model_providers", {}).setdefault(
-            "amazon-bedrock", {}
-        ).setdefault("aws", {})["region"] = bedrock_region
-        text = tomli_w.dumps(config)
-
-# CODEX_CUSTOM_PROVIDERS is the chart-rendered map of private OpenAI-compatible
-# Responses providers. Codex reads placeholder API keys from the environment;
-# iron-proxy replaces each one only for its configured base URL's host. Applied
-# before CODEX_CONFIG_OVERLAY so operators can still override provider details.
-custom_providers_raw = (os.environ.get("CODEX_CUSTOM_PROVIDERS") or "").strip()
-if custom_providers_raw:
-    import json
-    import tomllib
-    import tomli_w
-
-    try:
-        custom_providers = json.loads(custom_providers_raw)
-        if not isinstance(custom_providers, dict):
-            raise ValueError("expected an object keyed by provider id")
-        config = tomllib.loads(text)
-        model_providers = config.setdefault("model_providers", {})
-        for provider_id, provider in custom_providers.items():
-            if not isinstance(provider, dict):
-                raise ValueError(f"provider {provider_id!r} must be an object")
-            model_providers[provider_id] = {
-                "name": provider["name"],
-                "base_url": provider["baseUrl"],
-                "env_key": provider["apiKeyEnv"],
-                "wire_api": "responses",
-                "requires_openai_auth": False,
-            }
-    except (json.JSONDecodeError, KeyError, TypeError, ValueError, tomllib.TOMLDecodeError) as exc:
-        print(f"ignoring invalid CODEX_CUSTOM_PROVIDERS: {exc}", file=sys.stderr)
-    else:
-        text = tomli_w.dumps(config)
-
-# CODEX_CONFIG_OVERLAY: deep-merge an operator-supplied TOML fragment over the
-# baked config so a deployment can configure codex -- e.g. point it at a custom
-# model provider via a [model_providers.*] block -- through sandbox.extraEnv,
-# without forking config.toml. Unset is a no-op; invalid TOML is ignored (the
-# baked config stands) rather than written.
-overlay_raw = (os.environ.get("CODEX_CONFIG_OVERLAY") or "").strip()
-if overlay_raw:
-    import tomllib
-    import tomli_w
-
-    def _deep_merge(base, overlay):
-        for key, value in overlay.items():
-            if isinstance(value, dict) and isinstance(base.get(key), dict):
-                _deep_merge(base[key], value)
-            else:
-                base[key] = value
-        return base
-
-    try:
-        merged = _deep_merge(tomllib.loads(text), tomllib.loads(overlay_raw))
-    except tomllib.TOMLDecodeError as exc:
-        print(f"ignoring invalid CODEX_CONFIG_OVERLAY: {exc}", file=sys.stderr)
-    else:
-        text = tomli_w.dumps(merged)
-
 path.write_text(text)
 PYEOF
 else
@@ -376,16 +287,49 @@ case "$CLAUDE_CODE_AUTH_MODE" in
         ;;
 esac
 
-# ── Pi-mono settings ─────────────────────────────────────────────────────────
+# ── Pi settings ─────────────────────────────────────────────────────────────
 mkdir -p "$HOME_DIR/.pi/agent/extensions"
-cat > "$HOME_DIR/.pi/agent/settings.json" <<EOF
-{
-  "provider": "anthropic",
-  "model": "claude-sonnet-4-20250514",
-  "thinkingLevel": "medium",
-  "autoCompaction": true
-}
-EOF
+# Pi is configured for the same hostname-scoped OpenAI-compatible gateway as
+# Codex. The API key remains a placeholder in the sandbox and is replaced only
+# by iron-proxy for OPENAI_BASE_URL's host.
+if [ -n "${OPENAI_BASE_URL:-}" ]; then
+    PI_MODEL="${PI_MODEL:-${CODEX_MODEL:-DARKMATTER/GLM-5.2-FP8}}" python3 - "$HOME_DIR/.pi/agent" <<'PYEOF'
+import json
+import os
+import sys
+
+agent_dir = sys.argv[1]
+model = os.environ["PI_MODEL"]
+base_url = os.environ["OPENAI_BASE_URL"].rstrip("/")
+
+with open(f"{agent_dir}/settings.json", "w", encoding="utf-8") as output:
+    json.dump({
+        "defaultProvider": "darkmatter",
+        "defaultModel": model,
+        "defaultThinkingLevel": "medium",
+        "autoCompaction": True,
+    }, output, indent=2)
+    output.write("\n")
+
+with open(f"{agent_dir}/models.json", "w", encoding="utf-8") as output:
+    json.dump({"providers": {"darkmatter": {
+        "baseUrl": base_url,
+        "api": "openai-completions",
+        "apiKey": "OPENAI_API_KEY",
+        "models": [{
+            "id": model,
+            "name": model,
+            "reasoning": False,
+            "input": ["text"],
+            "contextWindow": 128000,
+            "maxTokens": 16384,
+            "cost": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0},
+        }],
+    }}}, output, indent=2)
+    output.write("\n")
+PYEOF
+    export PI_OFFLINE=1
+fi
 
 # ── Per-session workspace clone (no shared worktree metadata) ────────────────
 if [ "${CENTAUR_PERSISTENT_STATE:-0}" = "1" ]; then
@@ -457,11 +401,6 @@ fi
 
 # Switch to workspace so the harness reads workspace/AGENTS.md (with persona overlay)
 cd "$WORKSPACE_DIR"
-
-if [ "${1:-}" = "harness-server" ] && [ "${2:-}" = "amp" ] && [ -f "$TARGET_PROMPT" ]; then
-    rm -f "$WORKSPACE_DIR/AGENT.md"
-    ln -s "$(basename "$TARGET_PROMPT")" "$WORKSPACE_DIR/AGENT.md"
-fi
 
 # Codex reads its auth file when the app server starts. Complete this before
 # signaling readiness, otherwise warm pods can be claimed with no auth loaded.

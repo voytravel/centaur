@@ -200,7 +200,6 @@ WORKDIR /home/agent
 ENV PATH="/home/agent/.cargo/bin:/home/agent/.local/bin:/home/agent/.foundry/bin:/home/agent/.bun/bin:${PATH}"
 
 ARG FOUNDRY_VERSION=v1.7.0
-ARG AMP_CLI_VERSION=0.0.1774529752-g94f44d
 ARG MANIM_VERSION=0.20.1
 ARG BUN_VERSION=bun-v1.3.13
 
@@ -231,21 +230,6 @@ RUN curl -L https://foundry.paradigm.xyz | bash \
       rm -f "$HOME/.foundry/bin/$bin"; \
       ln -s "$HOME/.foundry/versions/${FOUNDRY_VERSION}/$bin" "$HOME/.foundry/bin/$bin"; \
     done
-RUN set -eux; \
-    amp_platform="$(case "$(dpkg --print-architecture)" in \
-      amd64) echo linux-x64 ;; \
-      arm64) echo linux-arm64 ;; \
-      *) echo unsupported-architecture >&2; exit 1 ;; \
-    esac)"; \
-    mkdir -p "$HOME/.amp/bin" "$HOME/.local/bin"; \
-    curl -fsSL "https://static.ampcode.com/cli/${AMP_CLI_VERSION}/${amp_platform}-amp.sha256" -o /tmp/amp.sha256; \
-    curl -fsSL "https://static.ampcode.com/cli/${AMP_CLI_VERSION}/amp-${amp_platform}" -o "$HOME/.amp/bin/amp"; \
-    echo "$(cat /tmp/amp.sha256)  $HOME/.amp/bin/amp" | sha256sum -c -; \
-    chmod +x "$HOME/.amp/bin/amp"; \
-    ln -sf "$HOME/.amp/bin/amp" "$HOME/.local/bin/amp"; \
-    rm -f /tmp/amp.sha256; \
-    amp --version >/dev/null
-
 # ── agent-browser: download Chrome binary (runs as agent, deps already installed) ─
 RUN if [ "$(dpkg --print-architecture)" = "amd64" ]; then \
       agent-browser install; \
@@ -263,7 +247,7 @@ RUN --mount=type=cache,target=/home/agent/.npm,uid=1001,gid=1001,sharing=locked 
     npx -y skills add vercel-labs/agent-browser
 # git-branch configures each writable clone with the publishing GitHub account.
 # A baked agent identity would reappear as a co-author when GitHub squash-merges its commits.
-RUN mkdir -p ~/.amp/bin ~/.config/amp ~/.codex ~/.pi/agent ~/github ~/workspace \
+RUN mkdir -p ~/.codex ~/.pi/agent ~/github ~/workspace \
     && git config --global init.defaultBranch main \
     && git config --global push.autoSetupRemote true \
     && git config --global core.hooksPath /opt/centaur/git-hooks \

@@ -271,21 +271,6 @@ overlays:
   #   toolsSubdir: ""
   #   skillsSubdir: ""
 
-codex:
-  # Operator-defined OpenAI-compatible Responses providers. Each provider is
-  # added to sandbox Codex config, exposed through `--provider <id>`, and given
-  # a hostname-scoped iron-proxy bearer-token replacement. `apiKeyEnv` names a
-  # field in the configured secret source; sandboxes receive only a placeholder.
-  # Example:
-  #   customProviders:
-  #     private_responses:
-  #       name: Private Responses
-  #       baseUrl: https://inference.example.com/v1
-  #       apiKeyEnv: PRIVATE_RESPONSES_API_KEY
-  #       # Optional; callers must pass --model when omitted.
-  #       defaultModel: example-model
-  customProviders: {}
-
 sandbox:
   controller: pod
   image:
@@ -320,10 +305,10 @@ sandbox:
   #                  subscription token (proxy injects the brokered credential).
   codexAuthMode: api_key
   claudeCodeAuthMode: api_key
-  # The deployment's default harness: codex | amp | claudecode. Decides what
+  # The deployment's default harness: codex | claudecode. Decides what
   # warm sandboxes boot (SESSION_SANDBOX_HARNESS) and which harness auth
   # fragment is required at startup (the other harnesses' fragments are
-  # registered too when available, so per-session --claude/--amp/--codex
+  # registered too when available, so per-session --claude/--codex
   # overrides keep working credentials). Per-session sandboxes always run
   # their session's harness via container args; the sandbox image CMD only
   # matters for containers started outside api-rs.
@@ -568,7 +553,7 @@ slackbotv2:
   # Per-channel default harness / model / provider / reasoning, keyed by Slack
   # conversation id (the C…/G…/D… id). Each value is an object of optional
   # harness / model / provider / reasoning fields, using the same vocabulary as
-  # the inline Slack flags (harness: claude|codex|nanocodex|amp, provider: bedrock|meta,
+  # the inline Slack flags (harness: claude|codex|nanocodex,
   # model accepts Claude aliases like opus). A model is only meaningful within a
   # harness, so name the harness alongside it. Applied when a message in that
   # channel carries no explicit/sticky per-thread flag, below such a flag and

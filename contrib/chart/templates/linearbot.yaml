@@ -32,7 +32,7 @@ spec:
               value: "3001"
             - name: CENTAUR_API_URL
               value: {{ printf "http://%s:%v" $apiRsName .Values.apiRs.port | quote }}
-            # New threads without an explicit --claude/--amp/--codex flag run
+            # New threads without an explicit --claude/--codex flag run
             # the deployment's default harness.
             - name: LINEARBOT_DEFAULT_HARNESS
               value: {{ .Values.sandbox.harnessEngine | quote }}
@@ -63,10 +63,6 @@ spec:
                   key: {{ printf "%sDATABASE_URL" .Values.secretManager.envPrefix }}
             - name: LINEARBOT_USER_NAME
               value: {{ .Values.linearbot.userName | quote }}
-{{- if .Values.codex.customProviders }}
-            - name: CODEX_CUSTOM_PROVIDERS
-              value: {{ .Values.codex.customProviders | toJson | quote }}
-{{- end }}
 {{- range $name, $value := .Values.linearbot.extraEnv }}
             - name: {{ $name }}
               value: {{ $value | quote }}

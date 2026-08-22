@@ -52,7 +52,7 @@ control plane is unchanged (`linear:…` thread keys flow through identically).
   compact id/title header thereafter — so a recycled sandbox always knows what the task is.
   (`Comment`/`Issue` webhooks carry no `promptContext` blob, unlike agent-session events, so the bot
   fetches the issue itself.)
-- `--claude` / `--codex` / `--amp` / `--model …` / `--opus|--sonnet|--haiku` inline flags pick the
+- `--claude` / `--codex` / `--model …` / `--opus|--sonnet|--haiku` inline flags pick the
   harness/model, same as slackbotv2.
 
 ## Ingress model

@@ -28,16 +28,16 @@ describe('extractMessageOverrides', () => {
       reasoning: undefined
     })
     expect(extractMessageOverrides('--claude-code review this').harnessType).toBe('claudecode')
-    expect(extractMessageOverrides('--amp review this').harnessType).toBe('amp')
+    expect(extractMessageOverrides('--amp review this').harnessType).toBeUndefined()
     expect(extractMessageOverrides('--codex review this').harnessType).toBe('codex')
     expect(extractMessageOverrides('--nanocodex review this').harnessType).toBe('nanocodex')
     expect(extractMessageOverrides('--hermes review this').harnessType).toBe('hermes')
   })
 
-  test('parses harness flag anywhere in the message', () => {
+  test('leaves removed harness flags in the prompt', () => {
     expect(extractMessageOverrides('review this --amp please')).toEqual({
-      cleanedText: 'review this please',
-      harnessType: 'amp',
+      cleanedText: 'review this --amp please',
+      harnessType: undefined,
       model: undefined,
       reasoning: undefined
     })
@@ -74,43 +74,14 @@ describe('extractMessageOverrides', () => {
     expect(extractMessageOverrides('--fable fix it').model).toBe('claude-fable-5')
   })
 
-  test('--meta selects the Meta provider and codex harness', () => {
-    expect(extractMessageOverrides('--meta fix it')).toEqual({
-      cleanedText: 'fix it',
-      harnessType: 'codex',
+  test('leaves removed provider flags in the prompt', () => {
+    expect(extractMessageOverrides('--provider private_responses audit this')).toEqual({
+      cleanedText: '--provider private_responses audit this',
+      harnessType: undefined,
       model: undefined,
-      provider: 'responses',
+      provider: undefined,
       reasoning: undefined
     })
-  })
-
-  test('--provider selects an arbitrary codex provider', () => {
-    expect(extractMessageOverrides('--provider private_responses --model example-model audit this')).toEqual({
-      cleanedText: 'audit this',
-      harnessType: 'codex',
-      model: 'example-model',
-      provider: 'private_responses',
-      reasoning: undefined
-    })
-  })
-
-  test('--provider uses the configured provider default model', () => {
-    const previous = process.env.CODEX_CUSTOM_PROVIDERS
-    process.env.CODEX_CUSTOM_PROVIDERS = JSON.stringify({
-      private_responses: { defaultModel: 'configured-model' }
-    })
-    try {
-      expect(extractMessageOverrides('--provider=private_responses audit this')).toEqual({
-        cleanedText: 'audit this',
-        harnessType: 'codex',
-        model: 'configured-model',
-        provider: 'private_responses',
-        reasoning: undefined
-      })
-    } finally {
-      if (previous === undefined) delete process.env.CODEX_CUSTOM_PROVIDERS
-      else process.env.CODEX_CUSTOM_PROVIDERS = previous
-    }
   })
 
   test('--model expands claude aliases to full model ids', () => {
@@ -151,7 +122,7 @@ describe('extractMessageOverrides', () => {
 
   test('--model passes non-alias values through verbatim', () => {
     expect(extractMessageOverrides('--codex --model gpt-5.2-codex go').model).toBe('gpt-5.2-codex')
-    expect(extractMessageOverrides('--amp --model fast go').model).toBe('fast')
+    expect(extractMessageOverrides('--codex --model fast go').model).toBe('fast')
   })
 
   test('explicit flags win over shortcut implications', () => {
@@ -249,41 +220,9 @@ describe('extractMessageOverrides', () => {
     })
   })
 
-  test('--bedrock selects the bedrock provider and implies codex', () => {
-    expect(extractMessageOverrides('--bedrock fix it')).toEqual({
-      cleanedText: 'fix it',
-      harnessType: 'codex',
-      model: undefined,
-      provider: 'amazon-bedrock',
-      reasoning: undefined
-    })
-  })
-
-  test('--bedrock combines with an explicit --model', () => {
-    expect(
-      extractMessageOverrides('--bedrock --model anthropic.claude-sonnet-4-5 fix it')
-    ).toEqual({
-      cleanedText: 'fix it',
-      harnessType: 'codex',
-      model: 'anthropic.claude-sonnet-4-5',
-      provider: 'amazon-bedrock',
-      reasoning: undefined
-    })
-  })
-
-  test('--bedrock does not match flags embedded in words', () => {
-    expect(extractMessageOverrides('--bedrocky hi').provider).toBeUndefined()
-    expect(extractMessageOverrides('the --bedrock flag').provider).toBe('amazon-bedrock')
-  })
-
-  test('--meta combines with a reasoning override', () => {
-    expect(extractMessageOverrides('--meta -rsn high fix it')).toEqual({
-      cleanedText: 'fix it',
-      harnessType: 'codex',
-      model: undefined,
-      provider: 'responses',
-      reasoning: 'high'
-    })
+  test('leaves removed provider shortcuts in the prompt', () => {
+    expect(extractMessageOverrides('--bedrock fix it').provider).toBeUndefined()
+    expect(extractMessageOverrides('--meta fix it').provider).toBeUndefined()
   })
 })
 
@@ -303,20 +242,11 @@ describe('normalizeHarnessOverrides', () => {
     })
   })
 
-  test('a provider shortcut implies its harness, like --bedrock', () => {
+  test('drops direct provider values from channel defaults', () => {
     expect(normalizeHarnessOverrides({ provider: 'bedrock', model: 'gpt-5.2' })).toEqual({
-      harnessType: 'codex',
+      harnessType: undefined,
       model: 'gpt-5.2',
-      provider: 'amazon-bedrock',
-      reasoning: undefined
-    })
-  })
-
-  test('a custom provider is accepted by channel defaults', () => {
-    expect(normalizeHarnessOverrides({ provider: 'private_responses', model: 'example-model' })).toEqual({
-      harnessType: 'codex',
-      model: 'example-model',
-      provider: 'private_responses',
+      provider: undefined,
       reasoning: undefined
     })
   })
@@ -345,7 +275,7 @@ describe('normalizeHarnessOverrides', () => {
       reasoning: undefined
     })
     expect(errors.some(e => e.includes('unknown harness'))).toBe(true)
-    expect(errors.some(e => e.includes('invalid provider id'))).toBe(true)
+    expect(errors.some(e => e.includes('direct model providers are disabled'))).toBe(true)
     expect(errors.some(e => e.includes('unknown reasoning effort'))).toBe(true)
   })
 })
@@ -441,6 +371,22 @@ describe('validateStrategyOverrides', () => {
     expect(validateStrategyOverrides({ reasoning: 'turbo' })).toEqual({})
   })
 
+  test('ignores retired provider fields without discarding safe controls', () => {
+    expect(
+      validateStrategyOverrides({
+        harness: 'codex',
+        model: 'gpt-5.6-sol',
+        provider: 'responses',
+        reasoning: 'max'
+      })
+    ).toEqual({
+      harnessType: 'codex',
+      model: 'gpt-5.6-sol',
+      provider: undefined,
+      reasoning: 'max'
+    })
+  })
+
   test('drops reasoning when the resolved strategy harness cannot use it', () => {
     expect(validateStrategyOverrides({ reasoning: 'max' })).toEqual({
       harnessType: undefined,
@@ -454,12 +400,7 @@ describe('validateStrategyOverrides', () => {
       provider: undefined,
       reasoning: undefined
     })
-    expect(validateStrategyOverrides({ harness: 'amp', reasoning: 'max' })).toEqual({
-      harnessType: 'amp',
-      model: undefined,
-      provider: undefined,
-      reasoning: undefined
-    })
+    expect(validateStrategyOverrides({ harness: 'amp', reasoning: 'max' })).toEqual({})
     expect(validateStrategyOverrides({ model: 'gpt-5.6-sol', reasoning: 'max' })).toEqual({
       harnessType: 'codex',
       model: 'gpt-5.6-sol',

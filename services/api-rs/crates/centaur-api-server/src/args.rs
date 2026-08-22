@@ -20,8 +20,7 @@ use centaur_iron_control::{
     SessionRegistrar, register_role,
 };
 use centaur_iron_proxy::{
-    ProxyFragment, SourceKind, SourcePolicy, bedrock_enabled, custom_provider_auth_fragments,
-    harness_auth_fragment, infra_fragment,
+    ProxyFragment, SourceKind, SourcePolicy, harness_auth_fragment, infra_fragment,
 };
 use centaur_sandbox_agent_k8s::{
     AgentSandboxBackend, AgentSandboxConfig, GitHubTokenRef, IronControlSettings, IronProxyConfig,
@@ -1033,30 +1032,6 @@ impl SandboxArgs {
         {
             envs.push(("OPENAI_API_KEY".to_owned(), "OPENAI_API_KEY".to_owned()));
         }
-        if !envs
-            .iter()
-            .any(|(existing, _)| existing == "OPENROUTER_API_KEY")
-        {
-            envs.push((
-                "OPENROUTER_API_KEY".to_owned(),
-                "OPENROUTER_API_KEY".to_owned(),
-            ));
-        }
-        if !envs
-            .iter()
-            .any(|(existing, _)| existing == "META_AI_API_KEY")
-        {
-            envs.push(("META_AI_API_KEY".to_owned(), "META_AI_API_KEY".to_owned()));
-        }
-        // When Bedrock is enabled, codex's `amazon-bedrock` provider signs with
-        // these placeholder AWS credentials and iron-proxy re-signs (SigV4) with
-        // the real IAM keys. `aws_auth` is not a `secrets` transform, so the
-        // placeholders are injected here rather than via sandbox_placeholder_env.
-        for (name, value) in centaur_iron_proxy::bedrock_sandbox_env() {
-            if !envs.iter().any(|(existing, _)| existing == &name) {
-                envs.push((name, value));
-            }
-        }
 
         // OTLP trace wiring rides from this process into every sandbox (the
         // same hardcoded set the Python control plane forwarded). The harness
@@ -1959,23 +1934,6 @@ impl IronProxyHarnessArgs {
                 fragments.push(fragment);
             }
         }
-        if let Some(fragment) = harness_auth_fragment("openrouter", "api_key")? {
-            fragments.push(fragment);
-        }
-        if let Some(fragment) = harness_auth_fragment("meta-ai", "api_key")? {
-            fragments.push(fragment);
-        }
-        if let Ok(raw) = env::var("CODEX_CUSTOM_PROVIDERS") {
-            fragments.extend(custom_provider_auth_fragments(&raw)?);
-        }
-        // Bedrock is opt-in (not the default codex provider): only register its
-        // SigV4 re-signing fragment when the operator has set CODEX_BEDROCK_REGION,
-        // since the fragment expects AWS keys in the secrets backend.
-        if bedrock_enabled()
-            && let Some(fragment) = harness_auth_fragment("amazon-bedrock", "api_key")?
-        {
-            fragments.push(fragment);
-        }
         Ok(fragments)
     }
 }
@@ -2715,14 +2673,8 @@ mod tests {
             env.iter()
                 .any(|(name, value)| name == SLACK_BOT_TOKEN_ENV && value == SLACK_BOT_TOKEN_ENV)
         );
-        assert!(
-            env.iter()
-                .any(|(name, value)| name == "OPENROUTER_API_KEY" && value == "OPENROUTER_API_KEY")
-        );
-        assert!(
-            env.iter()
-                .any(|(name, value)| name == "META_AI_API_KEY" && value == "META_AI_API_KEY")
-        );
+        assert!(env.iter().all(|(name, _)| name != "OPENROUTER_API_KEY"));
+        assert!(env.iter().all(|(name, _)| name != "META_AI_API_KEY"));
         assert!(env.iter().all(|(name, _)| name != "NOUS_API_KEY"));
     }
 
