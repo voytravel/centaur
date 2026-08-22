@@ -1,25 +1,20 @@
 /**
  * Inline message directives, restored from the v1 slackbot:
- *   --claude | --claude-code | --amp | --codex | --nanocodex
+ *   --claude | --claude-code | --codex | --nanocodex
  *                                                  pick the harness for the thread
- *   --bedrock                                    codex via the AWS Bedrock provider
- *   --meta                                       codex via Meta AI direct
- *   --provider <name>                            codex via a configured provider
  *   --model <name> (or --model=<name>)           pick the model within that harness
  *   -rsn <effort> (or -rsn=<effort>)             per-turn reasoning effort (codex/nanocodex)
  *   --fable | --opus | --sonnet | --haiku        model shortcuts (imply claude-code)
  *
  * Flags are stripped from the text before it reaches the agent. The harness
  * applies at session creation — an explicit harness flag on a thread pinned to
- * another harness restarts the thread on the requested one. Harness/model/provider
+ * another harness restarts the thread on the requested one. Harness/model
  * choices are sticky at the Slack thread level: the last flag wins for later
  * turns in the same thread. `--model` accepts either a full model id
- * (claude-sonnet-4-6, gpt-5.2, ...), an amp mode (deep/fast), or a Claude alias
+ * (claude-sonnet-4-6, gpt-5.2, ...), or a Claude alias
  * (fable/opus/sonnet/haiku) which expands to the full id. Reasoning effort only
  * affects the codex-compatible harnesses and stays per-turn; other harnesses
- * ignore it. The provider rides the blocks-protocol
- * `provider` field and is fixed when the codex thread starts. Provider
- * shortcuts imply the codex harness.
+ * ignore it.
  */
 
 /**
@@ -40,23 +35,12 @@ export type MessageOverrides = HarnessOverrides & {
 
 // Flag name -> HarnessType wire value (serde lowercase of the Rust enum).
 const HARNESS_FLAGS: Record<string, string> = {
-  amp: 'amp',
   claude: 'claudecode',
   'claude-code': 'claudecode',
   claudecode: 'claudecode',
   codex: 'codex',
   hermes: 'hermes',
   nanocodex: 'nanocodex'
-}
-
-// Provider flags select a model provider within the codex harness (and imply
-// it). Bedrock rides codex's built-in `amazon-bedrock` provider, whose wire
-// value is passed through as the blocks-protocol `provider` field.
-type ProviderMapping = { provider: string; harnessType: string; model?: string }
-
-const PROVIDER_FLAGS: Record<string, ProviderMapping> = {
-  bedrock: { provider: 'amazon-bedrock', harnessType: 'codex' },
-  meta: { provider: 'responses', harnessType: 'codex' }
 }
 
 // Claude model aliases, usable both as bare flags (--opus) and as --model
@@ -76,8 +60,7 @@ const MODEL_SHORTCUTS: Record<string, { harnessType: string; model: string }> =
     ])
   )
 
-const STRATEGY_HARNESSES = new Set(['amp', 'claudecode', 'codex', 'hermes', 'nanocodex'])
-const STRATEGY_PROVIDERS = new Set(['amazon-bedrock', 'openrouter', 'responses'])
+const STRATEGY_HARNESSES = new Set(['claudecode', 'codex', 'hermes', 'nanocodex'])
 const STRATEGY_REASONING_EFFORTS = new Set([
   'none',
   'minimal',
@@ -97,8 +80,6 @@ const STRATEGY_MODEL_HARNESSES: Record<string, string> = {
   'claude-opus-5-fast': 'claudecode',
   'claude-sonnet-4-6': 'claudecode',
   'claude-sonnet-5': 'claudecode',
-  deep: 'amp',
-  fast: 'amp',
   'gpt-5.4': 'codex',
   'gpt-5.4-mini': 'codex',
   'gpt-5.4-nano': 'codex',
@@ -117,11 +98,6 @@ const FLAG_VALUE_BOUNDARY = String.raw`(?=[^\S\r\n]|\r?\n|\r|<br\s*/?>|$)`
 
 const MODEL_FLAG_PATTERN = new RegExp(
   String.raw`(?:^|\s)--model${MODEL_VALUE_SEPARATOR}([A-Za-z0-9._/-]+)${FLAG_VALUE_BOUNDARY}`,
-  'i'
-)
-
-const PROVIDER_FLAG_PATTERN = new RegExp(
-  String.raw`(?:^|\s)--provider${MODEL_VALUE_SEPARATOR}([A-Za-z][A-Za-z0-9_-]*)${FLAG_VALUE_BOUNDARY}`,
   'i'
 )
 
@@ -171,15 +147,6 @@ export function extractMessageOverrides(text: string): MessageOverrides {
     }
   }
 
-  const providerMatch = PROVIDER_FLAG_PATTERN.exec(cleaned)
-  if (providerMatch) {
-    const mapping = providerMapping(providerMatch[1]!)!
-    provider = mapping.provider
-    harnessType ??= mapping.harnessType
-    model ??= mapping.model
-    cleaned = stripMatch(cleaned, providerMatch)
-  }
-
   for (const [flag, harness] of Object.entries(HARNESS_FLAGS)) {
     const match = flagPattern(flag).exec(cleaned)
     if (!match) continue
@@ -192,15 +159,6 @@ export function extractMessageOverrides(text: string): MessageOverrides {
     if (!match) continue
     model ??= shortcut.model
     harnessType ??= shortcut.harnessType
-    cleaned = stripMatch(cleaned, match)
-  }
-
-  for (const [flag, mapping] of Object.entries(PROVIDER_FLAGS)) {
-    const match = flagPattern(flag).exec(cleaned)
-    if (!match) continue
-    provider ??= mapping.provider
-    harnessType ??= mapping.harnessType
-    model ??= mapping.model
     cleaned = stripMatch(cleaned, match)
   }
 
@@ -234,14 +192,7 @@ export function validateStrategyOverrides(
     harnessType = normalized
   }
 
-  const providerRaw = cleanString(raw.provider)
-  if (providerRaw) {
-    const normalized = providerRaw.toLowerCase()
-    if (!STRATEGY_PROVIDERS.has(normalized)) return {}
-    provider = normalized
-    if (harnessType && harnessType !== 'codex') return {}
-    harnessType = 'codex'
-  }
+  if (cleanString(raw.provider)) return {}
 
   const modelRaw = cleanString(raw.model)
   if (modelRaw) {
@@ -268,10 +219,8 @@ export function validateStrategyOverrides(
 /**
  * Object-shaped counterpart to {@link extractMessageOverrides}: normalizes a
  * `{ harness, model, provider, reasoning }` config through the same vocabulary
- * as the flag parser (harness/provider/model aliases; a provider implies its
- * harness, like `--bedrock`). Fields are independent; unrecognized harness /
- * reasoning values and malformed provider ids are reported via `onError` and
- * dropped.
+ * as the flag parser. Direct provider selection is intentionally disabled;
+ * legacy persisted provider values remain readable but new values are dropped.
  */
 export function normalizeHarnessOverrides(
   raw: { harness?: unknown; model?: unknown; provider?: unknown; reasoning?: unknown },
@@ -289,16 +238,7 @@ export function normalizeHarnessOverrides(
   }
 
   const providerRaw = cleanString(raw.provider)
-  if (providerRaw) {
-    const mapping = providerMapping(providerRaw)
-    if (mapping) {
-      provider = mapping.provider
-      harnessType ??= mapping.harnessType // a provider implies its harness, like --bedrock
-      model ??= mapping.model
-    } else {
-      onError?.(`invalid provider id "${providerRaw}"`)
-    }
-  }
+  if (providerRaw) onError?.('direct model providers are disabled')
 
   const modelRaw = cleanString(raw.model)
   if (modelRaw) model = CLAUDE_MODEL_ALIASES[modelRaw.toLowerCase()] ?? modelRaw
@@ -316,30 +256,6 @@ function cleanString(value: unknown): string | undefined {
   if (typeof value !== 'string') return undefined
   const trimmed = value.trim()
   return trimmed === '' ? undefined : trimmed
-}
-
-function providerMapping(value: string): ProviderMapping | undefined {
-  const provider = value.toLowerCase()
-  if (!/^[a-z][a-z0-9_-]*$/.test(provider)) return undefined
-  return (
-    PROVIDER_FLAGS[provider] ?? {
-      provider,
-      harnessType: 'codex',
-      model: customProviderDefaultModel(provider)
-    }
-  )
-}
-
-function customProviderDefaultModel(provider: string): string | undefined {
-  const raw = process.env.CODEX_CUSTOM_PROVIDERS
-  if (!raw) return undefined
-  try {
-    const config = JSON.parse(raw)?.[provider]
-    const model = config?.defaultModel
-    return typeof model === 'string' && model.trim() ? model.trim() : undefined
-  } catch {
-    return undefined
-  }
 }
 
 function flagPattern(flag: string): RegExp {

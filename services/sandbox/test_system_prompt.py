@@ -51,15 +51,14 @@ class SystemPromptTest(unittest.TestCase):
         prompt = SYSTEM_PROMPT.read_text()
 
         self.assertIn("[Model and Harness Switching Answers]", prompt)
-        self.assertIn("`--codex`, `--claude` or `--claude-code`, and `--amp`", prompt)
+        self.assertIn("`--codex` and `--claude` or `--claude-code`", prompt)
         self.assertIn("`--model <model-id-or-alias>`", prompt)
         self.assertIn("`--model=<model-id-or-alias>`", prompt)
         self.assertIn("`--fable`, `--opus`, `--sonnet`, and `--haiku`", prompt)
         self.assertIn("`--claude --model=fable fix this`", prompt)
-        self.assertIn("`--codex --model=gpt-5.2 investigate this`", prompt)
-        self.assertIn("`--meta` selects Codex with the Meta provider", prompt)
-        self.assertIn("`--bedrock` selects Codex with the Bedrock provider", prompt)
-        self.assertIn("`-rsn <effort>` sets Codex reasoning effort", prompt)
+        self.assertIn("`--codex --model=DARKMATTER/GLM-5.2-FP8 investigate this`", prompt)
+        self.assertIn("Codex model IDs are routed through the configured OpenAI-compatible gateway", prompt)
+        self.assertIn("Use `-rsn <effort>` to set Codex reasoning effort", prompt)
 
     def test_personal_oauth_app_connection_guidance_is_present(self) -> None:
         prompt = SYSTEM_PROMPT.read_text()

@@ -1935,9 +1935,6 @@ impl IronProxyHarnessArgs {
                 fragments.push(fragment);
             }
         }
-        if let Ok(raw) = env::var("CODEX_CUSTOM_PROVIDERS") {
-            fragments.extend(custom_provider_auth_fragments(&raw)?);
-        }
         Ok(fragments)
     }
 }

@@ -102,8 +102,8 @@ export type GithubbotOptions = {
    */
   connectStateOnStart?: boolean;
   /**
-   * Harness for new threads when no --claude/--amp/--codex flag is given
-   * (HarnessType wire value: codex | amp | claudecode). Defaults to codex.
+   * Harness for new threads when no --claude/--codex flag is given
+   * (HarnessType wire value: codex | claudecode). Defaults to codex.
    */
   defaultHarnessType?: string;
   fetch?: GithubbotFetch;
@@ -240,12 +240,12 @@ export type ForwardSessionInput = {
   contextPreamble?: string;
   executionId?: string;
   executeMessage?: GithubbotApiMessage;
-  /** Harness override parsed from message flags (--claude/--amp/--codex). */
+  /** Harness override parsed from message flags (--claude/--codex). */
   harnessType?: string;
   messages: GithubbotApiMessage[];
   /** Per-turn model override parsed from message flags (--model/--opus/...). */
   model?: string;
-  /** Effective model provider selected by a message flag; codex only. */
+  /** Legacy model provider persisted by older sessions; new selection is disabled. */
   provider?: string;
   onEventId(eventId: number): void;
   openStream: boolean;
