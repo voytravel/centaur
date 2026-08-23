@@ -69,8 +69,8 @@ module Broker
     end
 
     def validate_inputs!(client_id, installation_id)
-      unless client_id.present?
-        raise RefreshError.new("GitHub App client ID is missing",
+      unless client_id.to_s.match?(/\A[A-Za-z][A-Za-z0-9._-]*\z/)
+        raise RefreshError.new("GitHub App client ID is missing or invalid",
                                stage: "configuration", code: "github_app_client_id", retryable: false)
       end
       unless installation_id.to_s.match?(/\A[1-9]\d*\z/)

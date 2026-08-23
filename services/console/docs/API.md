@@ -805,7 +805,7 @@ The token credentials it refreshes with are fields on the credential, resolved b
 | `grant`                        | optional    | One of `refresh_token`, `client_credentials`, `password`, `preqin`, or `github_app_installation`. Defaults to `refresh_token`. |
 | `token_endpoint`               | conditional | Token endpoint the refresh request is sent to. Required except `preqin` and `github_app_installation`, which use fixed provider endpoints. |
 | `scopes`                       | optional    | Array of strings. |
-| `client_id`                    | conditional | OAuth client id. Required for standalone `refresh_token`, `client_credentials`, `password`, and `github_app_installation` credentials. For GitHub, use the GitHub App **Client ID** as the JWT issuer. Returned in responses. Not used for `preqin`. |
+| `client_id`                    | conditional | OAuth client id. Required for standalone `refresh_token`, `client_credentials`, `password`, and `github_app_installation` credentials. For GitHub, use the GitHub App **Client ID** as the JWT issuer (not its numeric App ID). Returned in responses. Not used for `preqin`. |
 | `github_installation_id`       | conditional | Positive numeric GitHub App installation ID. Required only for `github_app_installation`; returned in responses. |
 | `client_secret`                | conditional | OAuth client secret. Required for `client_credentials`, optional for `refresh_token` and `password`, and not used for `preqin`. Write-only and encrypted at rest; omit for public clients. Never returned. |
 | `token_endpoint_headers`       | optional    | Object mapping header name to a string value, sent on the refresh request. Values are write-only and encrypted; only the header names are returned (as `token_endpoint_header_names`). |
@@ -937,7 +937,7 @@ GitHub App installation tokens use `grant: "github_app_installation"`. The deplo
     "foreign_id": "github-app-installation",
     "name": "GitHub App installation",
     "grant": "github_app_installation",
-    "client_id": "Iv1.0123456789abcdef",
+    "client_id": "YOUR_GITHUB_APP_CLIENT_ID",
     "github_installation_id": "12345678"
   }
 }

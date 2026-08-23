@@ -119,6 +119,11 @@ class BrokerCredentialTest < ActiveSupport::TestCase
     bc.client_id = "123456"
     refute bc.valid?
     assert bc.errors[:client_id].any? { |message| message.include?("GitHub App Client ID") }
+
+    # GitHub's Client ID format can evolve; reject the numeric App ID, but do
+    # not reject a valid newer Client ID merely because it is not `Iv1.…`.
+    bc.client_id = "Ov23li0abcDEF1234567"
+    assert bc.valid?, bc.errors.full_messages.to_sentence
   end
 
   # --- oauth_app provenance (flow-minted credentials) -----------------------

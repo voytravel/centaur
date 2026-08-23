@@ -87,8 +87,8 @@ class BrokerCredential < ApplicationRecord
             length: { maximum: 128 }, allow_nil: true
   validates :github_installation_id, format: { with: /\A[1-9]\d*\z/ },
                                     if: :github_app_installation?
-  validates :client_id, format: { with: /\AIv1\.[A-Za-z0-9_-]+\z/,
-                                  message: "must be a GitHub App Client ID (Iv1.…)" },
+  validates :client_id, format: { with: /\A[A-Za-z][A-Za-z0-9._-]*\z/,
+                                  message: "must be a non-numeric GitHub App Client ID" },
                         if: :github_app_installation?
   validates :early_refresh_fraction,
             numericality: { greater_than_or_equal_to: 0, less_than: 1 }
