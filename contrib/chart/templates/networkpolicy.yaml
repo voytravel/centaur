@@ -426,6 +426,18 @@ spec:
         - protocol: TCP
           port: 3001
   egress:
+{{- if .Values.automation.enabled }}
+    # Native Linear automations query the Console policy API before accepting
+    # an event. Keep this scoped to the in-cluster Console service; the matching
+    # Console ingress rule is rendered only for enabled automations.
+    - to:
+        - podSelector:
+            matchLabels:
+{{ include "centaur.componentSelectorLabels" (dict "root" . "component" "console") | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: {{ $console.service.httpPort }}
+{{- end }}
 {{- if .Values.apiRs.enabled }}
     - to:
         - podSelector:
@@ -475,6 +487,18 @@ spec:
         - protocol: TCP
           port: 3001
   egress:
+{{- if .Values.automation.enabled }}
+    # Native GitHub automations query the Console policy API before accepting
+    # an event. Keep this scoped to the in-cluster Console service; the matching
+    # Console ingress rule is rendered only for enabled automations.
+    - to:
+        - podSelector:
+            matchLabels:
+{{ include "centaur.componentSelectorLabels" (dict "root" . "component" "console") | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: {{ $console.service.httpPort }}
+{{- end }}
 {{- if .Values.apiRs.enabled }}
     - to:
         - podSelector:
