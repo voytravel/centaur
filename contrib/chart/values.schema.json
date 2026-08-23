@@ -417,6 +417,7 @@
           "type": "string",
           "enum": ["first", "always", "never"]
         },
+        "continueThreadReplies": { "type": "boolean" },
         "responseServiceTierEnabled": { "type": "boolean" },
         "metrics": {
           "type": "object",
