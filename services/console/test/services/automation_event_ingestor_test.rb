@@ -163,7 +163,7 @@ class AutomationEventIngestorTest < ActiveSupport::TestCase
     # Transactional fixtures defer after_create_commit until teardown. Exercise
     # the model's committed callback chain rather than calling the authorizer
     # directly, which keeps this test coupled to the production boundary.
-    principal.run_callbacks(:commit) {}
+    principal.run_callbacks(:commit)
 
     workstream = AutomationWorkstream.sole
     assert_equal principal, workstream.reload.principal
