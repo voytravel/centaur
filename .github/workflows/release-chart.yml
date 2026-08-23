@@ -63,6 +63,54 @@ jobs:
       - name: Lint chart
         run: helm lint contrib/chart
 
+      - name: Validate automation policy networking
+        run: |
+          set -euo pipefail
+
+          enabled_manifest="$RUNNER_TEMP/centaur-automation-enabled.yaml"
+          disabled_manifest="$RUNNER_TEMP/centaur-automation-disabled.yaml"
+
+          helm template centaur contrib/chart --namespace centaur \
+            --set automation.enabled=true \
+            --set linearbot.enabled=true \
+            --set githubbot.enabled=true \
+            --set githubbot.userName=centaur-bot >"$enabled_manifest"
+          helm template centaur contrib/chart --namespace centaur \
+            --set linearbot.enabled=true \
+            --set githubbot.enabled=true \
+            --set githubbot.userName=centaur-bot >"$disabled_manifest"
+
+          policy_for() {
+            local manifest="$1"
+            local policy_name="$2"
+            awk -v name="$policy_name" '
+              /^---$/ { if (found) exit }
+              $0 == "  name: " name { found = 1 }
+              found { print }
+            ' "$manifest"
+          }
+
+          for component in linearbot githubbot; do
+            policy_name="centaur-centaur-${component}"
+            enabled_policy="$(policy_for "$enabled_manifest" "$policy_name")"
+            disabled_policy="$(policy_for "$disabled_manifest" "$policy_name")"
+
+            [[ -n "$enabled_policy" ]] || {
+              echo "missing ${policy_name} NetworkPolicy with automation enabled" >&2
+              exit 1
+            }
+            printf '%s\n' "$enabled_policy" | grep -F -A 8 'app.kubernetes.io/component: console' \
+              | grep -Fq 'port: 3000' || {
+              echo "${policy_name} lacks scoped Console:3000 egress with automation enabled" >&2
+              exit 1
+            }
+            if printf '%s\n' "$disabled_policy" \
+              | grep -Fq 'app.kubernetes.io/component: console'; then
+              echo "${policy_name} has Console egress while automation is disabled" >&2
+              exit 1
+            fi
+          done
+
       - name: Install yq
         uses: mikefarah/yq@1b9b4ac5187171d2e5e3129be0cfa827c7f9d53d # v4.53.3
 
