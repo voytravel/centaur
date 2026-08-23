@@ -22,13 +22,18 @@ class AutomationEventIngestor
     # an old recorded `act` decision revive work on a webhook redelivery.
     if existing
       AutomationPrincipalAuthorizer.reconcile_workstream(existing.automation_workstream)
-      return response_for(existing, existing.automation_workstream, policy_outcome(policy), policy)
+      return response_for(
+        existing,
+        existing.automation_workstream,
+        policy_outcome(policy, existing.automation_workstream),
+        policy
+      )
     end
 
     return no_policy_response unless policy
 
     workstream = find_or_create_workstream!
-    outcome = policy.evaluate(@event)
+    outcome = policy.evaluate(policy_event(workstream, policy))
     record = workstream.automation_events.create!(
       provider: @event.fetch("provider"),
       deduplication_key: @event.fetch("deduplication_key"),
@@ -44,7 +49,7 @@ class AutomationEventIngestor
         automation_policy: policy,
         last_event_at: record.received_at,
         event_count: workstream.event_count + 1,
-        state: outcome["decision"] == "act" ? "active" : workstream.state
+        state: next_workstream_state(workstream, outcome)
       )
     end
     AutomationPrincipalAuthorizer.reconcile_workstream(workstream)
@@ -57,7 +62,12 @@ class AutomationEventIngestor
     )
     policy = resolve_policy
     AutomationPrincipalAuthorizer.reconcile_workstream(existing.automation_workstream)
-    response_for(existing, existing.automation_workstream, policy_outcome(policy), policy)
+    response_for(
+      existing,
+      existing.automation_workstream,
+      policy_outcome(policy, existing.automation_workstream),
+      policy
+    )
   end
 
   private
@@ -162,6 +172,32 @@ class AutomationEventIngestor
     }.compact
   end
 
+  # GitHub repair policies can continue only a PR that this same durable
+  # workstream previously authorized. The fact is derived in Console, after
+  # matching the scope and before evaluating the next event; Githubbot cannot
+  # manufacture it from a webhook field.
+  def policy_event(workstream, policy)
+    return @event unless @event["provider"] == "github"
+
+    @event.merge(
+      "continuation_authorized" => workstream.state == "active" &&
+        workstream.automation_policy_id == policy.id
+    )
+  end
+
+  # An Act event begins or resumes an existing workstream. A safety rejection
+  # (for example, a draft, disallowed branch, or no-agent label) blocks it and
+  # releases its role. An otherwise eligible lifecycle event with no configured
+  # action is merely noise: retain the prior authorization so a later review,
+  # check, or conflict event can continue the same session.
+  def next_workstream_state(workstream, outcome)
+    return "active" if outcome["decision"] == "act"
+    return workstream.state unless outcome["decision"] == "ignored"
+    return workstream.state if outcome["reason"] == "no automatic action is enabled for this event"
+
+    "blocked"
+  end
+
   def response_for(record, workstream, outcome = nil, policy = :stored)
     result = outcome || record.metadata.fetch("result", {})
     resolved_policy = policy == :stored ? workstream.automation_policy : policy
@@ -185,8 +221,8 @@ class AutomationEventIngestor
     { "decision" => "ignored", "reason" => reason, "actions" => [] }
   end
 
-  def policy_outcome(policy)
-    policy ? policy.evaluate(@event) : ignored("no matching automation policy")
+  def policy_outcome(policy, workstream = nil)
+    policy ? policy.evaluate(policy_event(workstream, policy)) : ignored("no matching automation policy")
   end
 
   def no_policy_response

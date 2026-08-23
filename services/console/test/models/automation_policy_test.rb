@@ -50,6 +50,98 @@ class AutomationPolicyTest < ActiveSupport::TestCase
     assert_equal "an excluded label is present", excluded["reason"]
   end
 
+  test "uses verified reviewer requests and durable workstream facts for scoped GitHub continuation" do
+    policy = github_policy(
+      mode: "act",
+      settings: {
+        "github" => {
+          "review" => "assigned_or_mentioned",
+          "feedback" => "explicit",
+          "checks" => "explicit",
+          "conflicts" => "explicit"
+        }
+      }
+    )
+
+    requested = policy.evaluate(
+      "repository" => "acme/widgets",
+      "event_type" => "pull_request",
+      "event_action" => "review_requested",
+      "draft" => false,
+      "labels" => [],
+      "review_requested_for_bot" => true
+    )
+    assert_equal "act", requested["decision"]
+    assert_equal [ "review" ], requested["actions"]
+
+    other_reviewer = policy.evaluate(
+      "repository" => "acme/widgets",
+      "event_type" => "pull_request",
+      "event_action" => "review_requested",
+      "draft" => false,
+      "labels" => [],
+      "review_requested_for_bot" => false
+    )
+    assert_equal "ignored", other_reviewer["decision"]
+    assert_equal "no automatic action is enabled for this event", other_reviewer["reason"]
+
+    feedback = policy.evaluate(
+      "repository" => "acme/widgets",
+      "event_type" => "pull_request_review",
+      "event_action" => "submitted",
+      "draft" => false,
+      "labels" => [],
+      "continuation_authorized" => true
+    )
+    assert_equal [ "address_feedback" ], feedback["actions"]
+
+    check = policy.evaluate(
+      "repository" => "acme/widgets",
+      "event_type" => "check_run",
+      "draft" => false,
+      "labels" => [],
+      "continuation_authorized" => true
+    )
+    assert_equal [ "fix_checks" ], check["actions"]
+
+    conflict = policy.evaluate(
+      "repository" => "acme/widgets",
+      "event_type" => "pull_request",
+      "event_action" => "synchronize",
+      "draft" => false,
+      "labels" => [],
+      "continuation_authorized" => true
+    )
+    assert_equal [ "resolve_conflict" ], conflict["actions"]
+  end
+
+  test "uses a Githubbot-derived ownership fact for bot-owned repairs" do
+    policy = github_policy(
+      mode: "act",
+      settings: { "github" => { "checks" => "bot_owned" } }
+    )
+
+    owned = policy.evaluate(
+      "repository" => "acme/widgets",
+      "event_type" => "check_run",
+      "draft" => false,
+      "labels" => [],
+      "bot_owned" => true
+    )
+    assert_equal "act", owned["decision"]
+    assert_equal [ "fix_checks" ], owned["actions"]
+
+    unowned = policy.evaluate(
+      "repository" => "acme/widgets",
+      "event_type" => "check_run",
+      "draft" => false,
+      "labels" => [],
+      "bot_owned" => false
+    )
+    assert_equal "ignored", unowned["decision"]
+    assert_equal "no automatic action is enabled for this event", unowned["reason"]
+  end
+
   test "observe mode records a ready Linear issue without authorizing an agent" do
     policy = AutomationPolicy.create!(
       name: "Linear ready issues",

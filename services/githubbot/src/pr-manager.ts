@@ -358,8 +358,8 @@ export async function handleAutomaticReview(
   if (!(await claim(ctx, reviewClaim))) return;
 
   const preamble = DEFAULT_REVIEW_PROMPT + "\n\n" +
-    "This review was started by a repository automation policy, not an explicit " +
-    "review request. Review the current pull request " + repo.owner + "/" + repo.repo +
+    "This review was started under an authorized repository automation policy. " +
+    "Review the current pull request " + repo.owner + "/" + repo.repo +
     "#" + number + " at commit " + pr.headSha +
     ". Post your review with the gh CLI. Do not modify the PR branch while reviewing.";
   fireManagementTurn(ctx, repo.owner, repo.repo, pr, preamble, {

@@ -15,6 +15,10 @@ export type GithubAutomationDecision = {
 
 export type GithubAutomationEvent = {
   base_branch?: string;
+  /** True only when Githubbot's own principal is assigned to the pull request. */
+  bot_owned?: boolean;
+  /** Derived by Console from a previously authorized durable PR workstream. */
+  continuation_authorized?: boolean;
   deduplication_key: string;
   draft?: boolean;
   event_action?: string;
@@ -23,6 +27,8 @@ export type GithubAutomationEvent = {
   labels: string[];
   provider: "github";
   repository: string;
+  /** True only after Githubbot verifies a requested reviewer/team targets it. */
+  review_requested_for_bot?: boolean;
   subject_number: number;
 };
 

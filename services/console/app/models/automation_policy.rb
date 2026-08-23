@@ -262,9 +262,8 @@ class AutomationPolicy < ApplicationRecord
     actions = case event["event_type"]
     when "pull_request"
       actions = []
-      actions << "review" if github_settings["review"] == "all_eligible" &&
-                             GITHUB_REVIEW_ACTIONS.include?(event["event_action"])
-      actions << "resolve_conflict" if github_settings["conflicts"] == "eligible" &&
+      actions << "review" if github_review_enabled?(event)
+      actions << "resolve_conflict" if github_repair_enabled?("conflicts", event) &&
                                        GITHUB_CONFLICT_ACTIONS.include?(event["event_action"])
       actions << "evaluate_merge" if github_settings["auto_merge"] == true &&
                                       GITHUB_MERGE_ACTIONS.include?(event["event_action"])
@@ -272,7 +271,7 @@ class AutomationPolicy < ApplicationRecord
     when "pull_request_review"
       if event["event_action"] == "submitted"
         actions = []
-        actions << "address_feedback" if github_settings["feedback"] == "eligible"
+        actions << "address_feedback" if github_repair_enabled?("feedback", event)
         actions << "evaluate_merge" if github_settings["auto_merge"] == true
         actions
       else
@@ -280,7 +279,7 @@ class AutomationPolicy < ApplicationRecord
       end
     when *CHECK_EVENT_TYPES
       actions = []
-      actions << "fix_checks" if github_settings["checks"] == "eligible"
+      actions << "fix_checks" if github_repair_enabled?("checks", event)
       actions << "evaluate_merge" if github_settings["auto_merge"] == true
       actions
     else
@@ -325,6 +324,38 @@ class AutomationPolicy < ApplicationRecord
     return [ false, "an excluded label is present" ] if (excluded & labels).any?
 
     [ true, nil ]
+  end
+
+  # Githubbot, not an untrusted webhook payload, establishes these two flags
+  # after signature verification and (for a review request) bot/team identity
+  # matching. A policy may use them only after the ordinary repository, branch,
+  # label, and draft gates above have passed.
+  #
+  # `continuation_authorized` is derived by AutomationEventIngestor from the
+  # same durable PR workstream that holds the selected execution role. It is
+  # deliberately not a second workflow engine or a caller-supplied flag.
+  def github_review_enabled?(event)
+    case github_settings["review"]
+    when "all_eligible"
+      GITHUB_REVIEW_ACTIONS.include?(event["event_action"])
+    when "assigned_or_mentioned"
+      event["event_action"] == "review_requested" && event["review_requested_for_bot"] == true
+    else
+      false
+    end
+  end
+
+  def github_repair_enabled?(setting, event)
+    case github_settings[setting]
+    when "eligible"
+      true
+    when "bot_owned"
+      event["bot_owned"] == true
+    when "explicit"
+      event["continuation_authorized"] == true
+    else
+      false
+    end
   end
 
   def linear_issue_ready?(event, config)

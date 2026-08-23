@@ -39,6 +39,100 @@ class AutomationEventIngestorTest < ActiveSupport::TestCase
     assert_equal 1, workstream.event_count
   end
 
+  test "continues an explicitly requested GitHub PR while blocking safety rejections" do
+    role = automation_role
+    AutomationPolicy.create!(
+      name: "Explicit widgets",
+      provider: "github",
+      repository: "acme/widgets",
+      enabled: true,
+      mode: "act",
+      execution_role: role,
+      created_by: users(:acme_admin),
+      settings: {
+        "github" => {
+          "review" => "assigned_or_mentioned",
+          "feedback" => "explicit",
+          "checks" => "explicit",
+          "conflicts" => "explicit",
+          "excluded_labels" => [ "no-agent" ]
+        }
+      }
+    )
+    review = AutomationEventIngestor.new(
+      "provider" => "github",
+      "deduplication_key" => "requested-review",
+      "event_type" => "pull_request",
+      "event_action" => "review_requested",
+      "repository" => "acme/widgets",
+      "subject_number" => 42,
+      "draft" => false,
+      "labels" => [],
+      "review_requested_for_bot" => true
+    ).call
+
+    assert_equal "act", review["decision"]
+    assert_equal [ "review" ], review["actions"]
+    workstream = AutomationWorkstream.sole
+    assert_equal "active", workstream.state
+
+    principal = Principal.create!(
+      foreign_id: "github-explicit-role-#{SecureRandom.hex(6)}",
+      name: "acme/widgets#42",
+      kind: "github_pull_request",
+      labels: {
+        "github_repository" => "acme/widgets",
+        "github_pull_request_number" => "42"
+      },
+      created_by: users(:acme_admin)
+    )
+    AutomationPrincipalAuthorizer.reconcile_principal(principal)
+    assert_includes principal.reload.roles, role
+
+    noise = AutomationEventIngestor.new(
+      "provider" => "github",
+      "deduplication_key" => "unrelated-lifecycle",
+      "event_type" => "pull_request",
+      "event_action" => "assigned",
+      "repository" => "acme/widgets",
+      "subject_number" => 42,
+      "draft" => false,
+      "labels" => []
+    ).call
+    assert_equal "ignored", noise["decision"]
+    assert_equal "no automatic action is enabled for this event", noise["reason"]
+    assert_equal "active", workstream.reload.state
+    assert_includes principal.reload.roles, role
+
+    feedback = AutomationEventIngestor.new(
+      "provider" => "github",
+      "deduplication_key" => "requested-review-feedback",
+      "event_type" => "pull_request_review",
+      "event_action" => "submitted",
+      "repository" => "acme/widgets",
+      "subject_number" => 42,
+      "draft" => false,
+      "labels" => []
+    ).call
+    assert_equal "act", feedback["decision"]
+    assert_equal [ "address_feedback" ], feedback["actions"]
+
+    blocked = AutomationEventIngestor.new(
+      "provider" => "github",
+      "deduplication_key" => "requested-review-no-agent",
+      "event_type" => "check_run",
+      "event_action" => "completed",
+      "repository" => "acme/widgets",
+      "subject_number" => 42,
+      "draft" => false,
+      "labels" => [ "no-agent" ]
+    ).call
+    assert_equal "ignored", blocked["decision"]
+    assert_equal "an excluded label is present", blocked["reason"]
+    assert_equal "blocked", workstream.reload.state
+    assert_not_includes principal.reload.roles, role
+  end
+
   test "does not persist unmatched events or authorize work" do
     result = AutomationEventIngestor.new(
       "provider" => "github",
