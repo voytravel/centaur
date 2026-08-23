@@ -53,6 +53,49 @@ class Console::AutomationPoliciesControllerTest < ActionDispatch::IntegrationTes
     assert_redirected_to console_threads_path
   end
 
+  test "shows source-managed policies as read-only and rejects direct mutation" do
+    policy = AutomationPolicy.create!(
+      name: "Managed widgets automation",
+      provider: "github",
+      repository: "acme/managed-widgets",
+      enabled: true,
+      mode: "observe",
+      created_by: @operator,
+      settings: {
+        "github" => { "review" => "all_eligible" },
+        "_centaur_managed_source" => {
+          "kind" => "git",
+          "repository" => "acme/infra",
+          "path" => "automation/policies.json",
+          "revision" => "a" * 40,
+          "content_sha256" => "b" * 64
+        }
+      }
+    )
+
+    get console_automation_policies_url
+
+    assert_response :ok
+    assert_select "span", text: "managed in source"
+    assert_select "a[href=?]", edit_console_automation_policy_path(policy.oid), count: 0
+    assert_select "span", text: "reconciled on deploy"
+
+    assert_no_changes -> { policy.reload.name } do
+      patch console_automation_policy_path(policy.oid), params: {
+        automation_policy: {
+          name: "Attempted edit",
+          provider: "github",
+          repository: policy.repository,
+          mode: "observe",
+          enabled: "1"
+        }
+      }
+    end
+
+    assert_redirected_to console_automation_policies_path
+    assert_equal "Managed widgets automation", policy.reload.name
+  end
+
   test "renders the latest safe decision and reason for a workstream" do
     policy = AutomationPolicy.create!(
       name: "Widgets automation",

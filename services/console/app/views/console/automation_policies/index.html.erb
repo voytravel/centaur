@@ -30,7 +30,15 @@
           <tr class="console-row-hover align-top">
             <td class="console-td">
               <div class="font-medium text-zinc-100"><%= policy.name %></div>
-              <div class="mt-1 text-xs text-zinc-600"><%= policy.provider.capitalize %> · created by <%= policy.created_by.email %></div>
+              <% if policy.source_managed? %>
+                <div class="mt-1 text-xs text-zinc-500">
+                  <span class="rounded border border-violet-400/40 bg-violet-400/10 px-1.5 py-0.5 text-violet-200">managed in source</span>
+                  <span class="ml-1 font-mono"><%= policy.managed_source_label %></span>
+                </div>
+                <div class="mt-1 text-xs text-zinc-600">Change the reviewed source and deploy; Console does not mutate this scope.</div>
+              <% else %>
+                <div class="mt-1 text-xs text-zinc-600"><%= policy.provider.capitalize %> · created by <%= policy.created_by.email %></div>
+              <% end %>
             </td>
             <td class="console-td font-mono text-xs text-zinc-300"><%= policy.scope_label %></td>
             <td class="console-td text-xs text-zinc-400"><%= policy.automation_summary %></td>
@@ -46,10 +54,14 @@
             </td>
             <td class="console-td">
               <div class="flex justify-end gap-2">
-                <%= link_to "Edit", edit_console_automation_policy_path(policy.oid), class: "btn-secondary py-1.5" %>
-                <%= button_to "Delete", console_automation_policy_path(policy.oid), method: :delete,
-                              class: "btn-secondary py-1.5 text-red-300",
-                              data: { turbo_confirm: "Delete #{policy.name}?" } %>
+                <% if policy.source_managed? %>
+                  <span class="py-1.5 text-xs text-zinc-500">reconciled on deploy</span>
+                <% else %>
+                  <%= link_to "Edit", edit_console_automation_policy_path(policy.oid), class: "btn-secondary py-1.5" %>
+                  <%= button_to "Delete", console_automation_policy_path(policy.oid), method: :delete,
+                                class: "btn-secondary py-1.5 text-red-300",
+                                data: { turbo_confirm: "Delete #{policy.name}?" } %>
+                <% end %>
               </div>
             </td>
           </tr>
