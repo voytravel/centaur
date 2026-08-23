@@ -1,6 +1,8 @@
 {{- if .Values.slackbotv2.enabled }}
 {{- $apiRsName := include "centaur.componentName" (dict "root" . "component" "api-rs") -}}
 {{- $console := include "centaur.consoleValues" . | fromYaml -}}
+{{- $slackbotV2GatewayBaseUrl := default "https://api.openai.com/v1" (default (get .Values.apiRs.extraEnv "OPENAI_BASE_URL") .Values.slackbotv2.messageOverridesStrategy.openaiBaseUrl) -}}
+{{- $slackbotV2OverridesModel := default "gpt-5.4-nano" (default (get .Values.sandbox.extraEnv "CODEX_MODEL") .Values.slackbotv2.messageOverridesStrategy.model) -}}
 {{- $slackbotV2MetricsAnnotations := dict -}}
 {{- if .Values.slackbotv2.metrics.scrapeAnnotations -}}
 {{- $slackbotV2MetricsAnnotations = dict "prometheus.io/scrape" "true" "prometheus.io/path" .Values.slackbotv2.metrics.path "prometheus.io/port" "3001" -}}
@@ -86,10 +88,14 @@ spec:
               value: {{ .Values.slackbotv2.responseServiceTierEnabled | quote }}
             - name: SLACKBOTV2_MESSAGE_OVERRIDES_STRATEGY
               value: {{ .Values.slackbotv2.messageOverridesStrategy.mode | quote }}
+{{- if not (hasKey .Values.slackbotv2.extraEnv "SLACKBOTV2_MESSAGE_OVERRIDES_MODEL") }}
             - name: SLACKBOTV2_MESSAGE_OVERRIDES_MODEL
-              value: {{ .Values.slackbotv2.messageOverridesStrategy.model | quote }}
+              value: {{ $slackbotV2OverridesModel | quote }}
+{{- end }}
+{{- if not (hasKey .Values.slackbotv2.extraEnv "SLACKBOTV2_MESSAGE_OVERRIDES_OPENAI_BASE_URL") }}
             - name: SLACKBOTV2_MESSAGE_OVERRIDES_OPENAI_BASE_URL
-              value: {{ .Values.slackbotv2.messageOverridesStrategy.openaiBaseUrl | quote }}
+              value: {{ $slackbotV2GatewayBaseUrl | quote }}
+{{- end }}
             - name: SLACKBOTV2_MESSAGE_OVERRIDES_TIMEOUT_MS
               value: {{ .Values.slackbotv2.messageOverridesStrategy.timeoutMs | quote }}
             - name: SLACKBOTV2_MESSAGE_OVERRIDES_MAX_OUTPUT_TOKENS

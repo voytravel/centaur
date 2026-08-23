@@ -8,8 +8,8 @@ use std::sync::Arc;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use nanocodex::{
-    AgentEvent, AgentEvents, Nanocodex, OpenAiAuth, Prompt, Thinking, Tools, Turn, UserInput,
-    load_chatgpt_auth,
+    AgentEvent, AgentEvents, Nanocodex, OpenAiAuth, Prompt, Responses, ResponsesTransport,
+    Thinking, Tools, Turn, UserInput, load_chatgpt_auth,
 };
 use serde::Deserialize;
 use serde_json::Value;
@@ -138,6 +138,33 @@ fn openai_auth(
     }
 }
 
+fn configured_gateway_base_url() -> Option<String> {
+    let value = env::var("OPENAI_BASE_URL").ok();
+    configured_gateway_base_url_from(value.as_deref())
+}
+
+fn configured_gateway_base_url_from(value: Option<&str>) -> Option<String> {
+    let value = value?.trim().trim_end_matches('/');
+    (!value.is_empty()).then(|| value.to_owned())
+}
+
+fn configured_responses() -> Responses {
+    let responses = Responses::builder();
+    if let Some(base_url) = configured_gateway_base_url() {
+        // Nanocodex's default is the OpenAI WebSocket transport and its fixed
+        // upstream model. A deployment-wide compatible endpoint must never
+        // fall through to api.openai.com, so use the gateway's HTTP Responses
+        // API and replay history rather than relying on OpenAI response IDs.
+        responses
+            .transport(ResponsesTransport::Https)
+            .api_base_url(base_url)
+            .store(false)
+            .build()
+    } else {
+        responses.build()
+    }
+}
+
 fn build_agent(
     auth: &OpenAiAuth,
     cwd: &std::path::Path,
@@ -147,6 +174,7 @@ fn build_agent(
     thinking: Thinking,
 ) -> Result<(Nanocodex, AgentEvents)> {
     let builder = Nanocodex::builder(auth.clone())
+        .responses(configured_responses())
         .thinking(thinking)
         .workspace(cwd)
         .session_id(session_id);
@@ -702,5 +730,15 @@ mod tests {
                 name: "OPENAI_API_KEY"
             }
         ));
+    }
+
+    #[test]
+    fn configured_gateway_base_url_trims_and_normalizes_a_value() {
+        assert_eq!(
+            configured_gateway_base_url_from(Some(" https://litellm.example/v1/ ")),
+            Some("https://litellm.example/v1".to_owned())
+        );
+        assert_eq!(configured_gateway_base_url_from(Some("  ")), None);
+        assert_eq!(configured_gateway_base_url_from(None), None);
     }
 }

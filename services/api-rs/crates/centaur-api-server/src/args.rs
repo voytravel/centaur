@@ -1016,10 +1016,10 @@ impl SandboxArgs {
 
         // Inject the infra/harness placeholder credentials so env-based
         // consumers send the proxy_value iron-proxy replaces with the real
-        // secret: codex's OPENAI_API_KEY (api_key mode -> codex logs in and
-        // hits OPENAI_BASE_URL (api.openai.com by default) instead of falling
-        // back to the ChatGPT auth.json), git/gh's GITHUB_TOKEN, the slack tool's
-        // SLACK_BOT_TOKEN, and the rest of the infra set.
+        // secret: codex's OPENAI_API_KEY (api_key mode -> the entrypoint
+        // configures Codex's OpenAI-compatible provider from OPENAI_BASE_URL,
+        // avoiding a fallback to the ChatGPT auth.json), git/gh's GITHUB_TOKEN,
+        // the slack tool's SLACK_BOT_TOKEN, and the rest of the infra set.
         for (name, value) in self.iron_proxy.sandbox_placeholder_env()? {
             if !envs.iter().any(|(existing, _)| existing == &name) {
                 envs.push((name, value));
@@ -2659,8 +2659,8 @@ mod tests {
             name == "OPENAI_BASE_URL" && value == "https://compatible-api.example/v1"
         }));
         // api_key mode (the default) injects the placeholder the egress proxy
-        // replaces, so codex logs in and hits api.openai.com instead of
-        // falling back to the ChatGPT auth.json.
+        // replaces, so Codex's configured gateway provider does not fall back
+        // to the ChatGPT auth.json.
         assert!(
             env.iter()
                 .any(|(name, value)| name == "OPENAI_API_KEY" && value == "OPENAI_API_KEY")

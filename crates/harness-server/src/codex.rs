@@ -36,14 +36,25 @@ impl CodexHarnessServer {
             .filter(|model| !model.is_empty())
     }
 
-    /// All Codex models use the deployment's OpenAI-compatible endpoint.
+    /// All Codex models use the deployment's configured OpenAI-compatible
+    /// gateway when one is present.
     ///
     /// Provider-style model ids (for example `DARKMATTER/GLM-5.2-FP8`) are
     /// valid LiteLLM model identifiers, not a request to select an alternate
     /// upstream. Ignoring the legacy provider override keeps a persisted Slack
-    /// thread from bypassing the configured `OPENAI_BASE_URL`.
+    /// thread from bypassing the configured gateway. The sandbox entrypoint
+    /// renders the `darkmatter` provider into user-level Codex config from
+    /// `OPENAI_BASE_URL`; that explicit provider is necessary because Codex
+    /// does not use the environment variable itself as a provider override.
     fn model_provider_for(&self, _provider_override: Option<&str>, _model: Option<&str>) -> String {
-        self.fallback_model_provider.to_string()
+        if env::var("OPENAI_BASE_URL")
+            .ok()
+            .is_some_and(|base_url| !base_url.trim().is_empty())
+        {
+            "darkmatter".to_owned()
+        } else {
+            self.fallback_model_provider.to_string()
+        }
     }
 }
 
