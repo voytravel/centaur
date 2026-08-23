@@ -117,6 +117,21 @@ mentionable and assignable in the first place, not an agent-session add-on.
 | `LINEARBOT_LOG_LEVEL` | — | `debug`/`info`/`warn`/`error`, default `info`. |
 | `SESSION_IDLE_TIMEOUT_MS` / `SESSION_MAX_DURATION_MS` | — | Forwarded to api-rs executes. |
 
+## Policy-routed Linear issues
+
+When Console's repository-automation policy enables `ready_issues`, Linearbot
+submits only a signature-verified, normalized issue summary to Console. Console
+selects the repository deterministically. A simple policy supplies one
+`github_repository`; a multi-repository policy supplies label-based
+`repository_routes`. Each ready issue must match exactly one route or the event
+is recorded as ignored and no agent turn starts.
+
+A selected route can supply reviewers and a `preview_label`. For a user-visible
+change, the resulting prompt tells the agent to apply that already-configured
+GitHub label after it has opened a draft PR, then to report only a preview URL
+verified from PR checks or comments. Linearbot does not infer repositories,
+create previews, or fabricate URLs.
+
 ## Patched adapter
 
 `patches/@chat-adapter__linear@4.31.0.patch` (registered in `pnpm-workspace.yaml`) carries three

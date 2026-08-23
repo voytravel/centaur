@@ -192,6 +192,57 @@ class AutomationEventIngestorTest < ActiveSupport::TestCase
     assert_equal "https://linear.app/voytravel/issue/ENG-42/implement-it", workstream.metadata["linear_issue_url"]
   end
 
+  test "returns the explicitly selected Linear repository route and preview label" do
+    AutomationPolicy.create!(
+      name: "Routed Linear",
+      provider: "linear",
+      linear_team_id: "team-1",
+      enabled: true,
+      mode: "act",
+      execution_role: automation_role,
+      created_by: users(:acme_admin),
+      settings: {
+        "linear" => {
+          "issue" => "ready_issues",
+          "repository_routes" => [
+            {
+              "repository" => "acme/widgets",
+              "required_labels" => [ "repo:widgets" ]
+            },
+            {
+              "repository" => "acme/travel",
+              "required_labels" => [ "repo:travel" ],
+              "preview_label" => "preview"
+            }
+          ]
+        }
+      }
+    )
+
+    input = {
+      "provider" => "linear",
+      "deduplication_key" => "routed-issue-v1",
+      "event_type" => "Issue",
+      "event_action" => "update",
+      "linear_issue_id" => "routed-issue",
+      "linear_team_id" => "team-1",
+      "title" => "Implement travel UI",
+      "description" => "Ready to ship",
+      "labels" => [ "repo:travel" ]
+    }
+
+    first = AutomationEventIngestor.new(input).call
+    second = AutomationEventIngestor.new(input).call
+
+    assert_equal "act", first["decision"]
+    assert_equal "acme/travel", first["github_repository"]
+    assert_equal "preview", first["preview_label"]
+    assert_equal first, second
+    event = AutomationEvent.sole
+    assert_equal "acme/travel", event.metadata.dig("result", "github_repository")
+    assert_equal "preview", event.metadata.dig("result", "preview_label")
+  end
+
   test "re-evaluates a duplicate delivery after an operator disables its policy" do
     policy = AutomationPolicy.create!(
       name: "Widgets",

@@ -158,6 +158,7 @@ class AutomationEventIngestor
         "auto_merge" => outcome["auto_merge"] == true,
         "github_repository" => outcome["github_repository"],
         "move_to_in_progress" => outcome["move_to_in_progress"] != false,
+        "preview_label" => outcome["preview_label"],
         "reason" => outcome.fetch("reason"),
         "reviewer_logins" => Array(outcome["reviewer_logins"]),
         "reviewer_team_slugs" => Array(outcome["reviewer_team_slugs"])
@@ -211,6 +212,7 @@ class AutomationEventIngestor
       "auto_merge" => result["auto_merge"] == true,
       "github_repository" => result["github_repository"],
       "move_to_in_progress" => result["move_to_in_progress"] != false,
+      "preview_label" => result["preview_label"],
       "policy_id" => resolved_policy&.oid,
       "reviewer_logins" => Array(result["reviewer_logins"]),
       "reviewer_team_slugs" => Array(result["reviewer_team_slugs"])
@@ -237,6 +239,7 @@ class AutomationEventIngestor
       "auto_merge" => false,
       "github_repository" => nil,
       "move_to_in_progress" => true,
+      "preview_label" => nil,
       "policy_id" => nil,
       "reviewer_logins" => [],
       "reviewer_team_slugs" => []

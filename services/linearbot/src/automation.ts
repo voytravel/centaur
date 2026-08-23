@@ -8,6 +8,7 @@ export type LinearAutomationDecision = {
   decision: "act" | "ignored" | "observe";
   githubRepository?: string;
   moveToInProgress: boolean;
+  previewLabel?: string;
   policyId?: string;
   reason: string;
   reviewerLogins: string[];
@@ -75,6 +76,7 @@ export async function evaluateLinearAutomation(
       decision,
       githubRepository: stringValue(data.github_repository),
       moveToInProgress: data.move_to_in_progress !== false,
+      previewLabel: stringValue(data.preview_label),
       policyId: stringValue(data.policy_id),
       reason: stringValue(data.reason) ?? "policy result",
       reviewerLogins: stringArray(data.reviewer_logins),

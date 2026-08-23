@@ -57,6 +57,7 @@ describe("evaluateLinearAutomation", () => {
                 decision: "act",
                 github_repository: "acme/widgets",
                 move_to_in_progress: true,
+                preview_label: "preview",
                 reason: "policy authorizes automation",
                 reviewer_logins: [ "octocat" ],
                 reviewer_team_slugs: [ "platform" ],
@@ -81,6 +82,7 @@ describe("evaluateLinearAutomation", () => {
     expect(result).toEqual(
       expect.objectContaining({
         githubRepository: "acme/widgets",
+        previewLabel: "preview",
         reviewerLogins: [ "octocat" ],
         reviewerTeamSlugs: [ "platform" ],
         sessionKey: "linear:issue-1",

@@ -91,6 +91,8 @@ class Console::AutomationPoliciesController < ApplicationController
           }
         }
       else
+        repository_routes = linear_repository_routes(values[:linear_repository_routes])
+        github_repository = repository_routes.any? ? "" : values[:linear_github_repository].to_s.strip
         {
           "linear" => {
             "issue" => values[:linear_issue_mode],
@@ -98,7 +100,8 @@ class Console::AutomationPoliciesController < ApplicationController
             "required_fields" => comma_list(values[:linear_required_fields]),
             "required_labels" => comma_list(values[:linear_required_labels]),
             "excluded_labels" => comma_list(values[:linear_excluded_labels]),
-            "github_repository" => values[:linear_github_repository].to_s.strip,
+            "github_repository" => github_repository,
+            "repository_routes" => repository_routes,
             "reviewer_logins" => comma_list(values[:linear_reviewer_logins]),
             "reviewer_team_slugs" => comma_list(values[:linear_reviewer_team_slugs]),
             "move_to_in_progress" => boolean_value(values[:linear_move_to_in_progress])
@@ -134,12 +137,51 @@ class Console::AutomationPoliciesController < ApplicationController
       :linear_github_repository,
       :linear_reviewer_logins,
       :linear_reviewer_team_slugs,
-      :linear_move_to_in_progress
+      :linear_move_to_in_progress,
+      linear_repository_routes: %i[
+        repository
+        required_labels
+        reviewer_logins
+        reviewer_team_slugs
+        preview_label
+      ]
     )
   end
 
   def comma_list(value)
     value.to_s.split(",").filter_map { |item| item.strip.presence }.uniq
+  end
+
+  def linear_repository_routes(value)
+    routes =
+      if value.is_a?(Array)
+        value
+      elsif value.respond_to?(:to_h)
+        value.to_h.values
+      else
+        []
+      end
+    routes.filter_map do |route|
+      next unless route.respond_to?(:[])
+
+      route = route.to_h.with_indifferent_access
+      repository = route[:repository].to_s.strip
+      labels = comma_list(route[:required_labels])
+      reviewer_logins = comma_list(route[:reviewer_logins])
+      reviewer_team_slugs = comma_list(route[:reviewer_team_slugs])
+      preview_label = route[:preview_label].to_s.strip
+      blank_route = repository.blank? && labels.empty? && reviewer_logins.empty? &&
+        reviewer_team_slugs.empty? && preview_label.blank?
+      next if blank_route
+
+      {
+        "repository" => repository,
+        "required_labels" => labels,
+        "reviewer_logins" => reviewer_logins.presence,
+        "reviewer_team_slugs" => reviewer_team_slugs.presence,
+        "preview_label" => preview_label.presence
+      }.compact
+    end
   end
 
   def boolean_value(value)

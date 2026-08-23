@@ -80,6 +80,72 @@ class Console::AutomationPoliciesControllerTest < ActionDispatch::IntegrationTes
     assert_equal [ "agent:ready" ], policy.linear_settings["required_labels"]
   end
 
+  test "creates a Linear policy with explicit repository routes" do
+    assert_difference -> { AutomationPolicy.count }, 1 do
+      post console_automation_policies_url, params: {
+        automation_policy: {
+          name: "Routed issues",
+          provider: "linear",
+          linear_team_id: "team-1",
+          mode: "observe",
+          enabled: "1",
+          linear_issue_mode: "ready_issues",
+          linear_ready_statuses: "Ready",
+          linear_required_fields: "description, acceptance_criteria",
+          linear_required_labels: "agent:ready",
+          linear_excluded_labels: "no-agent",
+          linear_github_repository: "acme/ignored-single-repository",
+          linear_reviewer_logins: "",
+          linear_reviewer_team_slugs: "",
+          linear_move_to_in_progress: "1",
+          linear_repository_routes: {
+            "0" => {
+              repository: "acme/widgets",
+              required_labels: "repo:widgets",
+              reviewer_logins: "octocat",
+              reviewer_team_slugs: "",
+              preview_label: ""
+            },
+            "1" => {
+              repository: "acme/web",
+              required_labels: "repo:web",
+              reviewer_logins: "",
+              reviewer_team_slugs: "frontend",
+              preview_label: "preview"
+            },
+            "2" => {
+              repository: "",
+              required_labels: "",
+              reviewer_logins: "",
+              reviewer_team_slugs: "",
+              preview_label: ""
+            }
+          }
+        }
+      }
+    end
+
+    policy = AutomationPolicy.order(:id).last
+    settings = policy.linear_settings
+    assert_equal "", settings["github_repository"]
+    assert_equal(
+      [
+        {
+          "repository" => "acme/widgets",
+          "required_labels" => [ "repo:widgets" ],
+          "reviewer_logins" => [ "octocat" ]
+        },
+        {
+          "repository" => "acme/web",
+          "required_labels" => [ "repo:web" ],
+          "reviewer_team_slugs" => [ "frontend" ],
+          "preview_label" => "preview"
+        }
+      ],
+      settings["repository_routes"]
+    )
+  end
+
   test "shows source-managed policies as read-only and rejects direct mutation" do
     policy = AutomationPolicy.create!(
       name: "Managed widgets automation",
