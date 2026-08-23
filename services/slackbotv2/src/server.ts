@@ -52,6 +52,7 @@ const options: SlackbotV2Options = {
   autoJoinCreatedChannels: booleanEnv('SLACKBOTV2_AUTO_JOIN_CREATED_CHANNELS', false),
   botToken,
   botUserId,
+  continueThreadReplies: booleanEnv('SLACKBOTV2_CONTINUE_THREAD_REPLIES', false),
   channelDefaults: parseChannelDefaults(optionalEnv('SLACKBOTV2_CHANNEL_DEFAULTS'), reason =>
     consoleLogger.warn('slackbotv2 SLACKBOTV2_CHANNEL_DEFAULTS', { reason })
   ),
@@ -112,6 +113,7 @@ console.log(
     service: 'slackbotv2',
     activity_summary_status_enabled: options.activitySummaryStatusEnabled,
     auto_join_created_channels_enabled: options.autoJoinCreatedChannels,
+    continue_thread_replies_enabled: options.continueThreadReplies,
     message_overrides_strategy: messageOverridesStrategyMode,
     message_overrides_strategy_enabled:
       messageOverridesStrategyMode !== 'llm' || Boolean(messageOverridesStrategyApiKey),

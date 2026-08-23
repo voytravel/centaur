@@ -532,6 +532,11 @@ slackbotv2:
   # Join newly-created public channels after subscribed channel_created events.
   # Requires the Slack app to grant channels:read and channels:join.
   autoJoinCreatedChannels: false
+  # After an accepted mention (or allowlisted DM) opens a thread subscription,
+  # forward later human replies in that same thread without requiring another
+  # mention. Unmentioned replies remain unable to issue the deterministic stop
+  # command or acquire requester credential context.
+  continueThreadReplies: false
   # Sticky percentage of otherwise-default Codex Slack threads assigned to
   # Nanocodex. A non-default model selection bypasses the rollout.
   codexNanocodexRolloutPercent: 0

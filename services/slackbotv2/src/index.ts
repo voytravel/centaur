@@ -375,7 +375,15 @@ export function createSlackbotV2(options: SlackbotV2Options): SlackbotV2 {
     if (directMessage || slackRichTextMentionsUser(message.raw, options.botUserId)) {
       message.isMention = true
     }
-    if (message.isMention !== true) {
+    // A subscription is created only after an accepted mention/DM handoff,
+    // so this opt-in path cannot activate arbitrary channel messages. Keep
+    // the follow-up unmentioned: requester identity and deterministic `stop`
+    // authorization remain exclusive to explicit mentions/allowlisted DMs.
+    const threadReplyContinuation =
+      options.continueThreadReplies === true &&
+      message.isMention !== true &&
+      isSlackThreadReply(message)
+    if (message.isMention !== true && !threadReplyContinuation) {
       traceLog(
         options,
         'slackbotv2_subscribed_message_without_mention_ignored',
@@ -384,13 +392,18 @@ export function createSlackbotV2(options: SlackbotV2Options): SlackbotV2 {
       )
       return
     }
-    lateSlackFiles.rememberFilelessMention(thread, message)
+    if (message.isMention === true) lateSlackFiles.rememberFilelessMention(thread, message)
     await handleSlackMessageHandoff(thread, message, {
       assistantStatusRequested: true,
+      allowStopCommand: !threadReplyContinuation,
       mode: 'execute',
       options,
       state,
-      trigger: directMessage ? 'direct_message' : 'subscribed_message'
+      trigger: directMessage
+        ? 'direct_message'
+        : threadReplyContinuation
+          ? 'subscribed_thread_reply'
+          : 'subscribed_message'
     })
   })
 
@@ -503,6 +516,8 @@ async function handleSlackMessageHandoff(
   message: ChatMessage,
   input: {
     assistantStatusRequested: boolean
+    /** Unmentioned thread continuations must not deterministically interrupt a run. */
+    allowStopCommand?: boolean
     mode: SlackbotV2MessageMode
     options: SlackbotV2Options
     state: StateAdapter
@@ -528,7 +543,10 @@ async function handleSlackMessageHandoff(
     backgroundWaitUntil(assistantStatus.then(() => undefined).catch(() => undefined))
   }
   try {
-    if (await handleStopCommand(thread, message, input.options, input.trigger)) {
+    if (
+      input.allowStopCommand !== false &&
+      (await handleStopCommand(thread, message, input.options, input.trigger))
+    ) {
       return
     }
     if (input.subscribe) {
