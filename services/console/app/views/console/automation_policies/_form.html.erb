@@ -195,6 +195,13 @@
                            class: "form-input" %>
       </div>
       <div>
+        <label class="mb-2 block text-sm font-medium text-zinc-200" for="automation_policy_linear_required_labels">Required labels</label>
+        <%= text_field_tag "automation_policy[linear_required_labels]", Array(linear["required_labels"]).join(", "),
+                           id: "automation_policy_linear_required_labels",
+                           placeholder: "agent:ready",
+                           class: "form-input" %>
+      </div>
+      <div>
         <label class="mb-2 block text-sm font-medium text-zinc-200" for="automation_policy_linear_excluded_labels">Excluded labels</label>
         <%= text_field_tag "automation_policy[linear_excluded_labels]", Array(linear["excluded_labels"]).join(", "),
                            id: "automation_policy_linear_excluded_labels",

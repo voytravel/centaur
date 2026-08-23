@@ -53,6 +53,33 @@ class Console::AutomationPoliciesControllerTest < ActionDispatch::IntegrationTes
     assert_redirected_to console_threads_path
   end
 
+  test "creates a Linear policy with an explicit required-label gate" do
+    assert_difference -> { AutomationPolicy.count }, 1 do
+      post console_automation_policies_url, params: {
+        automation_policy: {
+          name: "Widgets issues",
+          provider: "linear",
+          linear_team_id: "team-1",
+          linear_project_id: "project-1",
+          mode: "observe",
+          enabled: "1",
+          linear_issue_mode: "ready_issues",
+          linear_ready_statuses: "Ready",
+          linear_required_fields: "description, acceptance_criteria",
+          linear_required_labels: "agent:ready",
+          linear_excluded_labels: "no-agent",
+          linear_github_repository: "acme/widgets",
+          linear_reviewer_logins: "",
+          linear_reviewer_team_slugs: "",
+          linear_move_to_in_progress: "1"
+        }
+      }
+    end
+
+    policy = AutomationPolicy.order(:id).last
+    assert_equal [ "agent:ready" ], policy.linear_settings["required_labels"]
+  end
+
   test "shows source-managed policies as read-only and rejects direct mutation" do
     policy = AutomationPolicy.create!(
       name: "Managed widgets automation",

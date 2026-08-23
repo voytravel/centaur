@@ -78,7 +78,9 @@ class AutomationPolicy < ApplicationRecord
       "review: #{config["review"].tr("_", " ")} · feedback: #{config["feedback"].tr("_", " ")} · checks: #{config["checks"].tr("_", " ")}"
     else
       config = linear_settings
-      "issues: #{config["issue"].tr("_", " ")} · repo: #{config["github_repository"].presence || "not mapped"}"
+      required_labels = Array(config["required_labels"])
+      label_summary = required_labels.any? ? required_labels.join(", ") : "none"
+      "issues: #{config["issue"].tr("_", " ")} · repo: #{config["github_repository"].presence || "not mapped"} · required labels: #{label_summary}"
     end
   end
 
@@ -161,6 +163,7 @@ class AutomationPolicy < ApplicationRecord
       "issue" => "off",
       "ready_statuses" => [],
       "required_fields" => [ "description" ],
+      "required_labels" => [],
       "excluded_labels" => [ "no-agent" ],
       "github_repository" => "",
       "reviewer_logins" => [],
@@ -378,6 +381,9 @@ class AutomationPolicy < ApplicationRecord
     end
 
     labels = Array(event["labels"]).map { |label| label.to_s.downcase }
+    required = Array(config["required_labels"]).map(&:downcase)
+    return [ false, "a required label is missing" ] unless (required - labels).empty?
+
     excluded = Array(config["excluded_labels"]).map(&:downcase)
     return [ false, "an excluded label is present" ] if (excluded & labels).any?
 

@@ -155,6 +155,7 @@ class AutomationPolicyTest < ActiveSupport::TestCase
           "issue" => "ready_issues",
           "ready_statuses" => [ "Ready" ],
           "required_fields" => [ "description", "acceptance_criteria" ],
+          "required_labels" => [ "agent:ready" ],
           "github_repository" => "acme/widgets"
         }
       }
@@ -167,11 +168,24 @@ class AutomationPolicyTest < ActiveSupport::TestCase
       "title" => "Ship the widget",
       "description" => "Acceptance Criteria\n- The widget is shipped.",
       "status" => "Ready",
-      "labels" => []
+      "labels" => [ "agent:ready" ]
     )
 
     assert_equal "observe", result["decision"]
     assert_equal [ "implement_issue" ], result["actions"]
+    assert_includes policy.automation_summary, "required labels: agent:ready"
+
+    missing_opt_in = policy.evaluate(
+      "event_type" => "Issue",
+      "event_action" => "update",
+      "linear_team_id" => "team-1",
+      "title" => "Ship the widget",
+      "description" => "Acceptance Criteria\n- The widget is shipped.",
+      "status" => "Ready",
+      "labels" => []
+    )
+    assert_equal "ignored", missing_opt_in["decision"]
+    assert_equal "a required label is missing", missing_opt_in["reason"]
 
     blocked = policy.evaluate(
       "event_type" => "Issue",
@@ -180,7 +194,7 @@ class AutomationPolicyTest < ActiveSupport::TestCase
       "title" => "Ship the widget",
       "description" => "Acceptance Criteria\n- The widget is shipped.",
       "status" => "Ready",
-      "labels" => [],
+      "labels" => [ "agent:ready" ],
       "blocked" => true
     )
     assert_equal "ignored", blocked["decision"]
