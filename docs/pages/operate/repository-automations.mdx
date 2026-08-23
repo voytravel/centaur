@@ -109,6 +109,10 @@ a user-visible change. It must be an already-reviewed repository label whose
 workflow creates a real preview; the agent reports a URL only after verifying
 it from the PR's checks or comments.
 
+In Console, native (non-source-managed) Linear policies expose the same route
+fields as labelled rows. Source-managed policies stay read-only in Console and
+must be changed in their reviewed configuration before deployment.
+
 The agent re-checks readiness before coding, opens a linked PR without merging
 it, requests the configured human reviewers, and attaches a real verified
 screenshot for a user-visible change when available. It must not fabricate a

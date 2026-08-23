@@ -1,5 +1,8 @@
 <% github = policy.github_settings %>
 <% linear = policy.linear_settings %>
+<% repository_routes = Array(linear["repository_routes"]).select { |route| route.is_a?(Hash) } %>
+<% repository_route_slots = repository_routes + [ {} ] %>
+<% repository_route_slots.concat(Array.new(3 - repository_route_slots.length) { {} }) if repository_route_slots.length < 3 %>
 
 <%= form_with model: [ :console, policy ], class: "space-y-6" do |form| %>
   <% if policy.errors.any? %>
@@ -179,6 +182,7 @@
                            id: "automation_policy_linear_github_repository",
                            placeholder: "owner/repository",
                            class: "form-input font-mono" %>
+        <p class="mt-2 text-xs text-zinc-500">Use this for one repository. Leave it blank when using repository routes below.</p>
       </div>
       <div>
         <label class="mb-2 block text-sm font-medium text-zinc-200" for="automation_policy_linear_ready_statuses">Ready statuses</label>
@@ -222,6 +226,55 @@
                            placeholder: "platform, frontend",
                            class: "form-input" %>
       </div>
+      <details class="rounded border border-ink-700 bg-ink-900/50 p-4 lg:col-span-2" <%= "open" if repository_routes.any? %>>
+        <summary class="cursor-pointer text-sm font-medium text-zinc-200">Route different issue labels to different repositories</summary>
+        <p class="mt-3 text-xs text-zinc-500">Optional. Each non-empty route needs at least one label. A ready issue must match exactly one route; zero or multiple matches are recorded and stopped before an agent starts. Filling a route uses routes instead of the single repository above.</p>
+        <div class="mt-4 space-y-4">
+          <% repository_route_slots.each_with_index do |route, index| %>
+            <% route = route.deep_stringify_keys %>
+            <fieldset class="rounded border border-ink-700 p-3">
+              <legend class="px-1 text-xs font-medium text-zinc-400">Route <%= index + 1 %></legend>
+              <div class="grid gap-3 lg:grid-cols-5">
+                <div>
+                  <label class="mb-1 block text-xs text-zinc-400" for="automation_policy_linear_repository_routes_<%= index %>_repository">Repository</label>
+                  <%= text_field_tag "automation_policy[linear_repository_routes][#{index}][repository]", route["repository"],
+                                     id: "automation_policy_linear_repository_routes_#{index}_repository",
+                                     placeholder: "owner/repository",
+                                     class: "form-input font-mono" %>
+                </div>
+                <div>
+                  <label class="mb-1 block text-xs text-zinc-400" for="automation_policy_linear_repository_routes_<%= index %>_required_labels">Route labels</label>
+                  <%= text_field_tag "automation_policy[linear_repository_routes][#{index}][required_labels]", Array(route["required_labels"]).join(", "),
+                                     id: "automation_policy_linear_repository_routes_#{index}_required_labels",
+                                     placeholder: "repo:web",
+                                     class: "form-input" %>
+                </div>
+                <div>
+                  <label class="mb-1 block text-xs text-zinc-400" for="automation_policy_linear_repository_routes_<%= index %>_reviewer_logins">Reviewers</label>
+                  <%= text_field_tag "automation_policy[linear_repository_routes][#{index}][reviewer_logins]", Array(route["reviewer_logins"]).join(", "),
+                                     id: "automation_policy_linear_repository_routes_#{index}_reviewer_logins",
+                                     placeholder: "octocat",
+                                     class: "form-input" %>
+                </div>
+                <div>
+                  <label class="mb-1 block text-xs text-zinc-400" for="automation_policy_linear_repository_routes_<%= index %>_reviewer_team_slugs">Reviewer teams</label>
+                  <%= text_field_tag "automation_policy[linear_repository_routes][#{index}][reviewer_team_slugs]", Array(route["reviewer_team_slugs"]).join(", "),
+                                     id: "automation_policy_linear_repository_routes_#{index}_reviewer_team_slugs",
+                                     placeholder: "frontend",
+                                     class: "form-input" %>
+                </div>
+                <div>
+                  <label class="mb-1 block text-xs text-zinc-400" for="automation_policy_linear_repository_routes_<%= index %>_preview_label">Preview label</label>
+                  <%= text_field_tag "automation_policy[linear_repository_routes][#{index}][preview_label]", route["preview_label"],
+                                     id: "automation_policy_linear_repository_routes_#{index}_preview_label",
+                                     placeholder: "preview",
+                                     class: "form-input" %>
+                </div>
+              </div>
+            </fieldset>
+          <% end %>
+        </div>
+      </details>
     </div>
     <label class="mt-5 flex items-start gap-3 rounded border border-ink-700 bg-ink-900/50 px-4 py-3">
       <%= check_box_tag "automation_policy[linear_move_to_in_progress]", "1", linear["move_to_in_progress"] != false,
