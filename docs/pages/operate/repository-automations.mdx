@@ -1,0 +1,107 @@
+---
+title: Repository Automations
+description: Configure safe, durable GitHub pull-request and Linear issue automation from Centaur Console.
+---
+
+# Repository Automations
+
+Repository Automations let an operator configure repeatable GitHub and Linear
+work without putting an LLM in the webhook router. The Console evaluates a
+small declarative policy, records the event, and only then authorizes an
+existing durable agent session to continue work.
+
+Open **Automations** in Centaur Console as an administrator. Policies start in
+**Observe** mode. Review the recorded workstreams first, then deliberately
+switch a policy to **Act automatically**.
+
+## What is durable
+
+For one GitHub pull request, every policy-selected event uses the same
+`github-manage:<owner>/<repo>:<number>` session. For one Linear issue, every
+policy-selected event uses `linear:<issue-id>`. A webhook therefore adds
+context to the established workspace instead of creating another unrelated
+sandbox.
+
+```text
+verified GitHub / Linear webhook
+             |
+             v
+normalized event -> Console policy + audit record
+             |                 |
+             |                 +-> ignored / observed / acted
+             v
+existing PR or issue session -> api-rs execution -> platform reply / PR work
+```
+
+The Console records a workstream for each PR or issue, including the stable
+session key and recent event count. It keeps only compact event metadata; raw
+webhook bodies and credentials do not enter the policy store.
+
+## GitHub policies
+
+A GitHub policy scopes to one `owner/repository`. It can independently enable:
+
+- automatic review of eligible non-draft pull requests;
+- response to submitted review feedback;
+- failing-check repair after all checks for a commit settle;
+- merge-conflict resolution; and
+- deterministic auto-merge, explicitly opt-in and still constrained by branch
+  protection, draft state, and the hold label.
+
+Use allowed base-branch patterns such as `main` or `release/*`, required labels,
+and excluded labels to define eligibility. Existing assigned-review and
+bot-owned PR behavior remains available; the policy only extends automation to
+other eligible PRs.
+
+Enable the GitHubbot, expose `POST /api/webhooks/github`, and subscribe the
+GitHub App or webhook to pull requests, pull-request reviews, check runs,
+check suites, status, and workflow runs. Comment-driven work retains its
+separate fail-closed GitHub author-association gate.
+
+## Linear policies
+
+A Linear policy scopes to a team, optionally narrowed to one project. It can
+pick up new or updated issues only when configured readiness checks pass:
+
+- title, description, and optional acceptance-criteria requirements;
+- configured ready workflow states; and
+- excluded labels such as `no-agent`.
+
+Map the policy to a GitHub repository and optional reviewers. The agent is
+instructed to re-check readiness before coding, open a linked PR without
+merging it, request the configured human reviewers, and attach a real verified
+screenshot for a user-visible change when available. It must not fabricate a
+screenshot. Once a PR exists, it can mark the Linear issue `In Review`.
+
+## Enable the policy plane
+
+The Helm chart keeps the policy plane off by default. Enable it only after the
+shared secret source contains a generated
+`CENTAUR_AUTOMATION_INGRESS_TOKEN` value:
+
+```yaml
+automation:
+  enabled: true
+```
+
+When enabled, the chart gives the token only to Console, Githubbot, and
+Linearbot. The bots use it solely to send already-verified, normalized event
+summaries to Console's internal automation endpoint. It is not an operator API
+key and cannot grant sandbox permissions.
+
+Policies do not provision repository, tool, or sandbox permissions. Configure
+the relevant principal's grants and repository cache access separately before
+moving a policy from Observe to Act.
+
+## Safe rollout
+
+1. Deploy with `automation.enabled=true`.
+2. Create one narrow policy in **Observe** mode.
+3. Exercise a real webhook and inspect its workstream and associated session.
+4. Confirm the agent principal has only the repository and tool access it needs.
+5. Change that policy to **Act automatically**.
+6. Enable auto-merge only after the observed behavior and repository protection
+   rules are satisfactory.
+
+An unavailable Console, missing ingress token, invalid webhook signature, or
+nonmatching policy fails closed: no new policy-driven agent turn starts.

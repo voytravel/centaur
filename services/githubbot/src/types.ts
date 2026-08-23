@@ -90,6 +90,10 @@ export type GithubbotFetch = (
 export type GithubbotOptions = {
   apiKey?: string;
   apiUrl: string;
+  /** Console internal URL used solely for policy evaluation and workstream audit. */
+  automationApiUrl?: string;
+  /** Single-purpose credential accepted only by Console automation ingress. */
+  automationIngressToken?: string;
   /**
    * Bot's GitHub user id (numeric, as a string). Used by the adapter for
    * self-message detection; auto-detected from the token when omitted.

@@ -1,0 +1,121 @@
+class Console::AutomationPoliciesController < ApplicationController
+  layout "console"
+  before_action :require_admin
+  before_action :set_policy, only: %i[edit update destroy]
+
+  def index
+    @policies = AutomationPolicy.includes(:created_by).order(:provider, :repository, :linear_team_id, :id)
+    @workstreams = AutomationWorkstream.includes(:automation_policy)
+      .order(last_event_at: :desc, id: :desc)
+      .limit(30)
+  end
+
+  def new
+    @policy = AutomationPolicy.new(
+      provider: params[:provider].presence_in(AutomationPolicy::PROVIDERS) || "github",
+      enabled: true,
+      mode: "observe"
+    )
+  end
+
+  def create
+    @policy = current_user.created_automation_policies.new(policy_attributes)
+    if @policy.save
+      redirect_to console_automation_policies_path, notice: "Automation policy created."
+    else
+      render :new, status: :unprocessable_entity
+    end
+  end
+
+  def edit; end
+
+  def update
+    if @policy.update(policy_attributes)
+      redirect_to console_automation_policies_path, notice: "Automation policy saved."
+    else
+      render :edit, status: :unprocessable_entity
+    end
+  end
+
+  def destroy
+    @policy.destroy!
+    redirect_to console_automation_policies_path, notice: "Automation policy deleted."
+  end
+
+  private
+
+  def set_policy
+    @policy = AutomationPolicy.find_by_oid!(params[:id])
+  end
+
+  def policy_attributes
+    values = policy_params
+    provider = values.fetch(:provider)
+    common = values.slice(:name, :provider, :repository, :linear_team_id, :linear_project_id, :enabled, :mode)
+    common[:settings] =
+      if provider == "github"
+        {
+          "github" => {
+            "review" => values[:github_review_mode],
+            "feedback" => values[:github_feedback_mode],
+            "checks" => values[:github_checks_mode],
+            "conflicts" => values[:github_conflicts_mode],
+            "auto_merge" => boolean_value(values[:github_auto_merge]),
+            "base_branches" => comma_list(values[:github_base_branches]),
+            "required_labels" => comma_list(values[:github_required_labels]),
+            "excluded_labels" => comma_list(values[:github_excluded_labels])
+          }
+        }
+      else
+        {
+          "linear" => {
+            "issue" => values[:linear_issue_mode],
+            "ready_statuses" => comma_list(values[:linear_ready_statuses]),
+            "required_fields" => comma_list(values[:linear_required_fields]),
+            "excluded_labels" => comma_list(values[:linear_excluded_labels]),
+            "github_repository" => values[:linear_github_repository].to_s.strip,
+            "reviewer_logins" => comma_list(values[:linear_reviewer_logins]),
+            "reviewer_team_slugs" => comma_list(values[:linear_reviewer_team_slugs]),
+            "move_to_in_progress" => boolean_value(values[:linear_move_to_in_progress])
+          }
+        }
+      end
+    common
+  end
+
+  def policy_params
+    params.require(:automation_policy).permit(
+      :name,
+      :provider,
+      :repository,
+      :linear_team_id,
+      :linear_project_id,
+      :enabled,
+      :mode,
+      :github_review_mode,
+      :github_feedback_mode,
+      :github_checks_mode,
+      :github_conflicts_mode,
+      :github_auto_merge,
+      :github_base_branches,
+      :github_required_labels,
+      :github_excluded_labels,
+      :linear_issue_mode,
+      :linear_ready_statuses,
+      :linear_required_fields,
+      :linear_excluded_labels,
+      :linear_github_repository,
+      :linear_reviewer_logins,
+      :linear_reviewer_team_slugs,
+      :linear_move_to_in_progress
+    )
+  end
+
+  def comma_list(value)
+    value.to_s.split(",").filter_map { |item| item.strip.presence }.uniq
+  end
+
+  def boolean_value(value)
+    ActiveModel::Type::Boolean.new.cast(value)
+  end
+end

@@ -2,6 +2,7 @@ import type { GitHubAdapter } from "@chat-adapter/github";
 import type { StateAdapter } from "chat";
 import { backgroundWaitUntil } from "./context";
 import { reactWorkingOnReview, settleReviewReaction } from "./reactions";
+import { DEFAULT_REVIEW_PROMPT } from "./review-prompt";
 import { runTurnStream } from "./turn";
 import {
   fetchCiEvaluation,
@@ -37,6 +38,18 @@ export type PrManagerContext = {
   options: GithubbotOptions;
   state: StateAdapter;
   userName: string;
+};
+
+/**
+ * Explicit per-event permissions returned by the Console policy evaluator.
+ * Existing owned-PR behavior keeps working without this object; a policy may
+ * only add the listed capabilities for an otherwise eligible PR.
+ */
+export type PolicyPrAutomation = {
+  autoMerge?: boolean;
+  checks?: boolean;
+  conflicts?: boolean;
+  feedback?: boolean;
 };
 
 const STATE_TTL_MS = 90 * 24 * 60 * 60 * 1000;
@@ -285,6 +298,7 @@ function owns(ctx: PrManagerContext, pr: PullRequestSummary): boolean {
 export async function handlePullRequestEvent(
   ctx: PrManagerContext,
   rawBody: string,
+  automation?: PolicyPrAutomation,
 ): Promise<void> {
   const payload = parseJson(rawBody);
   if (!payload) return;
@@ -298,25 +312,74 @@ export async function handlePullRequestEvent(
   if (action === "closed") return; // nothing to drive once closed/merged.
 
   const pr = await fetchPr(ctx, repo.owner, repo.repo, number);
-  if (!pr || !owns(ctx, pr)) return;
+  if (!pr) return;
+  const owned = owns(ctx, pr);
+  // The legacy route already manages owned PRs. Policy routes extend that
+  // behavior to non-owned PRs and must not create a duplicate management turn.
+  if (owned && automation) return;
+  if (!owned && !automation?.conflicts && !automation?.autoMerge) return;
   // Being assigned the PR is the explicit signal to take it over: evaluate CI now
   // (forcing past the human-commit back-off — the assignment is a human handing
   // it to us) so an already-red or already-green PR is acted on immediately,
   // rather than only on the next lifecycle event. processCi fixes red CI or merges
   // when green.
-  if (action === "assigned") {
+  if (action === "assigned" && owned) {
     await processCi(ctx, repo.owner, repo.repo, number, pr.headSha, true);
     return;
   }
   // Any other state change that could flip mergeability re-evaluates the merge
   // gate; it's deterministic and idempotent, so over-calling is harmless.
-  await tryMerge(ctx, repo.owner, repo.repo, number);
+  await tryMerge(ctx, repo.owner, repo.repo, number, automation);
+}
+
+/**
+ * Runs an automatic review on a policy-eligible PR. It intentionally uses the
+ * existing management session family, so later feedback, CI failures, and
+ * conflict events for this PR continue on the same durable workspace.
+ */
+export async function handleAutomaticReview(
+  ctx: PrManagerContext,
+  rawBody: string,
+  deliveryId: string,
+): Promise<void> {
+  const payload = parseJson(rawBody);
+  if (!payload) return;
+  const repo = repoFromPayload(payload);
+  const prNode = payload.pull_request;
+  if (!repo || !isRecord(prNode)) return;
+  const number = numberValue(prNode.number);
+  if (number === undefined) return;
+  const pr = await fetchPr(ctx, repo.owner, repo.repo, number);
+  if (!pr || pr.draft || pr.state !== "open") return;
+  if (owns(ctx, pr)) return;
+
+  const reviewClaim = (ctx.options.stateKeyPrefix ?? "centaur-githubbot") +
+    ":automatic-review:" + repo.owner + "/" + repo.repo + "#" + number + ":" + pr.headSha;
+  if (!(await claim(ctx, reviewClaim))) return;
+
+  const preamble = DEFAULT_REVIEW_PROMPT + "\n\n" +
+    "This review was started by a repository automation policy, not an explicit " +
+    "review request. Review the current pull request " + repo.owner + "/" + repo.repo +
+    "#" + number + " at commit " + pr.headSha +
+    ". Post your review with the gh CLI. Do not modify the PR branch while reviewing.";
+  fireManagementTurn(ctx, repo.owner, repo.repo, pr, preamble, {
+    id: "automatic-review-" + repo.owner + "/" + repo.repo + "#" + number + "-" + pr.headSha,
+    label: "automatic-review",
+    text: "Review pull request " + repo.owner + "/" + repo.repo + "#" + number + ".",
+  });
+  traceLog(ctx.options, "githubbot_automatic_review_started", makeTrace(
+    managementThreadKey(repo.owner, repo.repo, number),
+    "automatic-review-" + deliveryId
+  ), {
+    pr: repo.owner + "/" + repo.repo + "#" + number,
+  });
 }
 
 /** `pull_request_review` submitted -> address review, or merge on approval. */
 export async function handleReviewEvent(
   ctx: PrManagerContext,
   rawBody: string,
+  automation?: PolicyPrAutomation,
 ): Promise<void> {
   const payload = parseJson(rawBody);
   if (!payload) return;
@@ -352,7 +415,10 @@ export async function handleReviewEvent(
   }
 
   const pr = await fetchPr(ctx, repo.owner, repo.repo, number);
-  if (!pr || !owns(ctx, pr)) return;
+  if (!pr) return;
+  const owned = owns(ctx, pr);
+  if (owned && automation) return;
+  if (!owned && !automation?.feedback && !automation?.autoMerge) return;
   // Never act on the bot's own review (it shouldn't review its own PRs anyway).
   if (reviewer && reviewer.toLowerCase() === ctx.userName.toLowerCase()) return;
 
@@ -366,7 +432,7 @@ export async function handleReviewEvent(
   }
 
   if (reviewState === "approved") {
-    await tryMerge(ctx, repo.owner, repo.repo, number);
+    await tryMerge(ctx, repo.owner, repo.repo, number, automation);
     return;
   }
   if (reviewState === "changes_requested" || reviewState === "commented") {
@@ -383,6 +449,7 @@ export async function handleCiEvent(
   ctx: PrManagerContext,
   eventType: string,
   rawBody: string,
+  automation?: PolicyPrAutomation,
 ): Promise<void> {
   const payload = parseJson(rawBody);
   if (!payload) return;
@@ -404,7 +471,7 @@ export async function handleCiEvent(
       : await fetchPrNumbersForCommit(ctx, repo.owner, repo.repo, target.headSha);
   await Promise.all(
     prNumbers.map((number) =>
-      processCi(ctx, repo.owner, repo.repo, number, target.headSha, false, evaluation),
+      processCi(ctx, repo.owner, repo.repo, number, target.headSha, false, evaluation, automation),
     ),
   );
 }
@@ -417,9 +484,13 @@ async function processCi(
   headSha: string,
   force = false,
   knownEvaluation?: CiEvaluation | null,
+  automation?: PolicyPrAutomation,
 ): Promise<void> {
   const pr = await fetchPr(ctx, owner, repo, number);
-  if (!pr || !owns(ctx, pr)) return;
+  if (!pr) return;
+  const owned = owns(ctx, pr);
+  if (owned && automation) return;
+  if (!owned && !automation?.checks && !automation?.autoMerge) return;
   // Ignore CI for a SHA that's already been superseded by a newer push.
   if (pr.headSha !== headSha) return;
 
@@ -444,14 +515,20 @@ async function processCi(
       await saveState(ctx, owner, repo, number, { ...state, consecutiveCiFixes: 0 });
     }
     traceLog(ctx.options, "githubbot_ci_green", trace, { pr: `${owner}/${repo}#${number}` });
-    await tryMerge(ctx, owner, repo, number);
+    if (owned || automation?.autoMerge) {
+      await tryMerge(ctx, owner, repo, number, automation);
+    }
     return;
   }
+
+  // An auto-merge policy observes green checks so it can merge once protected
+  // checks settle; it does not implicitly authorize changing a failing PR.
+  if (!owned && !automation?.checks) return;
 
   // Red: back off if a human pushed the failing commit (don't step on them) —
   // unless this is a forced takeover (the PR was just assigned to us, so the
   // human has explicitly handed it over and we fix it regardless of who pushed).
-  if (!force) {
+  if (!force && !automation?.checks) {
     const headAuthor = await commitAuthor(ctx, owner, repo, headSha);
     if (headAuthor && headAuthor.toLowerCase() !== ctx.userName.toLowerCase()) {
       traceLog(ctx.options, "githubbot_ci_human_commit_skipped", trace, {
@@ -481,11 +558,18 @@ async function tryMerge(
   owner: string,
   repo: string,
   number: number,
+  automation?: PolicyPrAutomation,
 ): Promise<void> {
   const pr = await fetchPr(ctx, owner, repo, number);
-  if (!pr || !owns(ctx, pr)) return;
+  if (!pr) return;
+  const owned = owns(ctx, pr);
+  if (!owned && !automation?.conflicts && !automation?.autoMerge) return;
+  if (!owned && automation?.conflicts && pr.mergeableState === "dirty") {
+    fireConflictTurn(ctx, owner, repo, pr);
+    return;
+  }
   const decision = decideMerge({
-    autoMerge: ctx.options.autoMerge !== false,
+    autoMerge: owned ? ctx.options.autoMerge !== false : automation?.autoMerge === true,
     draft: pr.draft,
     holdLabel: ctx.options.holdLabel ?? "do-not-merge",
     labels: pr.labels,
@@ -556,7 +640,9 @@ async function tryMerge(
     return;
   }
   if (decision === "resolve_conflict") {
-    fireConflictTurn(ctx, owner, repo, pr);
+    if (owned || automation?.conflicts) {
+      fireConflictTurn(ctx, owner, repo, pr);
+    }
   }
 }
 

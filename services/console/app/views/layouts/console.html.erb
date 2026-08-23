@@ -1817,6 +1817,7 @@
   <% threads_view = request.path.start_with?("/console/threads") %>
   <% scheduled_tasks_view = request.path.start_with?("/console/scheduled_tasks") %>
   <% workflows_view = request.path.start_with?("/console/workflows") %>
+  <% automation_policies_view = request.path.start_with?("/console/automation_policies") %>
   <% skills_view = request.path.start_with?("/console/skills") %>
   <%# The Control and Data Sync sections are admin-only (each controller enforces
       require_admin server-side); Integrations is for everyone -- it lists the
@@ -1877,6 +1878,15 @@
           </div>
 
           <% if acting_admin? %>
+            <div class="console-thread-group">
+              <a href="<%= console_automation_policies_path %>"
+                 class="console-thread-group-title <%= "console-thread-group-title-active" if automation_policies_view %>"
+                 title="Automations">
+                <span class="console-nav-icon"><%= console_icon("workflow", classes: "size-4") %></span>
+                <span class="console-nav-label">Automations</span>
+              </a>
+            </div>
+
             <div class="console-thread-group">
               <a href="<%= console_scheduled_tasks_path %>"
                  class="console-thread-group-title <%= "console-thread-group-title-active" if scheduled_tasks_view %>"

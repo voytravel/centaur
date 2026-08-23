@@ -43,6 +43,12 @@ control plane is unchanged (`linear:…` thread keys flow through identically).
   (the issue-level thread is the sole status owner); comment turns never write it — so a commenter
   can't force a transition via the marker, and a delegate-plus-mention can't race two threads onto
   the same issue. Best-effort.
+- **Policy-selected ready issues** → when Console has an acting Linear policy for the issue's team
+  (optionally project), a new or updated issue can continue the issue-level `linear:{issueId}`
+  session without an explicit assignment. Console gates title, description, ready state, and labels;
+  the agent re-checks readiness, opens a linked PR only when the issue is actionable, requests the
+  configured human reviewers, and moves the issue to In Review only after a PR exists. The policy
+  is disabled by default and starts in Observe mode.
 - **Ownership contract**: when the issue is assigned or delegated to the bot — on the assignment
   turn AND on comment turns where the bot is the delegate — an ownership note is injected so the
   agent carries the work forward (and knows how to signal status), not just answers, plus the
@@ -99,6 +105,8 @@ mentionable and assignable in the first place, not an agent-session add-on.
 | `LINEAR_ACCESS_TOKEN` | ✅* | actor=app OAuth token (*or `LINEAR_API_KEY`). |
 | `LINEARBOT_DATABASE_URL` | ✅ | Postgres for chat-SDK state (falls back to `DATABASE_URL`). |
 | `CENTAUR_API_URL` | — | api-rs control plane, default `http://127.0.0.1:8080`. |
+| `CENTAUR_AUTOMATION_API_URL` | — | Console base URL for verified policy-event evaluation. Both automation variables must be set to enable it. |
+| `CENTAUR_AUTOMATION_INGRESS_TOKEN` | — | Single-purpose bearer for Console's normalized automation-event endpoint; not an operator API key. |
 | `LINEARBOT_API_KEY` | — | Dedicated bearer sent to api-rs. |
 | `LINEARBOT_USER_NAME` | — | Bot display name for mention parsing, default `centaur` (the bot also derives its real handle/name from its own token). |
 | `LINEARBOT_LOG_LEVEL` | — | `debug`/`info`/`warn`/`error`, default `info`. |

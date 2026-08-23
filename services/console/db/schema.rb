@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_08_23_120000) do
+ActiveRecord::Schema[8.1].define(version: 2026_08_23_130000) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
   enable_extension "pg_search"
@@ -25,6 +25,59 @@ ActiveRecord::Schema[8.1].define(version: 2026_08_23_120000) do
     t.index ["deleted_at"], name: "index_api_keys_on_deleted_at"
     t.index ["token_hash"], name: "index_api_keys_on_token_hash", unique: true
     t.index ["user_id"], name: "index_api_keys_on_user_id"
+  end
+
+  create_table "automation_events", force: :cascade do |t|
+    t.string "action_kind"
+    t.bigint "automation_workstream_id", null: false
+    t.datetime "created_at", null: false
+    t.string "decision", default: "ignored", null: false
+    t.string "deduplication_key", null: false
+    t.string "event_action"
+    t.string "event_type", null: false
+    t.jsonb "metadata", default: {}, null: false
+    t.string "provider", null: false
+    t.datetime "received_at", null: false
+    t.datetime "updated_at", null: false
+    t.index ["automation_workstream_id"], name: "index_automation_events_on_automation_workstream_id"
+    t.index ["provider", "deduplication_key"], name: "index_automation_events_on_provider_and_deduplication_key", unique: true
+    t.index ["received_at"], name: "index_automation_events_on_received_at"
+  end
+
+  create_table "automation_policies", force: :cascade do |t|
+    t.datetime "created_at", null: false
+    t.bigint "created_by_id", null: false
+    t.boolean "enabled", default: true, null: false
+    t.string "linear_project_id"
+    t.string "linear_team_id"
+    t.string "mode", default: "observe", null: false
+    t.string "name", null: false
+    t.string "provider", null: false
+    t.string "repository"
+    t.jsonb "settings", default: {}, null: false
+    t.datetime "updated_at", null: false
+    t.index "provider, linear_team_id, COALESCE(linear_project_id, ''::character varying)", name: "index_automation_policies_unique_linear_scope", unique: true, where: "((provider)::text = 'linear'::text)"
+    t.index ["created_by_id"], name: "index_automation_policies_on_created_by_id"
+    t.index ["provider", "linear_team_id", "linear_project_id"], name: "index_automation_policies_on_linear_scope"
+    t.index ["provider", "repository"], name: "index_automation_policies_on_provider_and_repository", unique: true, where: "(repository IS NOT NULL)"
+  end
+
+  create_table "automation_workstreams", force: :cascade do |t|
+    t.bigint "automation_policy_id"
+    t.datetime "created_at", null: false
+    t.integer "event_count", default: 0, null: false
+    t.datetime "last_event_at"
+    t.string "last_execution_id"
+    t.jsonb "metadata", default: {}, null: false
+    t.string "provider", null: false
+    t.string "repository"
+    t.string "session_key", null: false
+    t.string "state", default: "idle", null: false
+    t.string "subject_key", null: false
+    t.datetime "updated_at", null: false
+    t.index ["automation_policy_id"], name: "index_automation_workstreams_on_automation_policy_id"
+    t.index ["last_event_at"], name: "index_automation_workstreams_on_last_event_at"
+    t.index ["provider", "subject_key"], name: "index_automation_workstreams_on_provider_and_subject", unique: true
   end
 
   create_table "aws_auth_secrets", force: :cascade do |t|
@@ -558,6 +611,9 @@ ActiveRecord::Schema[8.1].define(version: 2026_08_23_120000) do
   end
 
   add_foreign_key "api_keys", "users"
+  add_foreign_key "automation_events", "automation_workstreams"
+  add_foreign_key "automation_policies", "users", column: "created_by_id"
+  add_foreign_key "automation_workstreams", "automation_policies"
   add_foreign_key "aws_auth_secrets", "users", column: "created_by_id"
   add_foreign_key "broker_credentials", "oauth_apps"
   add_foreign_key "broker_credentials", "users", column: "created_by_id"

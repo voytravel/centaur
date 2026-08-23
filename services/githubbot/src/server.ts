@@ -113,6 +113,8 @@ const options: GithubbotOptions = {
   apiUrl,
   allowedAuthorAssociations: listEnv("GITHUBBOT_ALLOWED_AUTHOR_ASSOCIATIONS"),
   apiKey: optionalEnv("GITHUBBOT_API_KEY"),
+  automationApiUrl: optionalEnv("CENTAUR_AUTOMATION_API_URL"),
+  automationIngressToken: optionalEnv("CENTAUR_AUTOMATION_INGRESS_TOKEN"),
   autoMerge: boolEnv("GITHUBBOT_AUTO_MERGE", true),
   botUserId: optionalEnv("GITHUBBOT_USER_ID"),
   ciFixMaxAttempts: optionalNumberEnv("GITHUBBOT_CI_FIX_MAX_ATTEMPTS"),

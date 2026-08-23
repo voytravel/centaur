@@ -1,0 +1,224 @@
+<% github = policy.github_settings %>
+<% linear = policy.linear_settings %>
+
+<%= form_with model: [ :console, policy ], class: "space-y-6" do |form| %>
+  <% if policy.errors.any? %>
+    <div class="rounded border border-red-500/30 bg-red-500/[0.08] px-4 py-3 text-sm text-red-200">
+      <p class="font-semibold">Could not save this policy:</p>
+      <ul class="mt-2 list-disc space-y-1 pl-5">
+        <% policy.errors.full_messages.each do |message| %>
+          <li><%= message %></li>
+        <% end %>
+      </ul>
+    </div>
+  <% end %>
+
+  <div class="grid gap-5 lg:grid-cols-2">
+    <div>
+      <%= form.label :name, class: "mb-2 block text-sm font-medium text-zinc-200" %>
+      <%= form.text_field :name, required: true, maxlength: 120,
+                          autofocus: !policy.persisted?,
+                          placeholder: "VoyTravel PR automation",
+                          class: "form-input" %>
+    </div>
+    <div>
+      <%= form.label :provider, class: "mb-2 block text-sm font-medium text-zinc-200" %>
+      <%= form.select :provider,
+                      [ [ "GitHub repository", "github" ], [ "Linear team / project", "linear" ] ],
+                      {},
+                      class: "form-input" %>
+      <p class="mt-2 text-xs text-zinc-500">The chosen provider determines which settings below are used.</p>
+    </div>
+  </div>
+
+  <fieldset class="rounded border border-ink-700 p-5">
+    <legend class="px-2 text-sm font-semibold text-zinc-200">GitHub repository scope</legend>
+    <div class="mt-2">
+      <%= form.label :repository, "Repository", class: "mb-2 block text-sm font-medium text-zinc-200" %>
+      <%= form.text_field :repository, placeholder: "owner/repository", class: "form-input font-mono" %>
+      <p class="mt-2 text-xs text-zinc-500">Required for GitHub policies. The GitHub App must be installed on this repository.</p>
+    </div>
+  </fieldset>
+
+  <fieldset class="rounded border border-ink-700 p-5">
+    <legend class="px-2 text-sm font-semibold text-zinc-200">Linear scope</legend>
+    <div class="grid gap-5 lg:grid-cols-2">
+      <div>
+        <%= form.label :linear_team_id, "Team ID", class: "mb-2 block text-sm font-medium text-zinc-200" %>
+        <%= form.text_field :linear_team_id, placeholder: "team UUID", class: "form-input font-mono" %>
+      </div>
+      <div>
+        <%= form.label :linear_project_id, "Project ID (optional)", class: "mb-2 block text-sm font-medium text-zinc-200" %>
+        <%= form.text_field :linear_project_id, placeholder: "project UUID", class: "form-input font-mono" %>
+      </div>
+    </div>
+    <p class="mt-2 text-xs text-zinc-500">Required for Linear policies. Leave Project ID blank to cover the whole team.</p>
+  </fieldset>
+
+  <div class="grid gap-5 lg:grid-cols-2">
+    <div>
+      <%= form.label :mode, "Run mode", class: "mb-2 block text-sm font-medium text-zinc-200" %>
+      <%= form.select :mode,
+                      [ [ "Observe only — audit what would run", "observe" ], [ "Act automatically", "act" ] ],
+                      {},
+                      class: "form-input" %>
+      <p class="mt-2 text-xs text-amber-200">Act mode can start an agent with the repository permissions granted to that workstream.</p>
+    </div>
+    <label class="mt-7 flex items-start gap-3 rounded border border-ink-700 bg-ink-900/50 px-4 py-3">
+      <%= form.check_box :enabled, class: "mt-0.5 rounded border-ink-500 bg-ink-900 text-centaur-500" %>
+      <span>
+        <span class="block text-sm font-medium text-zinc-200">Policy enabled</span>
+        <span class="mt-1 block text-xs text-zinc-500">Disabled policies retain their history but authorize no work.</span>
+      </span>
+    </label>
+  </div>
+
+  <fieldset class="rounded border border-ink-700 p-5">
+    <legend class="px-2 text-sm font-semibold text-zinc-200">GitHub behavior</legend>
+    <p class="mb-5 text-xs text-zinc-500">Assigned review requests and trusted mentions remain available. These settings extend automation to otherwise eligible pull requests.</p>
+    <div class="grid gap-5 lg:grid-cols-2">
+      <div>
+        <label class="mb-2 block text-sm font-medium text-zinc-200" for="automation_policy_github_review_mode">Review</label>
+        <%= select_tag "automation_policy[github_review_mode]",
+                       options_for_select(
+                         [ [ "Off", "off" ], [ "Assigned or mentioned", "assigned_or_mentioned" ], [ "All eligible non-draft PRs", "all_eligible" ] ],
+                         github["review"]
+                       ),
+                       id: "automation_policy_github_review_mode",
+                       class: "form-input" %>
+      </div>
+      <div>
+        <label class="mb-2 block text-sm font-medium text-zinc-200" for="automation_policy_github_feedback_mode">Address review feedback</label>
+        <%= select_tag "automation_policy[github_feedback_mode]",
+                       options_for_select(
+                         [ [ "Off", "off" ], [ "Bot-owned PRs", "bot_owned" ], [ "Explicit request only", "explicit" ], [ "All eligible PRs", "eligible" ] ],
+                         github["feedback"]
+                       ),
+                       id: "automation_policy_github_feedback_mode",
+                       class: "form-input" %>
+      </div>
+      <div>
+        <label class="mb-2 block text-sm font-medium text-zinc-200" for="automation_policy_github_checks_mode">Failing checks</label>
+        <%= select_tag "automation_policy[github_checks_mode]",
+                       options_for_select(
+                         [ [ "Off", "off" ], [ "Observe", "observe" ], [ "Bot-owned PRs", "bot_owned" ], [ "All eligible PRs", "eligible" ] ],
+                         github["checks"]
+                       ),
+                       id: "automation_policy_github_checks_mode",
+                       class: "form-input" %>
+      </div>
+      <div>
+        <label class="mb-2 block text-sm font-medium text-zinc-200" for="automation_policy_github_conflicts_mode">Merge conflicts</label>
+        <%= select_tag "automation_policy[github_conflicts_mode]",
+                       options_for_select(
+                         [ [ "Off", "off" ], [ "Observe", "observe" ], [ "Bot-owned PRs", "bot_owned" ], [ "All eligible PRs", "eligible" ] ],
+                         github["conflicts"]
+                       ),
+                       id: "automation_policy_github_conflicts_mode",
+                       class: "form-input" %>
+      </div>
+    </div>
+    <div class="mt-5 grid gap-5 lg:grid-cols-3">
+      <div>
+        <label class="mb-2 block text-sm font-medium text-zinc-200" for="automation_policy_github_base_branches">Allowed base branches</label>
+        <%= text_field_tag "automation_policy[github_base_branches]", Array(github["base_branches"]).join(", "),
+                           id: "automation_policy_github_base_branches",
+                           placeholder: "main, release/*",
+                           class: "form-input" %>
+      </div>
+      <div>
+        <label class="mb-2 block text-sm font-medium text-zinc-200" for="automation_policy_github_required_labels">Required labels</label>
+        <%= text_field_tag "automation_policy[github_required_labels]", Array(github["required_labels"]).join(", "),
+                           id: "automation_policy_github_required_labels",
+                           placeholder: "agent-ok",
+                           class: "form-input" %>
+      </div>
+      <div>
+        <label class="mb-2 block text-sm font-medium text-zinc-200" for="automation_policy_github_excluded_labels">Excluded labels</label>
+        <%= text_field_tag "automation_policy[github_excluded_labels]", Array(github["excluded_labels"]).join(", "),
+                           id: "automation_policy_github_excluded_labels",
+                           placeholder: "no-agent, security-review",
+                           class: "form-input" %>
+      </div>
+    </div>
+    <label class="mt-5 flex items-start gap-3 rounded border border-red-500/30 bg-red-500/[0.05] px-4 py-3">
+      <%= check_box_tag "automation_policy[github_auto_merge]", "1", github["auto_merge"] == true,
+                        id: "automation_policy_github_auto_merge",
+                        class: "mt-0.5 rounded border-ink-500 bg-ink-900 text-centaur-500" %>
+      <span>
+        <span class="block text-sm font-medium text-red-100">Allow auto-merge for eligible PRs</span>
+        <span class="mt-1 block text-xs text-red-200/75">Off by default. Branch protection remains authoritative; enable only after observe-mode evidence is satisfactory.</span>
+      </span>
+    </label>
+  </fieldset>
+
+  <fieldset class="rounded border border-ink-700 p-5">
+    <legend class="px-2 text-sm font-semibold text-zinc-200">Linear issue → PR behavior</legend>
+    <p class="mb-5 text-xs text-zinc-500">The agent re-checks the issue before implementation. If it is not actionable, it asks for missing scope instead of opening a PR.</p>
+    <div class="grid gap-5 lg:grid-cols-2">
+      <div>
+        <label class="mb-2 block text-sm font-medium text-zinc-200" for="automation_policy_linear_issue_mode">Issue automation</label>
+        <%= select_tag "automation_policy[linear_issue_mode]",
+                       options_for_select([ [ "Off", "off" ], [ "New or updated ready issues", "ready_issues" ] ], linear["issue"]),
+                       id: "automation_policy_linear_issue_mode",
+                       class: "form-input" %>
+      </div>
+      <div>
+        <label class="mb-2 block text-sm font-medium text-zinc-200" for="automation_policy_linear_github_repository">GitHub repository</label>
+        <%= text_field_tag "automation_policy[linear_github_repository]", linear["github_repository"],
+                           id: "automation_policy_linear_github_repository",
+                           placeholder: "owner/repository",
+                           class: "form-input font-mono" %>
+      </div>
+      <div>
+        <label class="mb-2 block text-sm font-medium text-zinc-200" for="automation_policy_linear_ready_statuses">Ready statuses</label>
+        <%= text_field_tag "automation_policy[linear_ready_statuses]", Array(linear["ready_statuses"]).join(", "),
+                           id: "automation_policy_linear_ready_statuses",
+                           placeholder: "Ready, Todo",
+                           class: "form-input" %>
+      </div>
+      <div>
+        <label class="mb-2 block text-sm font-medium text-zinc-200" for="automation_policy_linear_required_fields">Required details</label>
+        <%= text_field_tag "automation_policy[linear_required_fields]", Array(linear["required_fields"]).join(", "),
+                           id: "automation_policy_linear_required_fields",
+                           placeholder: "description, acceptance_criteria",
+                           class: "form-input" %>
+      </div>
+      <div>
+        <label class="mb-2 block text-sm font-medium text-zinc-200" for="automation_policy_linear_excluded_labels">Excluded labels</label>
+        <%= text_field_tag "automation_policy[linear_excluded_labels]", Array(linear["excluded_labels"]).join(", "),
+                           id: "automation_policy_linear_excluded_labels",
+                           placeholder: "no-agent, needs-triage",
+                           class: "form-input" %>
+      </div>
+      <div>
+        <label class="mb-2 block text-sm font-medium text-zinc-200" for="automation_policy_linear_reviewer_logins">Human GitHub reviewers</label>
+        <%= text_field_tag "automation_policy[linear_reviewer_logins]", Array(linear["reviewer_logins"]).join(", "),
+                           id: "automation_policy_linear_reviewer_logins",
+                           placeholder: "octocat, hubot",
+                           class: "form-input" %>
+      </div>
+      <div>
+        <label class="mb-2 block text-sm font-medium text-zinc-200" for="automation_policy_linear_reviewer_team_slugs">GitHub reviewer teams</label>
+        <%= text_field_tag "automation_policy[linear_reviewer_team_slugs]", Array(linear["reviewer_team_slugs"]).join(", "),
+                           id: "automation_policy_linear_reviewer_team_slugs",
+                           placeholder: "platform, frontend",
+                           class: "form-input" %>
+      </div>
+    </div>
+    <label class="mt-5 flex items-start gap-3 rounded border border-ink-700 bg-ink-900/50 px-4 py-3">
+      <%= check_box_tag "automation_policy[linear_move_to_in_progress]", "1", linear["move_to_in_progress"] != false,
+                        id: "automation_policy_linear_move_to_in_progress",
+                        class: "mt-0.5 rounded border-ink-500 bg-ink-900 text-centaur-500" %>
+      <span>
+        <span class="block text-sm font-medium text-zinc-200">Move a started issue to In Progress</span>
+        <span class="mt-1 block text-xs text-zinc-500">The bot moves the issue to In Review only when the agent reports a PR.</span>
+      </span>
+    </label>
+  </fieldset>
+
+  <div class="flex flex-wrap items-center gap-3">
+    <%= form.submit policy.persisted? ? "Save policy" : "Create policy", class: "btn-primary cursor-pointer" %>
+    <%= link_to "Cancel", console_automation_policies_path, class: "btn-secondary" %>
+  </div>
+<% end %>

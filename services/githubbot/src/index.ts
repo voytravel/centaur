@@ -24,11 +24,18 @@ import {
 } from "./issue-manager";
 import { extractMessageOverrides } from "./overrides";
 import {
+  evaluateGithubAutomation,
+  type GithubAutomationDecision,
+  type GithubAutomationEvent,
+} from "./automation";
+import {
+  handleAutomaticReview,
   handleCiEvent,
   handlePullRequestEvent,
   handleReviewEvent,
   isPrOwned,
   managementThreadKey,
+  type PolicyPrAutomation,
   type PrManagerContext,
 } from "./pr-manager";
 import { handleReviewRequest } from "./review";
@@ -51,7 +58,7 @@ import type {
   GithubbotThreadState,
   GithubbotTrace,
 } from "./types";
-import { errorMessage, noopLogger, nowMs, traceLog } from "./utils";
+import { errorMessage, noopLogger, nowMs, stringValue, traceLog } from "./utils";
 
 export type {
   Githubbot,
@@ -458,7 +465,106 @@ const LIFECYCLE_EVENTS = new Set([
  * manager. Returns the work promise (awaited for the webhook's keep-alive) or
  * null when there's nothing to do.
  */
-function routeLifecycleEvent(
+async function routeLifecycleEvent(
+  eventType: string,
+  rawBody: string,
+  input: {
+    botUserName: string;
+    deliveryId: string;
+    options: GithubbotOptions;
+    prManagerCtx: PrManagerContext;
+    state: StateAdapter;
+  },
+): Promise<void> {
+  const legacy = routeLegacyLifecycleEvent(eventType, rawBody, input);
+  const policyDecisions = await evaluateGithubAutomation(
+    input.options,
+    eventType,
+    rawBody,
+    input.deliveryId,
+    (event) => enrichGithubAutomationEvent(input.prManagerCtx, event),
+    (repository, headSha) => associatedGithubPrNumbers(input.prManagerCtx, repository, headSha),
+  );
+  const policy = routePolicyLifecycleEvent(
+    eventType,
+    rawBody,
+    input,
+    policyDecisions,
+  );
+  await Promise.all([ legacy, policy ].filter(Boolean));
+}
+
+/**
+ * CI webhook payloads often carry only a PR number. Read the current compact
+ * PR metadata before Console evaluates branch/label filters rather than
+ * weakening those filters for a partially populated platform payload.
+ */
+async function enrichGithubAutomationEvent(
+  ctx: PrManagerContext,
+  event: GithubAutomationEvent,
+): Promise<GithubAutomationEvent> {
+  // Pull-request and review payloads already contain the full PR envelope.
+  // Check/status payloads tend to expose only a PR number and need enrichment.
+  if (event.event_type === "pull_request" || event.event_type === "pull_request_review") {
+    return event;
+  }
+  const [owner, repo] = event.repository.split("/", 2);
+  if (!owner || !repo) return event;
+  try {
+    const { data } = await ctx.octokit.rest.pulls.get({
+      owner,
+      repo,
+      pull_number: event.subject_number,
+    });
+    return {
+      ...event,
+      base_branch: data.base.ref,
+      draft: data.draft === true,
+      head_sha: data.head.sha ?? event.head_sha,
+      labels: data.labels.flatMap((label) => {
+        const name = stringValue(label.name);
+        return name ? [ name ] : [];
+      }),
+    };
+  } catch (error) {
+    // A read failure must not manufacture filter facts. The normalized event
+    // remains usable for policies with no branch/label requirements; policies
+    // that require unavailable metadata reject it in Console.
+    traceLog(ctx.options, "githubbot_automation_pr_enrichment_failed", undefined, {
+      pr: event.repository + "#" + event.subject_number,
+      error: errorMessage(error),
+    });
+    return event;
+  }
+}
+
+async function associatedGithubPrNumbers(
+  ctx: PrManagerContext,
+  repository: string,
+  headSha: string,
+): Promise<number[]> {
+  const [owner, repo] = repository.split("/", 2);
+  if (!owner || !repo) return [];
+  try {
+    const { data } = await ctx.octokit.rest.repos.listPullRequestsAssociatedWithCommit({
+      owner,
+      repo,
+      commit_sha: headSha,
+    });
+    return data.flatMap((pullRequest) =>
+      typeof pullRequest.number === "number" ? [ pullRequest.number ] : []
+    );
+  } catch (error) {
+    traceLog(ctx.options, "githubbot_automation_pr_association_failed", undefined, {
+      repository,
+      head_sha: headSha,
+      error: errorMessage(error),
+    });
+    return [];
+  }
+}
+
+function routeLegacyLifecycleEvent(
   eventType: string,
   rawBody: string,
   input: {
@@ -488,6 +594,54 @@ function routeLifecycleEvent(
     return handleIssueEvent(input.prManagerCtx, rawBody, input.deliveryId);
   }
   return handleCiEvent(input.prManagerCtx, eventType, rawBody);
+}
+
+function routePolicyLifecycleEvent(
+  eventType: string,
+  rawBody: string,
+  input: {
+    deliveryId: string;
+    prManagerCtx: PrManagerContext;
+  },
+  decisions: GithubAutomationDecision[],
+): Promise<void> | null {
+  const active = decisions.filter((decision) => decision.decision === "act");
+  const actions = new Set(active.flatMap((decision) => decision.actions));
+  if (actions.size === 0) return null;
+
+  const automation: PolicyPrAutomation = {
+    autoMerge: active.some((decision) => decision.autoMerge),
+    checks: actions.has("fix_checks"),
+    conflicts: actions.has("resolve_conflict"),
+    feedback: actions.has("address_feedback"),
+  };
+
+  if (eventType === "pull_request") {
+    const work: Promise<void>[] = [];
+    if (actions.has("review")) {
+      work.push(handleAutomaticReview(input.prManagerCtx, rawBody, input.deliveryId));
+    }
+    if (automation.conflicts || automation.autoMerge) {
+      work.push(handlePullRequestEvent(input.prManagerCtx, rawBody, automation));
+    }
+    return Promise.all(work).then(() => undefined);
+  }
+  if (
+    eventType === "pull_request_review" &&
+    (automation.feedback || automation.autoMerge)
+  ) {
+    return handleReviewEvent(input.prManagerCtx, rawBody, automation);
+  }
+  if (
+    (eventType === "check_run" ||
+      eventType === "check_suite" ||
+      eventType === "status" ||
+      eventType === "workflow_run") &&
+    (automation.checks || automation.autoMerge)
+  ) {
+    return handleCiEvent(input.prManagerCtx, eventType, rawBody, automation);
+  }
+  return null;
 }
 
 function pullRequestAction(rawBody: string): string | undefined {

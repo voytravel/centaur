@@ -23,9 +23,11 @@ behavioral contract and supported webhook events are documented in `README.md`.
 - Serialize turns for one management session and drain accepted work on
   shutdown. A webhook acknowledgement is not evidence that the claimed turn
   finished.
-- Automated merge behavior applies only to explicitly owned PRs and must honor
-  draft, hold, mergeability, settled-check, attempt-limit, and human-handoff
-  gates. Keep deterministic merge decisions outside the agent prompt.
+- Automated merge behavior applies to explicitly owned PRs, or to a
+  non-owned PR only when a verified Console policy explicitly authorizes it.
+  It must honor draft, hold, mergeability, settled-check, attempt-limit, and
+  human-handoff gates. Keep deterministic merge decisions outside the agent
+  prompt.
 - Bundled prompts remain generic and fully overrideable. Do not embed private
   review rules, repositories, user handles, or deployment behavior in defaults.
 - Unit tests must not write to real repositories, comments, branches, or PRs.

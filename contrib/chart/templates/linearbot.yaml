@@ -32,6 +32,15 @@ spec:
               value: "3001"
             - name: CENTAUR_API_URL
               value: {{ printf "http://%s:%v" $apiRsName .Values.apiRs.port | quote }}
+{{- if .Values.automation.enabled }}
+            - name: CENTAUR_AUTOMATION_API_URL
+              value: {{ include "centaur.consoleUrl" . | quote }}
+            - name: CENTAUR_AUTOMATION_INGRESS_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "centaur.secretEnvName" . }}
+                  key: {{ printf "%sCENTAUR_AUTOMATION_INGRESS_TOKEN" .Values.secretManager.envPrefix }}
+{{- end }}
             # New threads without an explicit --claude/--codex flag run
             # the deployment's default harness.
             - name: LINEARBOT_DEFAULT_HARNESS

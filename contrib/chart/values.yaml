@@ -617,6 +617,14 @@ linearbot:
   extraEnv: {}
   resources: {}
 
+# Durable repository and issue automation policy plane. When enabled, the
+# Console receives a single-purpose ingress token and GitHub/Linear ingress
+# services can submit verified, normalized event summaries for policy
+# evaluation. No policy can authorize work until an operator creates it; each
+# policy starts in observe mode by default.
+automation:
+  enabled: false
+
 # Chat SDK GitHub bot — GitHub teammate (PAT) ingress. Receives issue/PR comment
 # webhooks on /api/webhooks/github (the @chat-adapter/github adapter), answers in
 # the comment thread, and runs a review when the bot account is requested as a
