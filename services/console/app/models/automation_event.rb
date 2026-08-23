@@ -12,6 +12,14 @@ class AutomationEvent < ApplicationRecord
   validates :decision, inclusion: { in: DECISIONS }
   validate :metadata_is_a_hash
 
+  # The Console audit UI deliberately renders only this policy-produced reason,
+  # never arbitrary provider metadata. Webhook bodies remain at the verified
+  # ingress boundary and are not an operator-facing transcript.
+  def operator_reason
+    reason = metadata.dig("result", "reason")
+    reason.strip.presence if reason.is_a?(String)
+  end
+
   private
 
   def metadata_is_a_hash

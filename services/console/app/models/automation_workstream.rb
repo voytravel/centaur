@@ -17,6 +17,32 @@ class AutomationWorkstream < ApplicationRecord
   validates :state, inclusion: { in: STATES }
   validate :metadata_is_a_hash
 
+  # Search only stable, normalized audit identifiers. The EXISTS clause keeps
+  # delivery-id lookup scoped to the workstream rather than joining every event
+  # into the index relation.
+  scope :matching_operator_query, lambda { |query|
+    term = query.to_s.strip
+    if term.blank?
+      all
+    else
+      pattern = "%#{ActiveRecord::Base.sanitize_sql_like(term)}%"
+      where(
+        <<~SQL.squish,
+          LOWER(automation_workstreams.subject_key) LIKE LOWER(:pattern)
+          OR LOWER(automation_workstreams.session_key) LIKE LOWER(:pattern)
+          OR LOWER(COALESCE(automation_workstreams.repository, '')) LIKE LOWER(:pattern)
+          OR EXISTS (
+            SELECT 1
+            FROM automation_events
+            WHERE automation_events.automation_workstream_id = automation_workstreams.id
+              AND LOWER(automation_events.deduplication_key) LIKE LOWER(:pattern)
+          )
+        SQL
+        pattern: pattern
+      )
+    end
+  }
+
   # The Console policy index selects these aliases with a lateral join so an
   # operator can see the latest safe policy outcome without loading every raw
   # provider event. They are deliberately not persisted workstream state.

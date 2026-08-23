@@ -65,6 +65,7 @@ Rails.application.routes.draw do
           defaults: { owner_type: "scheduled_task" }
     end
     resources :automation_policies, only: %i[index new create edit update destroy]
+    resources :automation_workstreams, only: :show
     resources :skills do
       collection do
         get :mine

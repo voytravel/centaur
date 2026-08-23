@@ -6,7 +6,12 @@ class Console::AutomationPoliciesController < ApplicationController
 
   def index
     @policies = AutomationPolicy.includes(:created_by, :execution_role).order(:provider, :repository, :linear_team_id, :id)
-    @workstreams = AutomationWorkstream.includes(:automation_policy, :principal, :authorization_role)
+    @workstream_query = params[:q].to_s.strip
+    workstreams = AutomationWorkstream.matching_operator_query(@workstream_query)
+    execution_session_keys = matching_execution_session_keys(@workstream_query)
+    workstreams = workstreams.or(AutomationWorkstream.where(session_key: execution_session_keys)) if execution_session_keys.any?
+
+    @workstreams = workstreams.includes(:automation_policy, :principal, :authorization_role)
       .joins(<<~SQL.squish)
         LEFT JOIN LATERAL (
           SELECT decision, action_kind, metadata -> 'result' ->> 'reason' AS reason
@@ -139,5 +144,22 @@ class Console::AutomationPoliciesController < ApplicationController
 
   def load_execution_roles
     @automation_roles = Role.automation_execution_roles.order(:name, :id)
+  end
+
+  # Execution records belong to Centaur's durable session API, not the
+  # Console's policy database. Search their stable IDs only to locate the
+  # corresponding policy workstream; raw session metadata stays in the thread
+  # observer.
+  def matching_execution_session_keys(query)
+    return [] if query.blank?
+
+    pattern = "%#{ActiveRecord::Base.sanitize_sql_like(query)}%"
+    CentaurSessionExecution
+      .where("execution_id ILIKE ?", pattern)
+      .limit(100)
+      .pluck(:thread_key)
+  rescue ActiveRecord::ActiveRecordError, PG::Error => e
+    Rails.logger.debug("console_automation_execution_search_failed error=#{e.class}: #{e.message}")
+    []
   end
 end
