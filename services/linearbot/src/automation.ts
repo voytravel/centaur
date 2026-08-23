@@ -24,6 +24,9 @@ export type LinearAutomationEvent = {
   event_type: "Issue";
   labels: string[];
   linear_issue_id: string;
+  /** Safe, provider-owned issue permalink for the operator audit view. */
+  linear_issue_identifier?: string;
+  linear_issue_url?: string;
   linear_project_id?: string;
   linear_team_id: string;
   provider: "linear";

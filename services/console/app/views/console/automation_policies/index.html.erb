@@ -114,6 +114,12 @@
                 <%= link_to workstream.subject_key,
                             console_automation_workstream_path(workstream.oid),
                             class: "console-link" %>
+                <% if workstream.source_url %>
+                  <div class="mt-1 font-sans text-xs">
+                    <%= link_to "Open source", workstream.source_url,
+                                target: "_blank", rel: "noopener noreferrer", class: "console-link" %>
+                  </div>
+                <% end %>
               </td>
               <td class="console-td text-xs">
                 <%= link_to workstream.session_key,
