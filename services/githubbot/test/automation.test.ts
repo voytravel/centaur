@@ -86,6 +86,39 @@ describe("evaluateGithubAutomation", () => {
     expect(decisions).toEqual([]);
   });
 
+  test("forwards only a Githubbot-verified explicit review-request fact", async () => {
+    let requestBody = "";
+    await evaluateGithubAutomation(
+      options({
+        fetch: async (_url, init) => {
+          requestBody = String(init?.body);
+          return Response.json({
+            data: {
+              actions: [ "review" ],
+              auto_merge: false,
+              decision: "act",
+              reason: "policy authorizes automation",
+              session_key: "github-manage:acme/widgets:9",
+            },
+          });
+        },
+      }),
+      "pull_request",
+      JSON.stringify({
+        action: "review_requested",
+        pull_request: { draft: false, number: 9 },
+        repository: { full_name: "acme/widgets" },
+      }),
+      "delivery-requested-review",
+      async (event) => ({ ...event, review_requested_for_bot: true }),
+    );
+
+    expect(JSON.parse(requestBody).event).toMatchObject({
+      event_action: "review_requested",
+      review_requested_for_bot: true,
+    });
+  });
+
   test("resolves a legacy status webhook to its associated pull request", async () => {
     const decisions = await evaluateGithubAutomation(
       options(),

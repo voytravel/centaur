@@ -38,7 +38,7 @@ import {
   type PolicyPrAutomation,
   type PrManagerContext,
 } from "./pr-manager";
-import { handleReviewRequest } from "./review";
+import { handleReviewRequest, isReviewRequestedForBot } from "./review";
 import {
   forwardToSessionApi,
   isRetryableSessionApiError,
@@ -499,13 +499,25 @@ async function routeLifecycleEvent(
     state: StateAdapter;
   },
 ): Promise<void> {
-  const legacy = routeLegacyLifecycleEvent(eventType, rawBody, input);
+  const reviewRequestedForBot =
+    eventType === "pull_request" && pullRequestAction(rawBody) === "review_requested"
+      ? await isReviewRequestedForBot(rawBody, {
+          botUserName: input.botUserName,
+          octokit: input.prManagerCtx.octokit,
+          options: input.options,
+          state: input.state,
+        })
+      : false;
   const policyDecisions = await evaluateGithubAutomation(
     input.options,
     eventType,
     rawBody,
     input.deliveryId,
-    (event) => enrichGithubAutomationEvent(input.prManagerCtx, event),
+    (event) => enrichGithubAutomationEvent(
+      input.prManagerCtx,
+      event,
+      reviewRequestedForBot,
+    ),
     (repository, headSha) => associatedGithubPrNumbers(input.prManagerCtx, repository, headSha),
   );
   const policy = routePolicyLifecycleEvent(
@@ -514,6 +526,14 @@ async function routeLifecycleEvent(
     input,
     policyDecisions,
   );
+  const policyHandlesRequestedReview = reviewRequestedForBot &&
+    policyDecisions.some(
+      (decision) => decision.decision === "act" && decision.actions.includes("review"),
+    );
+  const legacy = routeLegacyLifecycleEvent(eventType, rawBody, {
+    ...input,
+    skipRequestedReview: policyHandlesRequestedReview,
+  });
   await Promise.all([ legacy, policy ].filter(Boolean));
 }
 
@@ -525,40 +545,47 @@ async function routeLifecycleEvent(
 async function enrichGithubAutomationEvent(
   ctx: PrManagerContext,
   event: GithubAutomationEvent,
+  reviewRequestedForBot = false,
 ): Promise<GithubAutomationEvent> {
-  // Pull-request and review payloads already contain the full PR envelope.
-  // Check/status payloads tend to expose only a PR number and need enrichment.
-  if (event.event_type === "pull_request" || event.event_type === "pull_request_review") {
-    return event;
-  }
   const [owner, repo] = event.repository.split("/", 2);
   if (!owner || !repo) return event;
-  try {
-    const { data } = await ctx.octokit.rest.pulls.get({
-      owner,
-      repo,
-      pull_number: event.subject_number,
-    });
-    return {
-      ...event,
-      base_branch: data.base.ref,
-      draft: data.draft === true,
-      head_sha: data.head.sha ?? event.head_sha,
-      labels: data.labels.flatMap((label) => {
-        const name = stringValue(label.name);
-        return name ? [ name ] : [];
-      }),
-    };
-  } catch (error) {
-    // A read failure must not manufacture filter facts. The normalized event
-    // remains usable for policies with no branch/label requirements; policies
-    // that require unavailable metadata reject it in Console.
-    traceLog(ctx.options, "githubbot_automation_pr_enrichment_failed", undefined, {
-      pr: event.repository + "#" + event.subject_number,
-      error: errorMessage(error),
-    });
-    return event;
+
+  let enriched = event;
+  // Pull-request and review payloads already contain the full PR envelope.
+  // Check/status payloads tend to expose only a PR number and need enrichment.
+  if (event.event_type !== "pull_request" && event.event_type !== "pull_request_review") {
+    try {
+      const { data } = await ctx.octokit.rest.pulls.get({
+        owner,
+        repo,
+        pull_number: event.subject_number,
+      });
+      enriched = {
+        ...event,
+        base_branch: data.base.ref,
+        draft: data.draft === true,
+        head_sha: data.head.sha ?? event.head_sha,
+        labels: data.labels.flatMap((label) => {
+          const name = stringValue(label.name);
+          return name ? [ name ] : [];
+        }),
+      };
+    } catch (error) {
+      // A read failure must not manufacture filter facts. The normalized event
+      // remains usable for policies with no branch/label requirements; policies
+      // that require unavailable metadata reject it in Console.
+      traceLog(ctx.options, "githubbot_automation_pr_enrichment_failed", undefined, {
+        pr: event.repository + "#" + event.subject_number,
+        error: errorMessage(error),
+      });
+    }
   }
+
+  return {
+    ...enriched,
+    bot_owned: await isPrOwned(ctx, owner, repo, event.subject_number),
+    ...(reviewRequestedForBot ? { review_requested_for_bot: true } : {}),
+  };
 }
 
 async function associatedGithubPrNumbers(
@@ -595,11 +622,13 @@ function routeLegacyLifecycleEvent(
     deliveryId: string;
     options: GithubbotOptions;
     prManagerCtx: PrManagerContext;
+    skipRequestedReview?: boolean;
     state: StateAdapter;
   },
 ): Promise<void> | null {
   if (eventType === "pull_request") {
     if (pullRequestAction(rawBody) === "review_requested") {
+      if (input.skipRequestedReview) return null;
       return handleReviewRequest(rawBody, {
         botUserName: input.botUserName,
         deliveryId: input.deliveryId,

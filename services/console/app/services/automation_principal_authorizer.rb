@@ -43,7 +43,13 @@ class AutomationPrincipalAuthorizer
       policy = workstream.automation_policy
       return false unless policy&.enabled? && policy.act? && policy.execution_role
 
-      workstream.automation_events.order(received_at: :desc, id: :desc).pick(:decision) == "act"
+      # `active` is durable continuation state owned by AutomationEventIngestor.
+      # It is set by an allowed Act event, survives unrelated lifecycle events
+      # that have no configured action, and is changed to `blocked` by a
+      # policy-safety rejection. Checking only the latest event decision would
+      # revoke a valid PR's role before its next feedback/check/conflict event
+      # could reuse the same authorized workspace.
+      workstream.state == "active"
     end
 
     def workstreams_for(principal)

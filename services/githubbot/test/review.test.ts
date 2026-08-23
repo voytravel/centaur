@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { handleReviewRequest } from "../src/review";
+import { handleReviewRequest, isReviewRequestedForBot } from "../src/review";
 import type { GithubbotOptions } from "../src/types";
 
 // Non-retryable fetch so the (backgrounded) review turn settles instantly in the
@@ -53,6 +53,15 @@ function reviewRequestedBody(reviewerLogin: string | null): string {
 }
 
 describe("handleReviewRequest", () => {
+  test("normalizes only a direct request for this bot", async () => {
+    await expect(
+      isReviewRequestedForBot(reviewRequestedBody("Review-Bot"), input),
+    ).resolves.toBe(true);
+    await expect(
+      isReviewRequestedForBot(reviewRequestedBody("someone-else"), input),
+    ).resolves.toBe(false);
+  });
+
   test("ignores non-JSON bodies", () => {
     expect(handleReviewRequest("not json", input)).toBeNull();
   });
