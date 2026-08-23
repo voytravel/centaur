@@ -137,6 +137,44 @@ class Console::AutomationPoliciesControllerTest < ActionDispatch::IntegrationTes
     assert_select ".automation-workstream-reason", text: "policy authorizes automation"
   end
 
+  test "renders the latest native execution status for a workstream" do
+    workstream = create_workstream_with_event(
+      subject_key: "github:acme/widgets:pr:68",
+      deduplication_key: "delivery-execution-status-68"
+    )
+    execution = Struct.new(:thread_key, :execution_id, :status).new(
+      workstream.session_key,
+      "execution-native-68",
+      "completed"
+    )
+    test_case = self
+    relation = Object.new
+    relation.define_singleton_method(:select) do |selection|
+      test_case.assert_equal "distinct on (thread_key) session_executions.*", selection
+      self
+    end
+    relation.define_singleton_method(:order) do |selection|
+      test_case.assert_equal "thread_key, created_at desc, execution_id desc", selection.to_s
+      self
+    end
+    relation.define_singleton_method(:index_by) do |&block|
+      test_case.assert_equal workstream.session_key, block.call(execution)
+      { workstream.session_key => execution }
+    end
+
+    CentaurSessionExecution.stub(:where, lambda { |filters|
+      test_case.assert_equal({ thread_key: [ workstream.session_key ] }, filters)
+      relation
+    }) do
+      get console_automation_policies_url
+    end
+
+    assert_response :ok
+    assert_select "th", text: "Latest execution"
+    assert_select ".automation-workstream-execution", text: "completed"
+    assert_select ".automation-workstream-execution-id", text: "execution-native-68"
+  end
+
   test "searches workstreams by normalized provider delivery and links to the audit trail" do
     matching = create_workstream_with_event(
       subject_key: "github:acme/widgets:pr:42",
@@ -166,10 +204,21 @@ class Console::AutomationPoliciesControllerTest < ActionDispatch::IntegrationTes
     relation.define_singleton_method(:limit) { |limit| test_case.assert_equal 100, limit; self }
     relation.define_singleton_method(:pluck) { |column| test_case.assert_equal :thread_key, column; [ matching.session_key ] }
 
-    CentaurSessionExecution.stub(:where, lambda { |sql, pattern|
-      assert_equal "execution_id ILIKE ?", sql
-      assert_equal "%execution-search-84%", pattern
-      relation
+    latest_relation = Object.new
+    latest_relation.define_singleton_method(:select) { |*| self }
+    latest_relation.define_singleton_method(:order) { |*| self }
+    latest_relation.define_singleton_method(:index_by) { |*| {} }
+
+    CentaurSessionExecution.stub(:where, lambda { |*args, **kwargs|
+      filters = kwargs.presence || args.first
+      if filters.is_a?(Hash)
+        assert_equal({ thread_key: [ matching.session_key ] }, filters)
+        latest_relation
+      else
+        assert_equal "execution_id ILIKE ?", args[0]
+        assert_equal "%execution-search-84%", args[1]
+        relation
+      end
     }) do
       get console_automation_policies_url, params: { q: "execution-search-84" }
     end
