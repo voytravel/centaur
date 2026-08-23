@@ -124,7 +124,7 @@ class AutomationEventIngestorTest < ActiveSupport::TestCase
     assert_equal 1, AutomationEvent.count
   end
 
-  test "automatically binds and revokes an act policy role only for its Linear workstream principal" do
+  test "binds and revokes an act policy role only for its Linear workstream principal" do
     role = automation_role
     policy = AutomationPolicy.create!(
       name: "Linear implementation",
@@ -160,10 +160,7 @@ class AutomationEventIngestorTest < ActiveSupport::TestCase
       labels: { "linear_issue_id" => "issue-role" },
       created_by: users(:acme_admin)
     )
-    # Transactional fixtures defer after_create_commit until teardown. Exercise
-    # the model's committed callback chain rather than calling the authorizer
-    # directly, which keeps this test coupled to the production boundary.
-    principal.run_callbacks(:commit)
+    AutomationPrincipalAuthorizer.reconcile_principal(principal)
 
     workstream = AutomationWorkstream.sole
     assert_equal principal, workstream.reload.principal
