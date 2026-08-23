@@ -74,9 +74,43 @@ pick up new or updated issues only when configured readiness checks pass:
 - configured ready workflow states; and
 - excluded labels such as `no-agent`.
 
-Map the policy to a GitHub repository and optional reviewers. The agent is
-instructed to re-check readiness before coding, open a linked PR without
-merging it, request the configured human reviewers, and attach a real verified
+Map a simple policy to one GitHub repository and optional reviewers. For a
+project that contains work for more than one repository, use explicit
+label-based repository routes instead of asking the agent to infer a target.
+Each ready issue must match exactly one route; zero or multiple matching routes
+are recorded as an ignored decision and cannot start a sandbox. A route may
+override reviewers and declare an opt-in preview label for that repository:
+
+```json
+{
+  "linear": {
+    "issue": "ready_issues",
+    "required_labels": ["agent:ready"],
+    "repository_routes": [
+      {
+        "repository": "acme/widgets",
+        "required_labels": ["repo:widgets"]
+      },
+      {
+        "repository": "acme/web",
+        "required_labels": ["repo:web"],
+        "reviewer_team_slugs": ["frontend"],
+        "preview_label": "preview"
+      }
+    ]
+  }
+}
+```
+
+`github_repository` and `repository_routes` are mutually exclusive, so adding
+routes cannot silently turn a formerly single-repository policy into a broad
+fallback. A `preview_label` is applied only after the agent opens a draft PR for
+a user-visible change. It must be an already-reviewed repository label whose
+workflow creates a real preview; the agent reports a URL only after verifying
+it from the PR's checks or comments.
+
+The agent re-checks readiness before coding, opens a linked PR without merging
+it, requests the configured human reviewers, and attaches a real verified
 screenshot for a user-visible change when available. It must not fabricate a
 screenshot. Once a PR exists, it can mark the Linear issue `In Review`.
 

@@ -211,7 +211,134 @@ class AutomationPolicyTest < ActiveSupport::TestCase
     )
 
     assert_not policy.valid?
-    assert_includes policy.errors[:settings], "needs a GitHub repository for ready issue automation"
+    assert_includes policy.errors[:settings], "needs a GitHub repository or repository routes for ready issue automation"
+  end
+
+  test "routes ready Linear issues to one explicitly label-matched repository" do
+    policy = AutomationPolicy.create!(
+      name: "Routed Linear issues",
+      provider: "linear",
+      linear_team_id: "team-1",
+      enabled: true,
+      mode: "act",
+      execution_role: automation_role,
+      created_by: users(:acme_admin),
+      settings: {
+        "linear" => {
+          "issue" => "ready_issues",
+          "required_labels" => [ "agent:ready" ],
+          "repository_routes" => [
+            {
+              "repository" => "acme/widgets",
+              "required_labels" => [ "repo:widgets" ]
+            },
+            {
+              "repository" => "acme/travel",
+              "required_labels" => [ "repo:travel" ],
+              "reviewer_logins" => [ "octocat" ],
+              "reviewer_team_slugs" => [ "product" ],
+              "preview_label" => "preview"
+            }
+          ]
+        }
+      }
+    )
+
+    routed = policy.evaluate(
+      "event_type" => "Issue",
+      "event_action" => "update",
+      "linear_team_id" => "team-1",
+      "title" => "Ship travel UI",
+      "description" => "Acceptance Criteria\n- It is shippable.",
+      "labels" => [ "agent:ready", "repo:travel" ]
+    )
+
+    assert_equal "act", routed["decision"]
+    assert_equal "acme/travel", routed["github_repository"]
+    assert_equal "preview", routed["preview_label"]
+    assert_equal [ "octocat" ], routed["reviewer_logins"]
+    assert_equal [ "product" ], routed["reviewer_team_slugs"]
+    assert_includes policy.automation_summary, "acme/widgets, acme/travel"
+
+    unmatched = policy.evaluate(
+      "event_type" => "Issue",
+      "event_action" => "update",
+      "linear_team_id" => "team-1",
+      "title" => "Ship unknown UI",
+      "description" => "Acceptance Criteria\n- It is shippable.",
+      "labels" => [ "agent:ready" ]
+    )
+    assert_equal "ignored", unmatched["decision"]
+    assert_equal "no configured repository route matches issue labels", unmatched["reason"]
+
+    ambiguous = policy.evaluate(
+      "event_type" => "Issue",
+      "event_action" => "update",
+      "linear_team_id" => "team-1",
+      "title" => "Ship conflicting UI",
+      "description" => "Acceptance Criteria\n- It is shippable.",
+      "labels" => [ "agent:ready", "repo:widgets", "repo:travel" ]
+    )
+    assert_equal "ignored", ambiguous["decision"]
+    assert_equal "multiple configured repository routes match issue labels", ambiguous["reason"]
+  end
+
+  test "requires repository routes to be explicit" do
+    policy = AutomationPolicy.new(
+      name: "Unsafe routes",
+      provider: "linear",
+      linear_team_id: "team-1",
+      created_by: users(:acme_admin),
+      settings: {
+        "linear" => {
+          "issue" => "ready_issues",
+          "github_repository" => "acme/widgets",
+          "repository_routes" => [
+            {
+              "repository" => "acme/widgets",
+              "required_labels" => []
+            },
+            {
+              "repository" => "acme/other-widgets",
+              "required_labels" => [ "repo:widgets" ],
+              "unknown" => true
+            }
+          ]
+        }
+      }
+    )
+
+    assert_not policy.valid?
+    assert_includes policy.errors[:settings], "must use either a GitHub repository or repository routes, not both"
+    assert_includes policy.errors[:settings], "repository route 1 needs at least one required label"
+    assert_includes policy.errors[:settings], "repository route 2 has unsupported fields"
+  end
+
+  test "allows distinct label routes to share a repository" do
+    policy = AutomationPolicy.new(
+      name: "One repository, two work types",
+      provider: "linear",
+      linear_team_id: "team-1",
+      created_by: users(:acme_admin),
+      settings: {
+        "linear" => {
+          "issue" => "ready_issues",
+          "repository_routes" => [
+            {
+              "repository" => "acme/widgets",
+              "required_labels" => [ "area:api" ]
+            },
+            {
+              "repository" => "acme/widgets",
+              "required_labels" => [ "area:web" ],
+              "preview_label" => "preview"
+            }
+          ]
+        }
+      }
+    )
+
+    assert_predicate policy, :valid?
   end
 
   test "act mode requires an explicit execution role" do

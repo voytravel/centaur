@@ -714,6 +714,7 @@ describe("linearbot comment-thread pipeline", () => {
                 decision: "act",
                 github_repository: "acme/widgets",
                 move_to_in_progress: false,
+                preview_label: "preview",
                 reason: "policy authorizes automation",
                 reviewer_logins: [],
                 reviewer_team_slugs: [],
@@ -765,6 +766,11 @@ describe("linearbot comment-thread pipeline", () => {
     expect(
       executeInputTexts(threadKey).some((text) =>
         text.includes("do not use closing magic words"),
+      ),
+    ).toBe(true);
+    expect(
+      executeInputTexts(threadKey).some((text) =>
+        text.includes("configured preview label \"preview\""),
       ),
     ).toBe(true);
     const executionsBeforeRedelivery = codexApi.executes.filter(

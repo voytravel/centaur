@@ -6,6 +6,13 @@ class AutomationPolicy < ApplicationRecord
   GITHUB_REVIEW_MODES = %w[off assigned_or_mentioned all_eligible].freeze
   GITHUB_REPAIR_MODES = %w[off observe bot_owned explicit eligible].freeze
   LINEAR_ISSUE_MODES = %w[off ready_issues].freeze
+  LINEAR_REPOSITORY_ROUTE_KEYS = %w[
+    repository
+    required_labels
+    reviewer_logins
+    reviewer_team_slugs
+    preview_label
+  ].freeze
   MANAGED_SOURCE_KEY = "_centaur_managed_source".freeze
   MANAGED_SOURCE_FIELDS = %w[kind repository path revision content_sha256].freeze
   GITHUB_REPOSITORY_PATTERN = /\A[A-Za-z0-9][A-Za-z0-9_.-]*\/[A-Za-z0-9][A-Za-z0-9_.-]*\z/.freeze
@@ -80,7 +87,7 @@ class AutomationPolicy < ApplicationRecord
       config = linear_settings
       required_labels = Array(config["required_labels"])
       label_summary = required_labels.any? ? required_labels.join(", ") : "none"
-      "issues: #{config["issue"].tr("_", " ")} · repo: #{config["github_repository"].presence || "not mapped"} · required labels: #{label_summary}"
+      "issues: #{config["issue"].tr("_", " ")} · repo: #{linear_repository_summary(config)} · required labels: #{label_summary}"
     end
   end
 
@@ -166,6 +173,7 @@ class AutomationPolicy < ApplicationRecord
       "required_labels" => [],
       "excluded_labels" => [ "no-agent" ],
       "github_repository" => "",
+      "repository_routes" => [],
       "reviewer_logins" => [],
       "reviewer_team_slugs" => [],
       "move_to_in_progress" => true
@@ -176,7 +184,7 @@ class AutomationPolicy < ApplicationRecord
     self.settings = {} unless settings.is_a?(Hash)
     self.settings = settings.deep_stringify_keys
     self.settings["github"] = normalize_config(settings["github"]) if github?
-    self.settings["linear"] = normalize_config(settings["linear"]) if linear?
+    self.settings["linear"] = normalize_linear_config(settings["linear"]) if linear?
   end
 
   def normalize_config(config)
@@ -192,6 +200,27 @@ class AutomationPolicy < ApplicationRecord
         value
       end
     end
+  end
+
+  def normalize_linear_config(config)
+    normalized = normalize_config(config)
+    return normalized unless config.is_a?(Hash) && config.key?("repository_routes")
+
+    normalized["repository_routes"] = Array(config["repository_routes"]).map do |route|
+      next route unless route.is_a?(Hash)
+
+      route.deep_stringify_keys.transform_values do |value|
+        case value
+        when Array
+          value.filter_map { |item| item.to_s.strip.presence }.uniq
+        when String
+          value.strip
+        else
+          value
+        end
+      end
+    end
+    normalized
   end
 
   def linear_scope_is_unique
@@ -223,10 +252,7 @@ class AutomationPolicy < ApplicationRecord
     elsif linear?
       config = linear_settings
       errors.add(:settings, "has an invalid issue mode") unless LINEAR_ISSUE_MODES.include?(config["issue"])
-      repository = config["github_repository"].to_s
-      if config["issue"] == "ready_issues" && !repository.match?(%r{\A[^/\s]+/[^/\s]+\z})
-        errors.add(:settings, "needs a GitHub repository for ready issue automation")
-      end
+      validate_linear_repository_routes(config)
     end
   end
 
@@ -307,7 +333,10 @@ class AutomationPolicy < ApplicationRecord
     ready, reason = linear_issue_ready?(event, config)
     return ignored(reason) unless ready
 
-    routed([ "implement_issue" ])
+    route, route_reason = linear_repository_route_for(event, config)
+    return ignored(route_reason) unless route
+
+    routed([ "implement_issue" ], linear_route: route)
   end
 
   def github_eligible?(event)
@@ -390,18 +419,109 @@ class AutomationPolicy < ApplicationRecord
     [ true, nil ]
   end
 
-  def routed(actions)
+  def linear_repository_route_for(event, config)
+    routes = Array(config["repository_routes"])
+    return [ legacy_linear_repository_route(config), nil ] if routes.empty?
+
+    labels = Array(event["labels"]).map { |label| label.to_s.downcase }
+    matches = routes.select do |route|
+      required = Array(route["required_labels"]).map(&:downcase)
+      (required - labels).empty?
+    end
+    return [ nil, "no configured repository route matches issue labels" ] if matches.empty?
+    return [ nil, "multiple configured repository routes match issue labels" ] if matches.many?
+
+    [ matches.first, nil ]
+  end
+
+  def legacy_linear_repository_route(config)
+    {
+      "repository" => config["github_repository"],
+      "reviewer_logins" => config["reviewer_logins"],
+      "reviewer_team_slugs" => config["reviewer_team_slugs"]
+    }
+  end
+
+  def routed(actions, linear_route: nil)
     linear = linear? ? linear_settings : {}
+    route = linear_route || legacy_linear_repository_route(linear)
+    reviewer_logins = route.key?("reviewer_logins") ?
+      Array(route["reviewer_logins"]) :
+      Array(linear["reviewer_logins"])
+    reviewer_team_slugs = route.key?("reviewer_team_slugs") ?
+      Array(route["reviewer_team_slugs"]) :
+      Array(linear["reviewer_team_slugs"])
+
     {
       "decision" => mode == "act" ? "act" : "observe",
       "reason" => mode == "act" ? "policy authorizes automation" : "policy is in observe mode",
       "actions" => actions,
       "auto_merge" => github? && github_settings["auto_merge"] == true,
-      "github_repository" => linear["github_repository"],
+      "github_repository" => route["repository"],
       "move_to_in_progress" => linear["move_to_in_progress"] != false,
-      "reviewer_logins" => Array(linear["reviewer_logins"]),
-      "reviewer_team_slugs" => Array(linear["reviewer_team_slugs"])
+      "preview_label" => route["preview_label"],
+      "reviewer_logins" => reviewer_logins,
+      "reviewer_team_slugs" => reviewer_team_slugs
     }
+  end
+
+  def validate_linear_repository_routes(config)
+    routes = config["repository_routes"]
+    unless routes.is_a?(Array)
+      errors.add(:settings, "repository routes must be a list")
+      return
+    end
+
+    legacy_repository = config["github_repository"].to_s
+    if routes.any? && legacy_repository.present?
+      errors.add(:settings, "must use either a GitHub repository or repository routes, not both")
+    end
+
+    if config["issue"] == "ready_issues" && routes.empty? && !legacy_repository.match?(%r{\A[^/\s]+/[^/\s]+\z})
+      errors.add(:settings, "needs a GitHub repository or repository routes for ready issue automation")
+    end
+
+    routes.each_with_index do |route, index|
+      unless route.is_a?(Hash)
+        errors.add(:settings, "repository route #{index + 1} must be an object")
+        next
+      end
+      route = route.deep_stringify_keys
+      unsupported = route.keys - LINEAR_REPOSITORY_ROUTE_KEYS
+      errors.add(:settings, "repository route #{index + 1} has unsupported fields") if unsupported.any?
+
+      repository = route["repository"].to_s
+      unless repository.match?(%r{\A[^/\s]+/[^/\s]+\z})
+        errors.add(:settings, "repository route #{index + 1} needs a GitHub repository")
+      end
+
+      labels = route["required_labels"]
+      unless labels.is_a?(Array) && labels.all? { |label| label.is_a?(String) && label.present? } && labels.any?
+        errors.add(:settings, "repository route #{index + 1} needs at least one required label")
+      end
+
+      %w[reviewer_logins reviewer_team_slugs].each do |field|
+        next unless route.key?(field)
+
+        unless route[field].is_a?(Array) && route[field].all? { |value| value.is_a?(String) && value.present? }
+          errors.add(:settings, "repository route #{index + 1} has invalid #{field}")
+        end
+      end
+
+      next unless route.key?("preview_label")
+
+      preview_label = route["preview_label"]
+      unless preview_label.is_a?(String) && preview_label.present? && preview_label.length <= 100
+        errors.add(:settings, "repository route #{index + 1} has an invalid preview label")
+      end
+    end
+  end
+
+  def linear_repository_summary(config)
+    routes = Array(config["repository_routes"])
+    return config["github_repository"].presence || "not mapped" if routes.empty?
+
+    routes.map { |route| route["repository"] }.compact.join(", ")
   end
 
   def ignored(reason)
