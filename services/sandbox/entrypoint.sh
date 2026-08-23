@@ -105,9 +105,9 @@ fi
 
 # ── Codex settings ──────────────────────────────────────────────────────────
 # CODEX_AUTH_MODE selects how codex authenticates with the upstream:
-#   - api_key (default): codex uses an OPENAI_API_KEY against api.openai.com.
-#     The entrypoint runs `codex login --with-api-key` below, which overwrites
-#     auth.json.
+#   - api_key (default): codex uses an OPENAI_API_KEY against the configured
+#     OpenAI-compatible endpoint. The entrypoint runs `codex login
+#     --with-api-key` below, which overwrites auth.json.
 #   - access_token: codex uses a ChatGPT-style access token against
 #     chatgpt.com. The default auth.json (auth_mode: chatgpt) is always
 #     installed and the api-key login step is skipped so iron-proxy can
@@ -130,12 +130,41 @@ HARNESS_CONFIG_DIR="${CENTAUR_HARNESS_CONFIG_DIR:-$HOME_DIR/harness}"
 if [ -f "$HARNESS_CONFIG_DIR/codex/config.toml" ]; then
     cp "$HARNESS_CONFIG_DIR/codex/config.toml" "$HOME_DIR/.codex/config.toml"
     CODEX_CONFIG_PATH="$HOME_DIR/.codex/config.toml" python3 - <<'PYEOF'
+import json
 from pathlib import Path
 import os
 import sys
 
 path = Path(os.environ["CODEX_CONFIG_PATH"])
 lines = path.read_text().splitlines()
+
+
+def upsert_top_level(key, value):
+    """Set a top-level TOML scalar without touching table-local settings."""
+    first_table = next(
+        (i for i, line in enumerate(lines) if line.lstrip().startswith("[")), len(lines)
+    )
+    override = f"{key} = {value}"
+    for index in range(first_table):
+        if lines[index].split("=", 1)[0].strip() == key:
+            lines[index] = override
+            return
+    lines.insert(first_table, override)
+
+
+def replace_table(header, replacement):
+    """Replace one complete TOML table, or append it when it is absent."""
+    start = next((i for i, line in enumerate(lines) if line.strip() == header), None)
+    if start is None:
+        if lines and lines[-1].strip():
+            lines.append("")
+        lines.extend(replacement)
+        return
+    end = next(
+        (i for i in range(start + 1, len(lines)) if lines[i].lstrip().startswith("[")),
+        len(lines),
+    )
+    lines[start:end] = replacement
 
 # CODEX_MODEL_REASONING_SUMMARY overrides model_reasoning_summary so deployments
 # can re-enable reasoning summaries (Codex >= 0.139 no longer emits them by
@@ -149,17 +178,7 @@ if summary:
             file=sys.stderr,
         )
     else:
-        first_section = next(
-            (i for i, line in enumerate(lines) if line.lstrip().startswith("[")),
-            len(lines),
-        )
-        override = f'model_reasoning_summary = "{summary}"'
-        for i in range(first_section):
-            if lines[i].split("=", 1)[0].strip() == "model_reasoning_summary":
-                lines[i] = override
-                break
-        else:
-            lines.insert(first_section, override)
+        upsert_top_level("model_reasoning_summary", json.dumps(summary))
 
 features_start = next((i for i, line in enumerate(lines) if line.strip() == "[features]"), None)
 if features_start is None:
@@ -199,17 +218,35 @@ if effort:
             file=sys.stderr,
         )
     else:
-        # model_reasoning_effort is a top-level key, before the first [table].
-        first_table = next(
-            (i for i, line in enumerate(lines) if line.lstrip().startswith("[")), len(lines)
-        )
-        override = f'model_reasoning_effort = "{effort}"'
-        for i in range(first_table):
-            if lines[i].split("=", 1)[0].strip() == "model_reasoning_effort":
-                lines[i] = override
-                break
-        else:
-            lines.insert(first_table, override)
+        upsert_top_level("model_reasoning_effort", json.dumps(effort))
+
+# Keep direct Codex CLI invocations on the deployment's default model as well
+# as the harness-server path, which supplies CODEX_MODEL per thread.
+model = (os.environ.get("CODEX_MODEL") or "").strip()
+if model:
+    upsert_top_level("model", json.dumps(model))
+
+# OPENAI_BASE_URL is Centaur's deployment-wide OpenAI-compatible gateway
+# setting. Codex intentionally does not read that environment variable as a
+# durable provider override, so render a user-level custom provider instead.
+# The app server selects this same provider whenever the gateway is present.
+# LiteLLM exposes the Responses HTTP API but not Codex's Responses WebSocket
+# transport, so disable WebSockets and avoid its failed-connection retry loop.
+base_url = (os.environ.get("OPENAI_BASE_URL") or "").strip().rstrip("/")
+if base_url:
+    upsert_top_level("model_provider", json.dumps("darkmatter"))
+    replace_table(
+        "[model_providers.darkmatter]",
+        [
+            "[model_providers.darkmatter]",
+            'name = "Darkmatter LiteLLM"',
+            f"base_url = {json.dumps(base_url)}",
+            'env_key = "OPENAI_API_KEY"',
+            'wire_api = "responses"',
+            "requires_openai_auth = false",
+            "supports_websockets = false",
+        ],
+    )
 
 text = "\n".join(lines).rstrip() + "\n"
 

@@ -572,8 +572,10 @@ slackbotv2:
   # SLACKBOTV2_MESSAGE_OVERRIDES_OPENAI_API_KEY via extraEnv.
   messageOverridesStrategy:
     mode: flags
-    model: gpt-5.4-nano
-    openaiBaseUrl: https://api.openai.com/v1
+    # Empty inherits sandbox.extraEnv.CODEX_MODEL, then gpt-5.4-nano.
+    model: ""
+    # Empty inherits apiRs.extraEnv.OPENAI_BASE_URL, then api.openai.com.
+    openaiBaseUrl: ""
     timeoutMs: 1500
     maxOutputTokens: 300
   metrics:

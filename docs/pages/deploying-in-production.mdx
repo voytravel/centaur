@@ -117,8 +117,10 @@ from `op://$OP_VAULT/<SECRET_NAME>/credential`. For example, store the Codex
 credential in a 1Password item named `OPENAI_API_KEY`. To use an
 OpenAI-compatible gateway, set `OPENAI_BASE_URL` in `apiRs.extraEnv`; api-rs
 then forwards that endpoint into every Codex sandbox and scopes iron-proxy's
-credential replacement to its hostname. Codex model IDs, including IDs with a
-provider-style slash, always use this configured gateway; `--provider`,
+credential replacement to its hostname. Sandbox startup renders a user-level
+Codex provider for that gateway, so both app-server and direct Codex CLI calls
+use it without falling back to `api.openai.com`. Codex model IDs, including IDs
+with a provider-style slash, always use this configured gateway; `--provider`,
 `--meta`, and OpenRouter routing are not supported.
 
 The backing vault can be shared across the deployment, but access is not. The

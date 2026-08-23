@@ -82,6 +82,13 @@ def test_workflow_uses_a_scoped_principal_and_ai_v2_database(monkeypatch):
     assert options == {"command_timeout": 30}
 
 
+def test_workflow_openai_client_kwargs_uses_the_configured_gateway(monkeypatch):
+    embeddings = _load()
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://litellm.example/v1")
+
+    assert embeddings._openai_client_kwargs() == {"base_url": "https://litellm.example/v1"}
+
+
 def test_handler_embeds_and_stores_one_batch(monkeypatch):
     embeddings = _load()
     monkeypatch.delenv("COMPANY_CONTEXT_EMBEDDINGS_ENABLED", raising=False)

@@ -249,9 +249,9 @@ fn fake_claude_subagent_sidechain_stop_does_not_complete_the_turn() {
 }
 
 #[test]
-fn fake_codex_blocks_mode_uses_openai_provider_when_model_is_configured() {
-    let fake_codex = temp_path("fake-openai-codex.sh");
-    let fake_codex_log = temp_path("fake-openai-codex-requests.jsonl");
+fn fake_codex_blocks_mode_uses_darkmatter_provider_when_gateway_is_configured() {
+    let fake_codex = temp_path("fake-darkmatter-codex.sh");
+    let fake_codex_log = temp_path("fake-darkmatter-codex-requests.jsonl");
     let script = fake_codex_app_server_script(&fake_codex_log);
     std::fs::write(&fake_codex, script).expect("write fake codex script");
     let mut permissions = std::fs::metadata(&fake_codex)
@@ -267,7 +267,10 @@ fn fake_codex_blocks_mode_uses_openai_provider_when_model_is_configured() {
             "CODEX_BIN",
             fake_codex.to_str().expect("utf-8 fake codex path"),
         )),
-        &[("CODEX_MODEL", "DARKMATTER/GLM-5.2-FP8")],
+        &[
+            ("CODEX_MODEL", "DARKMATTER/GLM-5.2-FP8"),
+            ("OPENAI_BASE_URL", "https://litellm.example/v1"),
+        ],
     );
     let turn = bridge.run_blocks_user_turn("say LiteLLM blocks", Duration::from_secs(10));
     bridge.finish_successfully();
@@ -288,7 +291,7 @@ fn fake_codex_blocks_mode_uses_openai_provider_when_model_is_configured() {
         thread_start
             .pointer("/params/modelProvider")
             .and_then(Value::as_str),
-        Some("openai")
+        Some("darkmatter")
     );
     let turn_start = requests
         .iter()
@@ -304,7 +307,7 @@ fn fake_codex_blocks_mode_uses_openai_provider_when_model_is_configured() {
 }
 
 #[test]
-fn fake_codex_blocks_mode_uses_openai_provider_for_provider_style_model_slug() {
+fn fake_codex_blocks_mode_uses_openai_provider_without_a_gateway() {
     let fake_codex = temp_path("fake-openrouter-flag-codex.sh");
     let fake_codex_log = temp_path("fake-openrouter-flag-codex-requests.jsonl");
     let script = fake_codex_app_server_script(&fake_codex_log);
@@ -373,13 +376,14 @@ fn fake_codex_blocks_mode_ignores_legacy_provider_selection() {
     permissions.set_mode(0o755);
     std::fs::set_permissions(&fake_codex, permissions).expect("chmod fake codex script");
 
-    let mut bridge = BridgeProcess::spawn_harness_blocks(
+    let mut bridge = BridgeProcess::spawn_harness_blocks_envs(
         Harness::Codex,
         None,
         Some((
             "CODEX_BIN",
             fake_codex.to_str().expect("utf-8 fake codex path"),
         )),
+        &[("OPENAI_BASE_URL", "https://litellm.example/v1")],
     );
     // Old persisted threads may still carry a provider field. It must not
     // redirect the configured OpenAI-compatible LiteLLM client.
@@ -412,7 +416,7 @@ fn fake_codex_blocks_mode_ignores_legacy_provider_selection() {
         thread_start
             .pointer("/params/modelProvider")
             .and_then(Value::as_str),
-        Some("openai")
+        Some("darkmatter")
     );
     let turn_start = requests
         .iter()
@@ -1274,6 +1278,7 @@ impl BridgeProcess {
             "CENTAUR_AMP_APP_BRIDGE_COMMAND",
             "CODEX_MODEL",
             "CODEX_MODEL_PROVIDER",
+            "OPENAI_BASE_URL",
             "OPENROUTER_MODEL",
         ] {
             command.env_remove(env_key);
