@@ -30,6 +30,7 @@ class Console::AutomationPoliciesController < ApplicationController
       )
       .order(last_event_at: :desc, id: :desc)
       .limit(30)
+    @latest_executions = latest_executions_for(@workstreams.map(&:session_key))
   end
 
   def new
@@ -169,5 +170,21 @@ class Console::AutomationPoliciesController < ApplicationController
   rescue ActiveRecord::ActiveRecordError, PG::Error => e
     Rails.logger.debug("console_automation_execution_search_failed error=#{e.class}: #{e.message}")
     []
+  end
+
+  # Execution records belong to Centaur's durable session API. This is a
+  # read-only summary for the policy list; the thread observer remains the
+  # detailed execution view.
+  def latest_executions_for(keys)
+    return {} if keys.empty?
+
+    CentaurSessionExecution
+      .where(thread_key: keys)
+      .select("distinct on (thread_key) session_executions.*")
+      .order(Arel.sql("thread_key, created_at desc, execution_id desc"))
+      .index_by(&:thread_key)
+  rescue ActiveRecord::ActiveRecordError, PG::Error => e
+    Rails.logger.debug("console_automation_execution_index_load_failed error=#{e.class}: #{e.message}")
+    {}
   end
 end

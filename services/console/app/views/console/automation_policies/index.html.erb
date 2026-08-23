@@ -101,6 +101,7 @@
             <th class="console-th">Policy</th>
             <th class="console-th">Events</th>
             <th class="console-th">Latest decision</th>
+            <th class="console-th">Latest execution</th>
             <th class="console-th">Last event</th>
             <th class="console-th"><span class="sr-only">Audit trail</span></th>
           </tr>
@@ -108,7 +109,7 @@
         <tbody class="divide-y divide-ink-700">
           <% if @workstreams.empty? %>
             <tr>
-              <td colspan="7" class="px-5 py-8 text-center text-zinc-600">
+              <td colspan="8" class="px-5 py-8 text-center text-zinc-600">
                 <%= @workstream_query.present? ? "No workstreams match that audit query." : "No inbound automation events yet." %>
               </td>
             </tr>
@@ -149,6 +150,14 @@
                   <% end %>
                 <% else %>
                   <span class="text-zinc-600">not recorded</span>
+                <% end %>
+              </td>
+              <td class="console-td text-xs">
+                <% if (execution = @latest_executions[workstream.session_key]) %>
+                  <div class="automation-workstream-execution text-zinc-300"><%= execution.status.presence || "unknown" %></div>
+                  <div class="automation-workstream-execution-id mt-1 max-w-xs truncate font-mono text-zinc-500" title="<%= execution.execution_id %>"><%= execution.execution_id %></div>
+                <% else %>
+                  <span class="text-zinc-600">not started</span>
                 <% end %>
               </td>
               <td class="console-td text-xs text-zinc-500"><%= local_time(workstream.last_event_at, relative: true, format: :compact) %></td>
