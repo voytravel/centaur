@@ -1155,8 +1155,8 @@ function automationInstructionMessage(
   const text = [
     "This Linear issue was selected by an automation policy after a new or updated issue event.",
     "First assess whether the issue is genuinely ready and actionable. If scope, acceptance criteria, repository fit, or a dependency is unclear, do not create a PR; post one concise Linear comment naming what is missing and stop.",
-    "If it is actionable, implement it in " + (decision.githubRepository ?? "the mapped GitHub repository") + ". Use git and gh in your sandbox, run the relevant verification, open a PR that links this Linear issue, and do not merge it.",
-    "For a user-visible change, capture a real screenshot from a verified local or preview flow and include it inline in the PR and Linear update when the available tools support upload. Never fabricate a screenshot. For a non-visual change, say that no screenshot applies.",
+    "If it is actionable, implement it in " + (decision.githubRepository ?? "the mapped GitHub repository") + ". Use git and gh in your sandbox, run the relevant verification, open a draft PR that links this Linear issue, and do not merge it.",
+    "For a user-visible change, capture a real screenshot from a verified local or preview flow and include it inline in the PR and Linear update when the available tools support upload. If the repository's normal verified deployment flow provides a preview URL, include that URL in both updates; otherwise state that no preview URL is available. Never fabricate a screenshot or preview URL. For a non-visual change, say that no screenshot or preview URL applies.",
     reviewerInstruction,
     "When and only when the PR exists, finish with Linear-Status: in_review so the issue can move to review. If no PR is appropriate, finish with Linear-Status: todo."
   ].join("\n\n");
