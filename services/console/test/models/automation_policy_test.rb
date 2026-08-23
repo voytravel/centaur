@@ -238,7 +238,30 @@ class AutomationPolicyTest < ActiveSupport::TestCase
 
     assert_predicate policy, :source_managed?
     assert_equal "acme/infra:automation/policies.json@aaaaaaaaaaaa", policy.managed_source_label
+    expected_url = "https://github.com/acme/infra/blob/#{"a" * 40}/automation/policies.json"
+    assert_equal expected_url, policy.safe_managed_source_url
     assert_equal "all_eligible", policy.github_settings["review"]
+  end
+
+  test "does not create an external source URL from non-GitHub repository syntax" do
+    policy = AutomationPolicy.new(
+      name: "Opaque managed source",
+      provider: "github",
+      repository: "acme/widgets",
+      created_by: users(:acme_admin),
+      settings: {
+        "_centaur_managed_source" => {
+          "kind" => "git",
+          "repository" => "acme?source/infra",
+          "path" => "automation/policies.json",
+          "revision" => "a" * 40,
+          "content_sha256" => "b" * 64
+        }
+      }
+    )
+
+    assert_predicate policy, :valid?
+    assert_nil policy.safe_managed_source_url
   end
 
   test "rejects malformed managed-source provenance" do

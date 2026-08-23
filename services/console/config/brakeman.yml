@@ -5,3 +5,4 @@
 # generally.
 url_safe_methods:
   - :safe_source_url
+  - :safe_managed_source_url
