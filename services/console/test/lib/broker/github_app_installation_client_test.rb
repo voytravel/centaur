@@ -30,7 +30,15 @@ module Broker
           assert_equal 17, request[:timeout]
 
           jwt = request[:headers].fetch("Authorization").delete_prefix("Bearer ")
-          payload, header = JWT.decode(jwt, key.public_key, true, algorithms: [ "RS256" ])
+          # The injected clock intentionally makes the payload deterministic;
+          # validate its signature and claims without comparing it to wall time.
+          payload, header = JWT.decode(
+            jwt,
+            key.public_key,
+            true,
+            algorithms: [ "RS256" ],
+            verify_expiration: false
+          )
           assert_equal "RS256", header["alg"]
           assert_equal CLIENT_ID, payload["iss"]
           assert_equal NOW.to_i - GithubAppInstallationClient::JWT_BACKDATE_SECONDS, payload["iat"]
