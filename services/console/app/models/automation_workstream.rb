@@ -17,6 +17,21 @@ class AutomationWorkstream < ApplicationRecord
   validates :state, inclusion: { in: STATES }
   validate :metadata_is_a_hash
 
+  # The Console policy index selects these aliases with a lateral join so an
+  # operator can see the latest safe policy outcome without loading every raw
+  # provider event. They are deliberately not persisted workstream state.
+  def latest_automation_decision
+    self[:latest_automation_decision].presence
+  end
+
+  def latest_automation_action_kind
+    self[:latest_automation_action_kind].presence
+  end
+
+  def latest_automation_reason
+    self[:latest_automation_reason].presence
+  end
+
   private
 
   def metadata_is_a_hash

@@ -68,13 +68,14 @@
             <th class="console-th">Session</th>
             <th class="console-th">Policy</th>
             <th class="console-th">Events</th>
+            <th class="console-th">Latest decision</th>
             <th class="console-th">Last event</th>
           </tr>
         </thead>
         <tbody class="divide-y divide-ink-700">
           <% if @workstreams.empty? %>
             <tr>
-              <td colspan="5" class="px-5 py-8 text-center text-zinc-600">No inbound automation events yet.</td>
+              <td colspan="6" class="px-5 py-8 text-center text-zinc-600">No inbound automation events yet.</td>
             </tr>
           <% end %>
           <% @workstreams.each do |workstream| %>
@@ -87,6 +88,24 @@
               </td>
               <td class="console-td text-xs text-zinc-400"><%= workstream.automation_policy&.name || "no matching policy" %></td>
               <td class="console-td text-xs text-zinc-400"><%= workstream.event_count %></td>
+              <td class="console-td text-xs">
+                <% if workstream.latest_automation_decision.present? %>
+                  <% decision_class = case workstream.latest_automation_decision
+                                      when "act" then "border-amber-400/40 bg-amber-400/10 text-amber-200"
+                                      when "observe" then "border-sky-400/40 bg-sky-400/10 text-sky-200"
+                                      else "border-zinc-700 text-zinc-400"
+                                      end %>
+                  <span class="rounded border px-2 py-1 <%= decision_class %>"><%= workstream.latest_automation_decision %></span>
+                  <% if workstream.latest_automation_action_kind.present? %>
+                    <div class="mt-2 text-zinc-500"><%= workstream.latest_automation_action_kind.split(",").join(", ") %></div>
+                  <% end %>
+                  <% if workstream.latest_automation_reason.present? %>
+                    <div class="automation-workstream-reason mt-1 max-w-sm text-zinc-500"><%= workstream.latest_automation_reason %></div>
+                  <% end %>
+                <% else %>
+                  <span class="text-zinc-600">not recorded</span>
+                <% end %>
+              </td>
               <td class="console-td text-xs text-zinc-500"><%= local_time(workstream.last_event_at, relative: true, format: :compact) %></td>
             </tr>
           <% end %>

@@ -7,6 +7,21 @@ class Console::AutomationPoliciesController < ApplicationController
   def index
     @policies = AutomationPolicy.includes(:created_by, :execution_role).order(:provider, :repository, :linear_team_id, :id)
     @workstreams = AutomationWorkstream.includes(:automation_policy, :principal, :authorization_role)
+      .joins(<<~SQL.squish)
+        LEFT JOIN LATERAL (
+          SELECT decision, action_kind, metadata -> 'result' ->> 'reason' AS reason
+          FROM automation_events
+          WHERE automation_events.automation_workstream_id = automation_workstreams.id
+          ORDER BY received_at DESC, id DESC
+          LIMIT 1
+        ) latest_automation_event ON TRUE
+      SQL
+      .select(
+        "automation_workstreams.*, " \
+        "latest_automation_event.decision AS latest_automation_decision, " \
+        "latest_automation_event.action_kind AS latest_automation_action_kind, " \
+        "latest_automation_event.reason AS latest_automation_reason"
+      )
       .order(last_event_at: :desc, id: :desc)
       .limit(30)
   end
