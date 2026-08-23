@@ -77,6 +77,9 @@ class Console::AutomationPoliciesControllerTest < ActionDispatch::IntegrationTes
 
     assert_response :ok
     assert_select "span", text: "managed in source"
+    expected_url = "https://github.com/acme/infra/blob/#{"a" * 40}/automation/policies.json"
+    assert_select "a[href=?]", expected_url,
+                  text: "acme/infra:automation/policies.json@aaaaaaaaaaaa"
     assert_select "a[href=?]", edit_console_automation_policy_path(policy.oid), count: 0
     assert_select "span", text: "reconciled on deploy"
 

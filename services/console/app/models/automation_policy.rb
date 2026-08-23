@@ -8,6 +8,7 @@ class AutomationPolicy < ApplicationRecord
   LINEAR_ISSUE_MODES = %w[off ready_issues].freeze
   MANAGED_SOURCE_KEY = "_centaur_managed_source".freeze
   MANAGED_SOURCE_FIELDS = %w[kind repository path revision content_sha256].freeze
+  GITHUB_REPOSITORY_PATTERN = /\A[A-Za-z0-9][A-Za-z0-9_.-]*\/[A-Za-z0-9][A-Za-z0-9_.-]*\z/.freeze
 
   GITHUB_REVIEW_ACTIONS = %w[opened reopened ready_for_review synchronize].freeze
   GITHUB_CONFLICT_ACTIONS = %w[synchronize edited ready_for_review].freeze
@@ -100,6 +101,20 @@ class AutomationPolicy < ApplicationRecord
     return unless source
 
     "#{source.fetch("repository")}:#{source.fetch("path")}@#{source.fetch("revision").first(12)}"
+  end
+
+  # Source-managed policies are reconciled from a reviewed GitHub repository.
+  # Only build an external href when each dynamic segment fits the narrow source
+  # metadata contract, rather than treating the stored provenance label as a
+  # general URL.
+  def safe_managed_source_url
+    source = managed_source
+    return unless source
+
+    repository = source.fetch("repository")
+    return unless GITHUB_REPOSITORY_PATTERN.match?(repository)
+
+    "https://github.com/#{repository}/blob/#{source.fetch("revision")}/#{source.fetch("path")}"
   end
 
   # Evaluates a normalized, metadata-only ingress event. This intentionally
