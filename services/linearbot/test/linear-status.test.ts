@@ -39,6 +39,9 @@ describe("extractStatusMarker", () => {
       "in_progress",
     );
     expect(extractStatusMarker("x\nLinear-Status: todo").marker).toBe("todo");
+    expect(extractStatusMarker("x\nLinear-Status: in review").marker).toBe(
+      "in_review",
+    );
   });
 
   it("last marker wins and all marker lines are stripped", () => {
@@ -107,6 +110,21 @@ describe("markerTargetState", () => {
       markerTargetState(
         status({ stateName: "In Review", stateType: "started" }),
         "done",
+      ),
+    ).toBeUndefined();
+  });
+
+  it("moves a finished automated issue into the named review state", () => {
+    expect(
+      markerTargetState(
+        status({ stateName: "In Progress", stateType: "started" }),
+        "in_review",
+      )?.id,
+    ).toBe("st-review");
+    expect(
+      markerTargetState(
+        status({ stateName: "In Review", stateType: "started" }),
+        "in_review",
       ),
     ).toBeUndefined();
   });

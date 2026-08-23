@@ -49,8 +49,11 @@ const ISSUE_CONTEXT_QUERY = `
       title
       description
       url
-      state { name }
+      state { id name type }
       delegate { id }
+      team { id }
+      project { id }
+      labels { nodes { id name } }
     }
   }
 `;
@@ -61,8 +64,11 @@ type IssueContextData = {
     title?: unknown;
     description?: unknown;
     url?: unknown;
-    state?: { name?: unknown } | null;
-    delegate?: { id?: unknown } | null;
+      state?: { id?: unknown; name?: unknown; type?: unknown } | null;
+      delegate?: { id?: unknown } | null;
+      team?: { id?: unknown } | null;
+      project?: { id?: unknown } | null;
+      labels?: { nodes?: unknown } | null;
   } | null;
 };
 
@@ -75,6 +81,11 @@ export type LinearIssueContext = {
   description?: string;
   url?: string;
   status?: string;
+  stateId?: string;
+  stateType?: string;
+  teamId?: string;
+  projectId?: string;
+  labels?: string[];
   /** App-user id the issue is delegated to, when any — used for ownership. */
   delegateId?: string;
 };
@@ -115,7 +126,12 @@ export async function fetchLinearIssueContext(
     description: stringValue(issue.description),
     url: stringValue(issue.url),
     status: issue.state?.name ? stringValue(issue.state.name) : undefined,
+    stateId: stringValue(issue.state?.id),
+    stateType: stringValue(issue.state?.type),
     delegateId: stringValue(issue.delegate?.id),
+    teamId: stringValue(issue.team?.id),
+    projectId: stringValue(issue.project?.id),
+    labels: linearLabelNames(issue.labels?.nodes),
   };
   // Without an identifier or title there's nothing that tells the agent which
   // task this is — the whole point of the context.
@@ -124,6 +140,15 @@ export async function fetchLinearIssueContext(
     return null;
   }
   return context;
+}
+
+function linearLabelNames(nodes: unknown): string[] {
+  if (!Array.isArray(nodes)) return [];
+  return nodes.flatMap((node) => {
+    if (!node || typeof node !== "object" || Array.isArray(node)) return [];
+    const name = stringValue((node as Record<string, unknown>).name);
+    return name ? [ name ] : [];
+  });
 }
 
 /**

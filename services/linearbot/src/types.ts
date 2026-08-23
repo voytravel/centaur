@@ -91,6 +91,10 @@ export type LinearbotFetch = (
 export type LinearbotOptions = {
   apiKey?: string;
   apiUrl: string;
+  /** Console internal URL used solely for policy evaluation and workstream audit. */
+  automationApiUrl?: string;
+  /** Single-purpose credential accepted only by Console automation ingress. */
+  automationIngressToken?: string;
   /**
    * Reasoning effort per turn type. This bot's turns are mostly autonomous, so
    * there is no message for a `-rsn` flag to ride on and every turn otherwise
@@ -165,6 +169,12 @@ export type LinearbotThreadState = {
    * bot ran a turn for, so a redelivered Issue webhook doesn't re-run.
    */
   lastAssignmentTrigger?: string;
+  /**
+   * Last policy-selected Issue create/update trigger consumed by the durable
+   * issue workstream. Keeps a Linear webhook redelivery from starting a second
+   * execution while preserving ordinary assignment ownership separately.
+   */
+  lastAutomationTrigger?: string;
 };
 
 export type LinearbotRendererSource = RustSessionStreamEvent | JsonObject;

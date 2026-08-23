@@ -67,6 +67,7 @@ for the operator workflow.
 | `IRON_CONTROL_AR_ENCRYPTION_PRIMARY_KEY`, `IRON_CONTROL_AR_ENCRYPTION_DETERMINISTIC_KEY`, `IRON_CONTROL_AR_ENCRYPTION_KEY_DERIVATION_SALT` | `secretManager.existingSecretName`; local bootstrap generates them when absent. | Encrypts credential material at rest. Keep these stable after first boot. |
 | `IRON_CONTROL_SECRET_KEY_BASE` | `secretManager.existingSecretName`; local bootstrap generates it when absent. | Console session and application signing secret. |
 | `CENTAUR_JWT_SIGNING_SECRET` | `secretManager.existingSecretName`; local bootstrap generates it when absent. | Signs Console-issued MCP tokens, Console service tokens, and sandbox api-rs principal tokens. |
+| `automation.enabled` | Helm value, default `false`. | Enables Console-backed declarative GitHub and Linear automation policies. The shared secret source must contain `CENTAUR_AUTOMATION_INGRESS_TOKEN`. |
 | `console.publicUrl` | Helm value. | Public Console origin used for links and MCP authorization metadata. |
 | `console.passwordLoginEnabled` | Helm value, default `true`. | Enables the break-glass email and password login. Disable after SSO is configured for a public Console. |
 | `console.ssoEmailDomains` | Helm value. | Limits Google or Slack SSO admission by email domain. Empty accepts any IdP-authenticated email. |
