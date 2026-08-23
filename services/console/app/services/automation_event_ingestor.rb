@@ -81,15 +81,33 @@ class AutomationEventIngestor
   def find_or_create_workstream!
     provider = @event.fetch("provider")
     subject_key = subject_key_for
-    AutomationWorkstream.find_or_create_by!(provider: provider, subject_key: subject_key) do |workstream|
+    workstream = AutomationWorkstream.find_or_create_by!(provider: provider, subject_key: subject_key) do |workstream|
       workstream.session_key = session_key_for
       workstream.repository = @event["repository"]
-      workstream.metadata = {
-        "linear_issue_id" => @event["linear_issue_id"],
-        "linear_team_id" => @event["linear_team_id"],
-        "linear_project_id" => @event["linear_project_id"]
-      }.compact
+      workstream.metadata = workstream_metadata
     end
+    refresh_workstream_metadata!(workstream)
+    workstream
+  end
+
+  def refresh_workstream_metadata!(workstream)
+    incoming = workstream_metadata
+    return if incoming.empty?
+
+    workstream.with_lock do
+      merged = workstream.metadata.merge(incoming)
+      workstream.update!(metadata: merged) if merged != workstream.metadata
+    end
+  end
+
+  def workstream_metadata
+    {
+      "linear_issue_id" => @event["linear_issue_id"],
+      "linear_team_id" => @event["linear_team_id"],
+      "linear_project_id" => @event["linear_project_id"],
+      "linear_issue_identifier" => @event["linear_issue_identifier"].to_s.strip.presence,
+      "linear_issue_url" => AutomationWorkstream.normalize_linear_issue_url(@event["linear_issue_url"])
+    }.compact
   end
 
   def resolve_policy

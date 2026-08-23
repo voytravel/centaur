@@ -1,0 +1,7 @@
+# `AutomationWorkstream#safe_source_url` accepts only a normalized GitHub PR
+# path or a provider-owned Linear HTTPS permalink. Its model tests cover host,
+# scheme, credentials, port, and query/fragment normalization; tell Brakeman it
+# is safe specifically for link hrefs rather than suppressing model output
+# generally.
+url_safe_methods:
+  - :safe_source_url

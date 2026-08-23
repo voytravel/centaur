@@ -1,7 +1,10 @@
+require "uri"
+
 class AutomationWorkstream < ApplicationRecord
   oid_prefix "aws"
 
   STATES = %w[idle active blocked completed].freeze
+  GITHUB_PR_SUBJECT_PATTERN = /\Agithub:([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+):pr:([1-9]\d*)\z/.freeze
 
   belongs_to :automation_policy, optional: true
   belongs_to :principal, optional: true
@@ -58,7 +61,48 @@ class AutomationWorkstream < ApplicationRecord
     self[:latest_automation_reason].presence
   end
 
+  # The operator audit view can link back to a provider item only when the
+  # destination is derived from a normalized, provider-owned identifier. This
+  # keeps provider payload URLs out of templates and prevents a future event
+  # field from becoming an arbitrary external-link sink.
+  def safe_source_url
+    case provider
+    when "github" then github_pull_request_url
+    when "linear" then self.class.normalize_linear_issue_url(metadata["linear_issue_url"])
+    end
+  end
+
+  # Linear's server-side issue context provides this as a permalink. Normalize
+  # it once at ingestion and again before rendering so existing data cannot turn
+  # a Console source link into an arbitrary external destination.
+  def self.normalize_linear_issue_url(value)
+    value = value.to_s.strip
+    return if value.blank?
+
+    uri = URI.parse(value)
+    host = uri.host.to_s.downcase
+    return unless uri.is_a?(URI::HTTPS)
+    return unless host == "linear.app" || host.end_with?(".linear.app")
+    return if uri.userinfo.present?
+    return unless uri.port == 443
+
+    # Query strings and fragments can carry transient or user-specific context
+    # and are not needed to navigate to an issue.
+    uri.query = nil
+    uri.fragment = nil
+    uri.to_s
+  rescue URI::InvalidURIError
+    nil
+  end
+
   private
+
+  def github_pull_request_url
+    match = GITHUB_PR_SUBJECT_PATTERN.match(subject_key)
+    return unless match && repository.to_s.casecmp?(match[1])
+
+    "https://github.com/#{match[1]}/pull/#{match[2]}"
+  end
 
   def metadata_is_a_hash
     errors.add(:metadata, "must be an object") unless metadata.is_a?(Hash)

@@ -41,6 +41,8 @@ module Api
           :base_branch,
           :draft,
           :linear_issue_id,
+          :linear_issue_identifier,
+          :linear_issue_url,
           :linear_team_id,
           :linear_project_id,
           :title,

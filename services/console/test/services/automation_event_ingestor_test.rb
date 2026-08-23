@@ -82,6 +82,8 @@ class AutomationEventIngestorTest < ActiveSupport::TestCase
       "event_type" => "Issue",
       "event_action" => "update",
       "linear_issue_id" => "issue-1",
+      "linear_issue_identifier" => "ENG-42",
+      "linear_issue_url" => "https://linear.app/voytravel/issue/ENG-42/implement-it?utm=bot#activity",
       "linear_team_id" => "team-1",
       "title" => "Implement it",
       "description" => "Ready to ship",
@@ -91,6 +93,9 @@ class AutomationEventIngestorTest < ActiveSupport::TestCase
     assert_equal "act", result["decision"]
     assert_equal [ "implement_issue" ], result["actions"]
     assert_equal "linear:issue-1", result["session_key"]
+    workstream = AutomationWorkstream.sole
+    assert_equal "ENG-42", workstream.metadata["linear_issue_identifier"]
+    assert_equal "https://linear.app/voytravel/issue/ENG-42/implement-it", workstream.metadata["linear_issue_url"]
   end
 
   test "re-evaluates a duplicate delivery after an operator disables its policy" do

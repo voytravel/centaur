@@ -9,6 +9,9 @@ class Console::AutomationWorkstreamsController < ApplicationController
     @workstream = AutomationWorkstream
       .includes(:automation_policy, :principal, :authorization_role)
       .find_by_oid!(params[:id])
+    # safe_source_url validates the provider-owned destination before this
+    # presentation-only value reaches the template.
+    @source_url = @workstream.safe_source_url
     @events = @workstream.automation_events.order(received_at: :desc, id: :desc).limit(100)
     @executions = native_executions
   end

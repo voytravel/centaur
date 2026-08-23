@@ -750,6 +750,8 @@ function handleIssueAutomation(
       event_type: "Issue",
       labels: issueContext.labels ?? [],
       linear_issue_id: event.issueId,
+      linear_issue_identifier: issueContext.identifier,
+      linear_issue_url: issueContext.url,
       linear_project_id: issueContext.projectId,
       linear_team_id: issueContext.teamId,
       provider: "linear",
