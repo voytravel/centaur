@@ -14,6 +14,7 @@ import { errorMessage, stringValue } from "./utils";
 // promptContext, as do replayed/fetched history messages).
 
 const CONTEXT_MAX_CHARS = 100_000;
+const RESOLVED_WORKFLOW_STATE_TYPES = new Set([ "completed", "canceled" ]);
 
 // Linear delta: an assignment/delegation turn starts with NO user-written
 // prompt. Without this, the empty execute message degrades to "" in the stored
@@ -54,6 +55,13 @@ const ISSUE_CONTEXT_QUERY = `
       team { id }
       project { id }
       labels { nodes { id name } }
+      inverseRelations(first: 50) {
+        nodes {
+          type
+          issue { state { type } }
+        }
+        pageInfo { hasNextPage }
+      }
     }
   }
 `;
@@ -64,12 +72,18 @@ type IssueContextData = {
     title?: unknown;
     description?: unknown;
     url?: unknown;
-      state?: { id?: unknown; name?: unknown; type?: unknown } | null;
-      delegate?: { id?: unknown } | null;
-      team?: { id?: unknown } | null;
-      project?: { id?: unknown } | null;
-      labels?: { nodes?: unknown } | null;
+    state?: { id?: unknown; name?: unknown; type?: unknown } | null;
+    delegate?: { id?: unknown } | null;
+    team?: { id?: unknown } | null;
+    project?: { id?: unknown } | null;
+    labels?: { nodes?: unknown } | null;
+    inverseRelations?: InverseRelationConnection | null;
   } | null;
+};
+
+type InverseRelationConnection = {
+  nodes?: unknown;
+  pageInfo?: { hasNextPage?: unknown } | null;
 };
 
 export const ISSUE_CONTEXT_HEADER = "[Linear issue context]";
@@ -86,6 +100,8 @@ export type LinearIssueContext = {
   teamId?: string;
   projectId?: string;
   labels?: string[];
+  /** True when an unresolved Linear issue blocks this issue. */
+  blocked?: boolean;
   /** App-user id the issue is delegated to, when any — used for ownership. */
   delegateId?: string;
 };
@@ -132,6 +148,7 @@ export async function fetchLinearIssueContext(
     teamId: stringValue(issue.team?.id),
     projectId: stringValue(issue.project?.id),
     labels: linearLabelNames(issue.labels?.nodes),
+    blocked: hasUnresolvedBlocker(issue.inverseRelations),
   };
   // Without an identifier or title there's nothing that tells the agent which
   // task this is — the whole point of the context.
@@ -142,6 +159,27 @@ export async function fetchLinearIssueContext(
   return context;
 }
 
+/**
+ * Only a relation directed into this issue with type `blocks` is a blocker.
+ * The readiness path must prove that every such source issue is terminal; an
+ * incomplete or malformed relation page is therefore blocked rather than
+ * risking an autonomous pickup behind an unseen dependency.
+ */
+function hasUnresolvedBlocker(
+  relations: InverseRelationConnection | null | undefined,
+): boolean {
+  if (!relations || !Array.isArray(relations.nodes)) return true;
+  if (relations.pageInfo?.hasNextPage !== false) return true;
+
+  return relations.nodes.some((relation) => {
+    if (!isRecord(relation) || stringValue(relation.type) !== "blocks") return false;
+    const blocker = isRecord(relation.issue) ? relation.issue : undefined;
+    const state = blocker && isRecord(blocker.state) ? blocker.state : undefined;
+    const stateType = stringValue(state?.type);
+    return !stateType || !RESOLVED_WORKFLOW_STATE_TYPES.has(stateType);
+  });
+}
+
 function linearLabelNames(nodes: unknown): string[] {
   if (!Array.isArray(nodes)) return [];
   return nodes.flatMap((node) => {
@@ -149,6 +187,10 @@ function linearLabelNames(nodes: unknown): string[] {
     const name = stringValue((node as Record<string, unknown>).name);
     return name ? [ name ] : [];
   });
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
 /**
