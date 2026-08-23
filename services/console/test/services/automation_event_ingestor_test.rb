@@ -153,13 +153,19 @@ class AutomationEventIngestorTest < ActiveSupport::TestCase
       "labels" => []
     ).call
 
-    principal = Principal.create!(
-      foreign_id: "linear-issue-role-#{SecureRandom.hex(6)}",
-      name: "ENG-42",
-      kind: "linear_issue",
-      labels: { "linear_issue_id" => "issue-role" },
-      created_by: users(:acme_admin)
-    )
+    # The fixture transaction normally defers after_create_commit until test
+    # teardown. This mirrors the committed API upsert that api-rs waits for
+    # before it starts the session execution.
+    principal = nil
+    Principal.transaction(requires_new: true, joinable: false) do
+      principal = Principal.create!(
+        foreign_id: "linear-issue-role-#{SecureRandom.hex(6)}",
+        name: "ENG-42",
+        kind: "linear_issue",
+        labels: { "linear_issue_id" => "issue-role" },
+        created_by: users(:acme_admin)
+      )
+    end
 
     workstream = AutomationWorkstream.sole
     assert_equal principal, workstream.reload.principal
