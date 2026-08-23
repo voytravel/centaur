@@ -169,6 +169,7 @@ class Console::AutomationPoliciesControllerTest < ActionDispatch::IntegrationTes
     assert_select "h2", text: "Native session executions"
     assert_select "td", text: "execution-native-42"
     assert_select "td", text: "completed"
+    assert_select "p", text: "Thread access remains subject to the Console's existing sharing policy."
     assert_no_match "must not render", response.body
     assert_select "a[href=?]", console_threads_path(thread: workstream.session_key)
   end
