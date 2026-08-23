@@ -17,6 +17,12 @@ import {
 import { Hono, type Context } from "hono";
 import pg from "pg";
 import {
+  evaluateLinearAutomation,
+  parseLinearIssueAutomationWebhook,
+  type LinearAutomationDecision,
+  type LinearIssueWebhook,
+} from "./automation";
+import {
   parseIssueAssignmentWebhook,
   parseIssueCommentWebhook,
   type IssueAssignmentEvent,
@@ -241,6 +247,9 @@ export function createLinearbot(options: LinearbotOptions): Linearbot {
         ) ??
         requestContext.run(context, () =>
           handleIssueAssignment(rawBody, handlerInput),
+        ) ??
+        requestContext.run(context, () =>
+          handleIssueAutomation(rawBody, handlerInput),
         );
       if (handled) handoffTasks.push(handled);
       try {
@@ -707,6 +716,93 @@ function handleIssueAssignment(
 }
 
 /**
+ * Policy-driven issue pickup. Unlike an explicit assignee/delegate handoff,
+ * this is only enabled by a matching Console policy and always reuses the
+ * issue-level session, so updates to one issue continue in one workspace.
+ */
+function handleIssueAutomation(
+  rawBody: string,
+  input: ThreadHandlerInput,
+): Promise<void> | null {
+  const event = parseLinearIssueAutomationWebhook(rawBody, input.botUserId);
+  if (!event) return null;
+  const { chat, options } = input;
+
+  return (async () => {
+    const bootstrapThread = chat.thread("linear:" + event.issueId);
+    const client = (bootstrapThread.adapter as unknown as LinearSessionCapableAdapter)
+      .linearClient;
+    const issueContext = client
+      ? await fetchLinearIssueContext(client, event.issueId, options.logger ?? noopLogger)
+      : null;
+    if (!issueContext?.teamId) {
+      traceLog(options, "linearbot_automation_context_missing", undefined, {
+        issue_id: event.issueId,
+      });
+      return;
+    }
+
+    const decision = await evaluateLinearAutomation(options, {
+      deduplication_key: "linear:" + event.issueId + ":" + event.trigger,
+      description: issueContext.description,
+      event_action: event.action,
+      event_type: "Issue",
+      labels: issueContext.labels ?? [],
+      linear_issue_id: event.issueId,
+      linear_project_id: issueContext.projectId,
+      linear_team_id: issueContext.teamId,
+      provider: "linear",
+      status: issueContext.status,
+      title: issueContext.title,
+    });
+    if (
+      !decision ||
+      decision.decision !== "act" ||
+      !decision.actions.includes("implement_issue") ||
+      decision.sessionKey !== "linear:" + event.issueId
+    ) {
+      return;
+    }
+
+    const thread = chat.thread(decision.sessionKey);
+    const threadState = (await thread.state) ?? {};
+    const triggerKey = event.issueId + ":" + event.trigger;
+    if (threadState.lastAutomationTrigger === triggerKey) {
+      traceLog(options, "linearbot_automation_duplicate_skipped", undefined, {
+        issue_id: event.issueId,
+      });
+      return;
+    }
+    await thread.setState({ lastAutomationTrigger: triggerKey });
+    const trace: LinearbotTrace = {
+      includeContext: false,
+      messageId: "automation-" + triggerKey,
+      mode: "execute",
+      openStream: true,
+      startedAtMs: nowMs(),
+      threadId: decision.sessionKey,
+    };
+    const issueClient = (thread.adapter as unknown as LinearSessionCapableAdapter)
+      .linearClient;
+    backgroundWaitUntil(
+      runThreadTurn({
+        announceStart: true,
+        applyStatus: decision.moveToInProgress,
+        botUserId: input.botUserId,
+        client: issueClient,
+        executeMessage: automationInstructionMessage(event, decision),
+        issueId: event.issueId,
+        options,
+        overrides: {},
+        thread,
+        threadKey: decision.sessionKey,
+        trace,
+      }),
+    );
+  })();
+}
+
+/**
  * Runs one agent turn on a thread's sandbox in a single, live comment. The
  * comment is posted with the first thought as a collapsed "Thinking…" section
  * that logs thoughts as the run streams (throttled), then swapped in place to
@@ -1041,6 +1137,43 @@ function assignmentInstructionMessage(
     raw: { linearbotAssignment: true },
     text: EMPTY_PROMPT_INSTRUCTION,
     threadId: threadKey,
+    timestamp: new Date().toISOString(),
+  };
+}
+
+function automationInstructionMessage(
+  event: LinearIssueWebhook,
+  decision: LinearAutomationDecision,
+): LinearbotApiMessage {
+  const reviewers = [
+    ...decision.reviewerLogins.map((login) => "@" + login),
+    ...decision.reviewerTeamSlugs.map((team) => "@" + team),
+  ];
+  const reviewerInstruction = reviewers.length
+    ? "Request review from " + reviewers.join(", ") + " when you open the PR."
+    : "Request the appropriate human reviewers using CODEOWNERS and GitHub suggestions.";
+  const text = [
+    "This Linear issue was selected by an automation policy after a new or updated issue event.",
+    "First assess whether the issue is genuinely ready and actionable. If scope, acceptance criteria, repository fit, or a dependency is unclear, do not create a PR; post one concise Linear comment naming what is missing and stop.",
+    "If it is actionable, implement it in " + (decision.githubRepository ?? "the mapped GitHub repository") + ". Use git and gh in your sandbox, run the relevant verification, open a PR that links this Linear issue, and do not merge it.",
+    "For a user-visible change, capture a real screenshot from a verified local or preview flow and include it inline in the PR and Linear update when the available tools support upload. Never fabricate a screenshot. For a non-visual change, say that no screenshot applies.",
+    reviewerInstruction,
+    "When and only when the PR exists, finish with Linear-Status: in_review so the issue can move to review. If no PR is appropriate, finish with Linear-Status: todo."
+  ].join("\n\n");
+  return {
+    attachments: [],
+    author: {
+      fullName: "Centaur automation",
+      isBot: false,
+      isMe: false,
+      userId: "linear-automation",
+      userName: "linear-automation",
+    },
+    id: "automation-" + event.issueId + "-" + event.trigger,
+    isMention: true,
+    raw: { linearbotAutomation: true },
+    text,
+    threadId: decision.sessionKey,
     timestamp: new Date().toISOString(),
   };
 }

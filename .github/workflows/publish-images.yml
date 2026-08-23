@@ -57,6 +57,10 @@ jobs:
             context: .
             dockerfile: services/linearbot/Dockerfile
             target: ""
+          - image: centaur-githubbot
+            context: .
+            dockerfile: services/githubbot/Dockerfile
+            target: ""
           - image: centaur-agent
             context: .
             dockerfile: services/sandbox/Dockerfile
@@ -149,6 +153,7 @@ jobs:
             centaur-iron-proxy
             centaur-slackbotv2
             centaur-linearbot
+            centaur-githubbot
             centaur-console
           )
 

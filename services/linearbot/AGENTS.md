@@ -22,7 +22,9 @@ thread behavior.
 - Plain comments in active threads append context without starting a turn.
   Preserve mention detection, active-thread checks, and self-message loops.
 - Issue webhooks should run only when the relevant assignee/delegate field
-  changed, not for unrelated issue updates or the bot's own status write.
+  changed, not for unrelated issue updates or the bot's own status write. A
+  verified Console policy may separately authorize a normalized create/update
+  event; keep that policy path fail-closed and isolated from direct handoff.
 - Preserve the deliberate adapter patch and workspace patch registration. If
   upstream behavior changes, add a regression test before modifying or removing
   the patch.

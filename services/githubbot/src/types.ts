@@ -90,6 +90,10 @@ export type GithubbotFetch = (
 export type GithubbotOptions = {
   apiKey?: string;
   apiUrl: string;
+  /** Console internal URL used solely for policy evaluation and workstream audit. */
+  automationApiUrl?: string;
+  /** Single-purpose credential accepted only by Console automation ingress. */
+  automationIngressToken?: string;
   /**
    * Bot's GitHub user id (numeric, as a string). Used by the adapter for
    * self-message detection; auto-detected from the token when omitted.
@@ -156,8 +160,14 @@ export type GithubbotOptions = {
   holdLabel?: string;
   /** Merge method for auto-merge: "merge" | "squash" | "rebase". Default "squash". */
   mergeMethod?: "merge" | "squash" | "rebase";
-  /** Personal access token for the bot's GitHub teammate account. */
-  token: string;
+  /** Personal access token for the bot's teammate account (legacy mode). */
+  token?: string;
+  /** GitHub App Client ID used as the JWT issuer by GitHub's App API. */
+  githubAppId?: string;
+  /** Fixed installation whose repositories this bot may handle. */
+  githubInstallationId?: number;
+  /** PEM key used only by the receiver to mint short-lived installation tokens. */
+  githubPrivateKey?: string;
   userName?: string;
   /**
    * GitHub `author_association` values allowed to drive the conversational

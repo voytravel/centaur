@@ -171,6 +171,22 @@ not translated to an environment variable or exposed to Console web pods.
 {{- end -}}
 
 {{- /*
+Githubbot can use the same fixed GitHub App installation as the Console broker,
+but it receives the PEM as a read-only file and mints its own short-lived token.
+Keep a separate rollout checksum because an operator may deliberately use a
+different App Secret for inbound webhook handling.
+*/ -}}
+{{- define "centaur.githubbotAppInstallationChecksum" -}}
+{{- $githubbot := .Values.githubbot -}}
+{{- if $githubbot.githubAppInstallation.enabled -}}
+{{- $name := required "githubbot.githubAppInstallation.existingSecretName is required when GitHub App authentication is enabled" $githubbot.githubAppInstallation.existingSecretName -}}
+{{- include "centaur.secretResourceVersion" (dict "root" . "name" $name) | quote -}}
+{{- else -}}
+{{- "disabled" | quote -}}
+{{- end -}}
+{{- end -}}
+
+{{- /*
 The upstream 1Password Connect subchart names its Service after
 `connect.applicationName` (default `onepassword-connect`) and exposes the
 API on `connect.api.httpPort` (default 8080). The Service is in the same

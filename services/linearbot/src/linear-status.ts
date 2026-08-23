@@ -11,7 +11,7 @@ import { isJsonObject, stringValue } from "./utils";
 // only owns issues delegated to it.
 
 /** Terminal status the agent can signal in its final answer. */
-export type LinearStatusMarker = "done" | "in_progress" | "todo";
+export type LinearStatusMarker = "done" | "in_progress" | "todo" | "in_review";
 
 export type LinearWorkflowState = {
   id: string;
@@ -115,7 +115,7 @@ function workflowStates(nodes: unknown): LinearWorkflowState[] {
   return states;
 }
 
-const MARKER_TARGET_TYPES: Record<LinearStatusMarker, string> = {
+const MARKER_TARGET_TYPES: Record<Exclude<LinearStatusMarker, "in_review">, string> = {
   done: "completed",
   in_progress: "started",
   todo: "unstarted",
@@ -160,6 +160,9 @@ export function markerTargetState(
   status: LinearIssueStatus,
   marker: LinearStatusMarker,
 ): LinearWorkflowState | undefined {
+  if (marker === "in_review") {
+    return reviewWorkflowState(status);
+  }
   if (marker === "done" && isReviewState(status)) return undefined;
   const targetType = MARKER_TARGET_TYPES[marker];
   if (status.stateType === targetType) return undefined;
@@ -170,8 +173,15 @@ function isReviewState(status: LinearIssueStatus): boolean {
   return REVIEW_STATE_NAME_PATTERN.test(status.stateName ?? "");
 }
 
+function reviewWorkflowState(status: LinearIssueStatus): LinearWorkflowState | undefined {
+  if (isReviewState(status)) return undefined;
+  return status.states
+    .filter((state) => REVIEW_STATE_NAME_PATTERN.test(state.name))
+    .sort((a, b) => a.position - b.position)[0];
+}
+
 const STATUS_MARKER_PATTERN =
-  /^[ \t]*linear-status:[ \t]*(done|in[-_ ]?progress|todo)[ \t]*$/gim;
+  /^[ \t]*linear-status:[ \t]*(done|in[-_ ]?progress|in[-_ ]?review|todo)[ \t]*$/gim;
 
 /**
  * Extracts the agent's terminal `Linear-Status: …` marker line from its final
@@ -190,7 +200,9 @@ export function extractStatusMarker(text: string): {
         ? "done"
         : normalized === "todo"
           ? "todo"
-          : "in_progress";
+          : normalized === "inreview"
+            ? "in_review"
+            : "in_progress";
     return "";
   });
   if (!marker) return { text };

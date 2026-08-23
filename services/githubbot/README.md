@@ -7,9 +7,10 @@ and the bot answers *in the thread* with a comment. It's built on the official
 the session logic (`session-api.ts`) and rendering are the same as the other bots; the Rust `api-rs`
 control plane is unchanged (`github:…` thread keys flow through identically).
 
-The bot acts as a **real GitHub teammate**: it authenticates with a personal access token on a
-dedicated machine-user account, so it can be `@`-mentioned, assigned, and **requested as a
-reviewer** like any other collaborator.
+The bot acts as a **real GitHub teammate**: it authenticates with either a
+personal access token or a fixed GitHub App installation, so it can be
+`@`-mentioned, assigned, and **requested as a reviewer** like any other
+collaborator.
 
 ## Behavior
 
@@ -63,8 +64,8 @@ reviewer** like any other collaborator.
 
 For PRs the bot **owns** — i.e. **assigned to the bot account** — githubbot drives the PR toward merge
 by reacting to lifecycle webhooks. Ownership is purely an assignment mechanism: assign a PR to the bot
-to have it take over, and unassign to hand it back. It only ever acts on owned PRs, and on a dedicated
-management thread (`github-manage:{owner}/{repo}:{n}`); the agent does its GitHub writes via `gh`.
+to have it take over, and unassign to hand it back. Bot-owned work runs on a dedicated management thread
+(`github-manage:{owner}/{repo}:{n}`); the agent does its GitHub writes via `gh`.
 
 - **Take over on assign.** Being assigned a PR is the explicit signal to take it over, so the bot
   immediately evaluates CI (fixing red or merging green) rather than waiting for the next lifecycle
@@ -90,6 +91,27 @@ management thread (`github-manage:{owner}/{repo}:{n}`); the agent does its GitHu
   An @-mention in the conversation of an **issue assigned to the bot** likewise runs in that issue's
   work session (`github-issue:…`), so the bot replies with the context of the work it's doing on it.
 
+## Repository automation policies
+
+When `CENTAUR_AUTOMATION_API_URL` and `CENTAUR_AUTOMATION_INGRESS_TOKEN` are
+configured, signature-verified lifecycle events are also reduced to a compact
+event summary and sent to Console. Console evaluates the repository's
+declarative policy and persists its audit/workstream record. It never receives
+the raw webhook body.
+
+An **Act** policy can explicitly extend automation to eligible non-owned PRs:
+automatic reviews, review-feedback repair, settled failing-check repair,
+conflict resolution, and deterministic auto-merge. Every policy-driven action
+continues the PR's existing `github-manage:{owner}/{repo}:{n}` session. The
+policy route skips bot-owned PRs because their legacy lifecycle route already
+owns that behavior.
+
+No policy request is trusted without both a verified GitHub signature and the
+single-purpose Console ingress credential. An unavailable or rejecting Console
+fails closed, leaving normal requested-review, assigned-issue, and comment
+paths unchanged. See [Repository Automations](/operate/repository-automations)
+for rollout and operator configuration.
+
 > **Scope.** v2 targets **same-repo PRs on repos you control** (where you own the webhook). The
 > fork → upstream contribution flow (e.g. PRs against `paradigmxyz/centaur`) is out of scope: it
 > needs the upstream repo to deliver webhooks to this bot, which isn't yours to configure.
@@ -113,17 +135,17 @@ sandbox. Both assume the **single replica** the chart runs (`replicaCount: 1`).
 
 ## Auth
 
-A personal access token for the bot's GitHub teammate account is required (`GITHUB_TOKEN`). As a
-normal user account it is natively mentionable, assignable, and requestable as a reviewer, and the
-token inherits that user's permissions. Scopes: **`repo`** (read PRs/issues, post and edit comments,
+A personal access token for the bot's GitHub teammate account (`GITHUB_TOKEN`) is supported for
+legacy deployments. As a normal user account it is natively mentionable, assignable, and requestable
+as a reviewer, and the token inherits that user's permissions. Scopes: **`repo`** (read PRs/issues, post and edit comments,
 add reactions) — and, when the agent pushes branches or opens PRs from its sandbox, **`workflow`**.
 
-Keep this distinct from the `GITHUB_TOKEN` used by the repo-cache / sandbox tooling — that one is the
-agent's git-operations token; this one is the bot's own identity. The chart wires githubbot's token
-from a separate `GITHUBBOT_TOKEN` secret key to avoid collision.
-
-GitHub App auth is also supported by the adapter (`GITHUB_APP_ID` / `GITHUB_PRIVATE_KEY`), but the
-PAT-teammate model is what we run.
+For new deployments, prefer a fixed GitHub App installation: set `GITHUB_APP_ID`
+(the App Client ID), `GITHUB_INSTALLATION_ID`, and either `GITHUB_PRIVATE_KEY`
+or `GITHUB_PRIVATE_KEY_FILE`. The adapter mints short-lived installation tokens
+itself; the PEM remains local to Githubbot and is never passed to an agent
+sandbox. Configure exactly one authentication mode. The chart wires legacy PAT
+mode from a separate `GITHUBBOT_TOKEN` secret key to avoid collision.
 
 Webhook events to subscribe: **Issue comments**, **Pull request review comments**, **Issues**, **Pull
 requests**, **Pull request reviews**, **Check runs**, **Check suites**, and **Workflow runs**
@@ -133,11 +155,14 @@ requests**, **Pull request reviews**, **Check runs**, **Check suites**, and **Wo
 
 | Var | Required | Notes |
 |-----|----------|-------|
-| `GITHUB_TOKEN` | ✅ | PAT for the bot's teammate account. |
+| `GITHUB_TOKEN` | One mode | PAT for the bot's teammate account. |
+| `GITHUB_APP_ID`, `GITHUB_INSTALLATION_ID`, `GITHUB_PRIVATE_KEY` or `_FILE` | One mode | Fixed GitHub App installation credentials; preferred over a PAT. |
 | `GITHUB_WEBHOOK_SECRET` | ✅ | Webhook signing secret (or `GITHUBBOT_WEBHOOK_SECRET`). |
 | `GITHUB_BOT_USERNAME` | ✅ | The bot account's GitHub login — drives `@`-mention and requested-reviewer matching (or `GITHUBBOT_USER_NAME`). |
 | `GITHUBBOT_DATABASE_URL` | ✅ | Postgres for chat-SDK state (falls back to `DATABASE_URL` / `POSTGRES_URL`). |
 | `CENTAUR_API_URL` | — | api-rs control plane, default `http://127.0.0.1:8080`. |
+| `CENTAUR_AUTOMATION_API_URL` | — | Console base URL for verified policy-event evaluation. Both automation variables must be set to enable it. |
+| `CENTAUR_AUTOMATION_INGRESS_TOKEN` | — | Single-purpose bearer for Console's normalized automation-event endpoint; not an operator API key. |
 | `GITHUBBOT_API_KEY` | — | Dedicated bearer sent to api-rs. |
 | `GITHUBBOT_DEFAULT_HARNESS` | — | Harness for new threads without an inline flag, default `codex`. |
 | `GITHUBBOT_REVIEW_PROMPT` | — | Full review methodology, inline. Replaces the bundled default verbatim. |
