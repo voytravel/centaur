@@ -216,6 +216,52 @@ class AutomationPolicyTest < ActiveSupport::TestCase
     assert_equal [ "evaluate_merge" ], check["actions"]
   end
 
+  test "keeps valid managed-source provenance outside provider evaluation settings" do
+    policy = AutomationPolicy.create!(
+      name: "Managed widgets",
+      provider: "github",
+      repository: "acme/managed-widgets",
+      enabled: true,
+      mode: "observe",
+      created_by: users(:acme_admin),
+      settings: {
+        "github" => { "review" => "all_eligible" },
+        "_centaur_managed_source" => {
+          "kind" => "git",
+          "repository" => "acme/infra",
+          "path" => "automation/policies.json",
+          "revision" => "a" * 40,
+          "content_sha256" => "b" * 64
+        }
+      }
+    )
+
+    assert_predicate policy, :source_managed?
+    assert_equal "acme/infra:automation/policies.json@aaaaaaaaaaaa", policy.managed_source_label
+    assert_equal "all_eligible", policy.github_settings["review"]
+  end
+
+  test "rejects malformed managed-source provenance" do
+    policy = AutomationPolicy.new(
+      name: "Bad source",
+      provider: "github",
+      repository: "acme/widgets",
+      created_by: users(:acme_admin),
+      settings: {
+        "_centaur_managed_source" => {
+          "kind" => "git",
+          "repository" => "acme/infra",
+          "path" => "../policies.json",
+          "revision" => "a" * 40,
+          "content_sha256" => "b" * 64
+        }
+      }
+    )
+
+    assert_not policy.valid?
+    assert_includes policy.errors[:settings], "has invalid managed source metadata"
+  end
+
   private
 
   def github_policy(overrides = {})

@@ -6,6 +6,8 @@ class AutomationPolicy < ApplicationRecord
   GITHUB_REVIEW_MODES = %w[off assigned_or_mentioned all_eligible].freeze
   GITHUB_REPAIR_MODES = %w[off observe bot_owned explicit eligible].freeze
   LINEAR_ISSUE_MODES = %w[off ready_issues].freeze
+  MANAGED_SOURCE_KEY = "_centaur_managed_source".freeze
+  MANAGED_SOURCE_FIELDS = %w[kind repository path revision content_sha256].freeze
 
   GITHUB_REVIEW_ACTIONS = %w[opened reopened ready_for_review synchronize].freeze
   GITHUB_CONFLICT_ACTIONS = %w[synchronize edited ready_for_review].freeze
@@ -37,6 +39,7 @@ class AutomationPolicy < ApplicationRecord
   validate :linear_scope_is_unique
   validate :execution_role_is_safe_for_automation
   validate :settings_are_valid
+  validate :managed_source_is_valid
 
   after_update_commit :reconcile_workstream_authorizations,
                       if: :authorization_changed?
@@ -76,6 +79,27 @@ class AutomationPolicy < ApplicationRecord
       config = linear_settings
       "issues: #{config["issue"].tr("_", " ")} · repo: #{config["github_repository"].presence || "not mapped"}"
     end
+  end
+
+  # Deployment reconciliation stamps source-managed policies with a compact,
+  # non-secret provenance record. The source is intentionally separate from the
+  # provider settings so it cannot influence policy evaluation.
+  def source_managed?
+    managed_source.present?
+  end
+
+  def managed_source
+    source = normalized_managed_source
+    return unless managed_source_valid?(source)
+
+    source.slice(*MANAGED_SOURCE_FIELDS)
+  end
+
+  def managed_source_label
+    source = managed_source
+    return unless source
+
+    "#{source.fetch("repository")}:#{source.fetch("path")}@#{source.fetch("revision").first(12)}"
   end
 
   # Evaluates a normalized, metadata-only ingress event. This intentionally
@@ -186,6 +210,32 @@ class AutomationPolicy < ApplicationRecord
         errors.add(:settings, "needs a GitHub repository for ready issue automation")
       end
     end
+  end
+
+  def managed_source_is_valid
+    return unless settings.key?(MANAGED_SOURCE_KEY)
+
+    source = normalized_managed_source
+    return if managed_source_valid?(source)
+
+    errors.add(:settings, "has invalid managed source metadata")
+  end
+
+  def normalized_managed_source
+    source = settings[MANAGED_SOURCE_KEY]
+    source.deep_stringify_keys if source.is_a?(Hash)
+  end
+
+  def managed_source_valid?(source)
+    path = source["path"].to_s if source.is_a?(Hash)
+    source.is_a?(Hash) &&
+      source.keys.sort == MANAGED_SOURCE_FIELDS.sort &&
+      source["kind"] == "git" &&
+      source["repository"].to_s.match?(%r{\A[^/\s]+/[^/\s]+\z}) &&
+      path.match?(%r{\A[A-Za-z0-9][A-Za-z0-9._/-]*\z}) &&
+      !path.split("/").include?("..") &&
+      source["revision"].to_s.match?(/\A[0-9a-f]{40}\z/) &&
+      source["content_sha256"].to_s.match?(/\A[0-9a-f]{64}\z/)
   end
 
   def evaluate_github(event)

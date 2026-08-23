@@ -2,6 +2,7 @@ class Console::AutomationPoliciesController < ApplicationController
   layout "console"
   before_action :require_admin
   before_action :set_policy, only: %i[edit update destroy]
+  before_action :reject_source_managed_policy_mutation, only: %i[edit update destroy]
   before_action :load_execution_roles, only: %i[new create edit update]
 
   def index
@@ -144,6 +145,13 @@ class Console::AutomationPoliciesController < ApplicationController
 
   def load_execution_roles
     @automation_roles = Role.automation_execution_roles.order(:name, :id)
+  end
+
+  def reject_source_managed_policy_mutation
+    return unless @policy.source_managed?
+
+    redirect_to console_automation_policies_path,
+                alert: "This policy is managed in #{@policy.managed_source_label}. Update its reviewed source and deploy."
   end
 
   # Execution records belong to Centaur's durable session API, not the
