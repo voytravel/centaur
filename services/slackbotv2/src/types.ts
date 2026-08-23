@@ -140,6 +140,13 @@ export type SlackbotV2Options = {
   botToken: string
   botUserId?: string
   /**
+   * Continue a thread after a valid initial mention (or allowlisted DM): later
+   * human thread replies are forwarded without another mention. This stays
+   * disabled by default, and unmentioned replies never gain requester
+   * credential context or deterministic stop-command authority.
+   */
+  continueThreadReplies?: boolean
+  /**
    * Public origin of the Console UI (same value the Console itself uses,
    * `CENTAUR_CONSOLE_PUBLIC_URL`). When set, the first assistant message in a
    * Slack thread gets an "Open chat in Console" context link. Unset skips the

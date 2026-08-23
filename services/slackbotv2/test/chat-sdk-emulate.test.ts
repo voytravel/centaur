@@ -2494,6 +2494,160 @@ describe('slackbotv2', () => {
     await Promise.all(firstWaits)
   })
 
+  it('continues an unmentioned reply in a subscribed thread when enabled', async () => {
+    bot = createTestBot({ continueThreadReplies: true })
+
+    const parent = await postUserMessage(`<@${BOT_USER_ID}> start this thread`)
+    const firstWaits: Promise<unknown>[] = []
+    const firstResponse = await bot.app.request(
+      '/api/webhooks/slack',
+      signedSlackEvent({
+        event_id: 'Ev-slackbotv2-thread-continuation-initial-mention',
+        event: {
+          type: 'app_mention',
+          user: USER_ID,
+          channel: CHANNEL_ID,
+          team: TEAM_ID,
+          ts: parent.ts,
+          text: `<@${BOT_USER_ID}> start this thread`
+        }
+      }),
+      {},
+      waitUntilContext(firstWaits)
+    )
+    expect(firstResponse.status).toBe(200)
+    await Promise.all(firstWaits)
+    expect(codexApi.executes).toHaveLength(1)
+
+    const followUp = await postUserMessage('Continue with the implementation details.', parent.ts)
+    const followUpWaits: Promise<unknown>[] = []
+    const followUpResponse = await bot.app.request(
+      '/api/webhooks/slack',
+      signedSlackEvent({
+        event_id: 'Ev-slackbotv2-thread-continuation-unmentioned-reply',
+        event: {
+          type: 'message',
+          user: USER_ID,
+          channel: CHANNEL_ID,
+          team: TEAM_ID,
+          ts: followUp.ts,
+          thread_ts: parent.ts,
+          text: 'Continue with the implementation details.'
+        }
+      }),
+      {},
+      waitUntilContext(followUpWaits)
+    )
+    expect(followUpResponse.status).toBe(200)
+    await Promise.all(followUpWaits)
+
+    expect(codexApi.creates.map(create => create.threadKey)).toEqual([
+      threadKey(parent.ts),
+      threadKey(parent.ts)
+    ])
+    expect(codexApi.appends).toHaveLength(2)
+    expect(sessionMessageTexts(codexApi.appends[1]!.body.messages)).toEqual([
+      'Continue with the implementation details.'
+    ])
+    expect(codexApi.appends[1]!.body.messages[0]!.metadata.is_mention).toBe(false)
+    expect(codexApi.executes).toHaveLength(2)
+  })
+
+  it('steers an active execution with an enabled unmentioned thread reply without interrupting it', async () => {
+    bot = createTestBot({ continueThreadReplies: true })
+    codexApi.autoRespond = false
+
+    const parent = await postUserMessage('Context before the continuing long run.')
+    const firstMention = await postUserMessage(`<@${BOT_USER_ID}> start a long run`, parent.ts)
+    const firstWaits: Promise<unknown>[] = []
+    const firstResponse = await bot.app.request(
+      '/api/webhooks/slack',
+      signedSlackEvent({
+        event_id: 'Ev-slackbotv2-enabled-long-run',
+        event: {
+          type: 'app_mention',
+          user: USER_ID,
+          channel: CHANNEL_ID,
+          team: TEAM_ID,
+          ts: firstMention.ts,
+          thread_ts: parent.ts,
+          text: `<@${BOT_USER_ID}> start a long run`
+        }
+      }),
+      {},
+      waitUntilContext(firstWaits)
+    )
+    expect(firstResponse.status).toBe(200)
+    await waitFor(() => codexApi.executes.length === 1)
+    await waitFor(() => codexApi.eventRequests.length === 1)
+    await waitFor(() => codexApi.streamCount === 1)
+
+    const followUp = await postUserMessage('Add this constraint while still running.', parent.ts)
+    const followUpWaits: Promise<unknown>[] = []
+    const followUpResponse = await bot.app.request(
+      '/api/webhooks/slack',
+      signedSlackEvent({
+        event_id: 'Ev-slackbotv2-enabled-follow-up-during-stream',
+        event: {
+          type: 'message',
+          user: USER_ID,
+          channel: CHANNEL_ID,
+          team: TEAM_ID,
+          ts: followUp.ts,
+          thread_ts: parent.ts,
+          text: 'Add this constraint while still running.'
+        }
+      }),
+      {},
+      waitUntilContext(followUpWaits)
+    )
+    expect(followUpResponse.status).toBe(200)
+    await Promise.all(followUpWaits)
+
+    const stop = await postUserMessage('stop', parent.ts)
+    const stopWaits: Promise<unknown>[] = []
+    const stopResponse = await bot.app.request(
+      '/api/webhooks/slack',
+      signedSlackEvent({
+        event_id: 'Ev-slackbotv2-enabled-unmentioned-stop-during-stream',
+        event: {
+          type: 'message',
+          user: USER_ID,
+          channel: CHANNEL_ID,
+          team: TEAM_ID,
+          ts: stop.ts,
+          thread_ts: parent.ts,
+          text: 'stop'
+        }
+      }),
+      {},
+      waitUntilContext(stopWaits)
+    )
+    expect(stopResponse.status).toBe(200)
+    await Promise.all(stopWaits)
+
+    // Each handoff idempotently create-or-reuses the same session before
+    // appending; neither unmentioned reply starts a second execution.
+    expect(codexApi.creates).toHaveLength(3)
+    expect(codexApi.creates.map(create => create.threadKey)).toEqual([
+      threadKey(parent.ts),
+      threadKey(parent.ts),
+      threadKey(parent.ts)
+    ])
+    expect(codexApi.appends).toHaveLength(3)
+    expect(sessionMessageTexts(codexApi.appends[1]!.body.messages)).toEqual([
+      'Add this constraint while still running.'
+    ])
+    expect(sessionMessageTexts(codexApi.appends[2]!.body.messages)).toEqual(['stop'])
+    expect(codexApi.appends[1]!.body.messages[0]!.metadata.is_mention).toBe(false)
+    expect(codexApi.appends[2]!.body.messages[0]!.metadata.is_mention).toBe(false)
+    expect(codexApi.executes).toHaveLength(1)
+    expect(codexApi.streamCount).toBe(1)
+
+    codexApi.closeStreams()
+    await Promise.all(firstWaits)
+  })
+
   it('does not execute a second mention while a stream is already active', async () => {
     codexApi.autoRespond = false
 
