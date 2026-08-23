@@ -52,4 +52,42 @@ class Console::AutomationPoliciesControllerTest < ActionDispatch::IntegrationTes
 
     assert_redirected_to console_threads_path
   end
+
+  test "renders the latest safe decision and reason for a workstream" do
+    policy = AutomationPolicy.create!(
+      name: "Widgets automation",
+      provider: "github",
+      repository: "acme/widgets",
+      enabled: true,
+      mode: "observe",
+      created_by: @operator,
+      settings: { "github" => { "review" => "all_eligible" } }
+    )
+    workstream = AutomationWorkstream.create!(
+      automation_policy: policy,
+      provider: "github",
+      repository: "acme/widgets",
+      session_key: "github-manage:acme/widgets:42",
+      subject_key: "github:acme/widgets:pr:42",
+      event_count: 1,
+      last_event_at: Time.current
+    )
+    AutomationEvent.create!(
+      automation_workstream: workstream,
+      provider: "github",
+      deduplication_key: "delivery-42",
+      event_type: "pull_request",
+      event_action: "opened",
+      decision: "observe",
+      action_kind: "review",
+      metadata: { "result" => { "reason" => "policy authorizes automation" } },
+      received_at: workstream.last_event_at
+    )
+
+    get console_automation_policies_url
+
+    assert_response :ok
+    assert_select "span", text: "observe"
+    assert_select ".automation-workstream-reason", text: "policy authorizes automation"
+  end
 end
