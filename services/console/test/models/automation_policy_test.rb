@@ -80,6 +80,19 @@ class AutomationPolicyTest < ActiveSupport::TestCase
 
     assert_equal "observe", result["decision"]
     assert_equal [ "implement_issue" ], result["actions"]
+
+    blocked = policy.evaluate(
+      "event_type" => "Issue",
+      "event_action" => "update",
+      "linear_team_id" => "team-1",
+      "title" => "Ship the widget",
+      "description" => "Acceptance Criteria\n- The widget is shipped.",
+      "status" => "Ready",
+      "labels" => [],
+      "blocked" => true
+    )
+    assert_equal "ignored", blocked["decision"]
+    assert_equal "issue is blocked", blocked["reason"]
   end
 
   test "ready issue policy requires a GitHub repository mapping" do

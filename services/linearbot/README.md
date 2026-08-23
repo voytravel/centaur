@@ -45,7 +45,8 @@ control plane is unchanged (`linear:…` thread keys flow through identically).
   the same issue. Best-effort.
 - **Policy-selected ready issues** → when Console has an acting Linear policy for the issue's team
   (optionally project), a new or updated issue can continue the issue-level `linear:{issueId}`
-  session without an explicit assignment. Console gates title, description, ready state, and labels;
+  session without an explicit assignment. Console gates title, description, ready state, labels, and
+  unresolved Linear blockers;
   the agent re-checks readiness, opens a linked draft PR only when the issue is actionable, requests
   the configured human reviewers, and reports verified preview/screenshot evidence for visual work
   when the repository supports it. The issue moves to In Review only after a PR exists. The policy

@@ -743,6 +743,7 @@ function handleIssueAutomation(
     }
 
     const decision = await evaluateLinearAutomation(options, {
+      blocked: issueContext.blocked,
       deduplication_key: "linear:" + event.issueId + ":" + event.trigger,
       description: issueContext.description,
       event_action: event.action,
