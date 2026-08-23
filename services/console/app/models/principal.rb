@@ -23,6 +23,10 @@ class Principal < ApplicationRecord
   include SlackChannelPermissionOwner
 
   after_commit :auto_grant_matching_oauth_credentials, on: %i[create update]
+  after_create_commit :reconcile_automation_workstream_authorizations,
+                      if: :automation_workstream_kind?
+  after_update_commit :reconcile_automation_workstream_authorizations,
+                      if: :automation_workstream_identity_changed?
   after_create_commit :enqueue_slack_channel_catalog_refresh, if: :slack_channel_catalog_refreshable?
   after_create :assign_default_roles, if: :roles_blank_for_defaulting?
   before_validation :apply_sandbox_repo_cache_label
@@ -34,7 +38,7 @@ class Principal < ApplicationRecord
   SANDBOX_REPO_CACHE_VALUES = %w[none public all].freeze
   UNKNOWN_KIND = "unknown".freeze
   KINDS = %w[
-    unknown user console_user workflow slack_channel slack_dm discord_channel linear_issue
+    unknown user console_user workflow slack_channel slack_dm discord_channel linear_issue github_pull_request
     teams_user teams_conversation
   ].freeze
   SLACK_USER_ID_FORMAT = /\A(?:[UW][A-Z0-9]{8,}|USLACK)\z/
@@ -280,6 +284,21 @@ class Principal < ApplicationRecord
 
   def auto_grant_matching_oauth_credentials
     PrincipalCredentialReconciliation.new.apply_for_principal(self)
+  end
+
+  # The platform-derived identity is the only routing input here. The
+  # workstream service then verifies that a current Act policy recorded an
+  # authorizing event before it attaches the policy-selected role.
+  def automation_workstream_kind?
+    [ "linear_issue", "github_pull_request" ].include?(kind)
+  end
+
+  def automation_workstream_identity_changed?
+    automation_workstream_kind? && (saved_change_to_kind? || saved_change_to_labels?)
+  end
+
+  def reconcile_automation_workstream_authorizations
+    AutomationPrincipalAuthorizer.reconcile_principal(self)
   end
 
   def apply_sandbox_repo_cache_label

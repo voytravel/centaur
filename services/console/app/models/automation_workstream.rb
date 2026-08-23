@@ -4,6 +4,8 @@ class AutomationWorkstream < ApplicationRecord
   STATES = %w[idle active blocked completed].freeze
 
   belongs_to :automation_policy, optional: true
+  belongs_to :principal, optional: true
+  belongs_to :authorization_role, class_name: "Role", optional: true
   has_many :automation_events, dependent: :delete_all
 
   normalizes :provider, :subject_key, :session_key, :repository,

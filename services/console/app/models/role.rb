@@ -14,6 +14,7 @@ class Role < ApplicationRecord
 
   URL_SAFE_FORMAT = /\A[A-Za-z0-9\-._~]+\z/
   URL_SAFE_MESSAGE = "must contain only URL-safe characters (A-Z, a-z, 0-9, -, ., _, ~)"
+  AUTOMATION_EXECUTION_LABEL = "centaur.automation_execution".freeze
 
   validates :foreign_id, uniqueness: { allow_nil: true },
             format: { with: URL_SAFE_FORMAT, message: URL_SAFE_MESSAGE }, allow_nil: true
@@ -43,6 +44,17 @@ class Role < ApplicationRecord
       where(id: role_ids, assign_by_default: false)
         .update_all(assign_by_default: true, updated_at: now)
     end
+  end
+
+  # An operator must deliberately mark a role as safe for autonomous repository
+  # work. This keeps Console's policy UI from offering broad operator, cloud,
+  # or Slack roles as an execution capability.
+  def self.automation_execution_roles
+    where("labels ->> ? = ?", AUTOMATION_EXECUTION_LABEL, "true")
+  end
+
+  def automation_execution_role?
+    labels.to_h[AUTOMATION_EXECUTION_LABEL].to_s == "true"
   end
 
   private

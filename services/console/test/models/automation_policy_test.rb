@@ -95,6 +95,38 @@ class AutomationPolicyTest < ActiveSupport::TestCase
     assert_includes policy.errors[:settings], "needs a GitHub repository for ready issue automation"
   end
 
+  test "act mode requires an explicit execution role" do
+    policy = AutomationPolicy.new(
+      name: "No capability boundary",
+      provider: "github",
+      repository: "acme/widgets",
+      mode: "act",
+      created_by: users(:acme_admin)
+    )
+
+    assert_not policy.valid?
+    assert_includes policy.errors[:execution_role], "can't be blank"
+  end
+
+  test "act mode rejects a role that is not approved for repository automation" do
+    generic_role = Role.create!(
+      foreign_id: "generic-test-#{SecureRandom.hex(6)}",
+      name: "Generic role",
+      created_by: users(:acme_admin)
+    )
+    policy = AutomationPolicy.new(
+      name: "Unsafe capability boundary",
+      provider: "github",
+      repository: "acme/widgets",
+      mode: "act",
+      execution_role: generic_role,
+      created_by: users(:acme_admin)
+    )
+
+    assert_not policy.valid?
+    assert_includes policy.errors[:execution_role], "is not approved for autonomous repository automation"
+  end
+
   test "allows one team-wide and one project-specific Linear policy" do
     AutomationPolicy.create!(
       name: "Team policy",
@@ -180,8 +212,18 @@ class AutomationPolicyTest < ActiveSupport::TestCase
         provider: "github",
         repository: "acme/widgets",
         enabled: true,
+        execution_role: automation_role,
         created_by: users(:acme_admin)
       }.merge(overrides)
+    )
+  end
+
+  def automation_role
+    @automation_role ||= Role.create!(
+      foreign_id: "automation-test-#{SecureRandom.hex(6)}",
+      name: "Automation test role",
+      labels: { Role::AUTOMATION_EXECUTION_LABEL => "true" },
+      created_by: users(:acme_admin)
     )
   end
 end

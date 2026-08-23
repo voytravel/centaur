@@ -32,6 +32,7 @@ const SLACK_DM_KIND: &str = "slack_dm";
 const SLACK_CHANNEL_KIND: &str = "slack_channel";
 const DISCORD_CHANNEL_KIND: &str = "discord_channel";
 const LINEAR_ISSUE_KIND: &str = "linear_issue";
+const GITHUB_PULL_REQUEST_KIND: &str = "github_pull_request";
 const TEAMS_USER_KIND: &str = "teams_user";
 const TEAMS_CONVERSATION_KIND: &str = "teams_conversation";
 
@@ -151,6 +152,32 @@ pub fn derive_principal_with_slack_team(
                 .map(|name| format!("Linear Issue #{name}"))
                 .unwrap_or_else(|| format!("Linear Issue {issue_id}")),
             kind: Some(LINEAR_ISSUE_KIND.to_owned()),
+            slack_user_id: None,
+            slack_channel_id: None,
+            slack_team_id: None,
+            labels,
+        });
+    }
+
+    // GitHub's comment, requested-review, and management session families all
+    // refer to the same pull request. Key them by repository + PR number so an
+    // automation policy can attach its selected execution role to that one
+    // durable principal without granting an unrelated repository or PR.
+    if let Some((repository, number)) = parse_github_pull_request(thread_key) {
+        let repository = repository.to_ascii_lowercase();
+        let mut labels = BTreeMap::new();
+        labels.insert("github_repository".to_owned(), repository.clone());
+        labels.insert("github_pull_request_number".to_owned(), number.to_owned());
+        return Ok(PrincipalRef {
+            foreign_id: format!(
+                "github-pull-request-{}-{}",
+                slugify(&repository),
+                slugify(number)
+            ),
+            name: display_name
+                .map(|name| format!("GitHub Pull Request {name}"))
+                .unwrap_or_else(|| format!("GitHub Pull Request {repository}#{number}")),
+            kind: Some(GITHUB_PULL_REQUEST_KIND.to_owned()),
             slack_user_id: None,
             slack_channel_id: None,
             slack_team_id: None,
@@ -354,6 +381,34 @@ fn parse_linear_issue(thread_key: &str) -> Option<&str> {
         .next()
         .map(str::trim)
         .filter(|issue| !issue.is_empty())
+}
+
+/// Extract the canonical repository + PR number from GitHub's session-key
+/// families. GitHub issues intentionally stay outside this mapping: only a
+/// pull-request policy may attach an execution role here.
+fn parse_github_pull_request(thread_key: &str) -> Option<(&str, &str)> {
+    let rest = thread_key
+        .strip_prefix("github:")
+        .or_else(|| thread_key.strip_prefix("github-manage:"))
+        .or_else(|| thread_key.strip_prefix("github-review:"))?;
+    let mut segments = rest.split(':').map(str::trim);
+    let repository = segments.next()?;
+    let number = segments.next()?;
+    // `github:<repo>:issue:<number>` is a GitHub issue, not a PR. PR review
+    // comment keys have further `:rc:<id>` segments, which are deliberately
+    // ignored after the positive PR number.
+    if number == "issue" || !number.chars().all(|character| character.is_ascii_digit()) {
+        return None;
+    }
+    let (owner, repo) = repository.split_once('/')?;
+    if owner.is_empty()
+        || repo.is_empty()
+        || owner.contains(char::is_whitespace)
+        || repo.contains(char::is_whitespace)
+    {
+        return None;
+    }
+    Some((repository, number))
 }
 
 /// Parse the official Chat SDK Teams adapter key:
@@ -606,6 +661,36 @@ mod tests {
     fn linear_issue_level_thread_keys_on_the_issue() {
         let principal = derive_principal("linear:issue-1", None, None);
         assert_eq!(principal.foreign_id, "linear-issue-issue-1");
+    }
+
+    #[test]
+    fn github_pull_request_session_families_share_one_principal() {
+        let comment = derive_principal("github:VoyTravel/Widgets:42:rc:9", None, None);
+        let management = derive_principal("github-manage:voytravel/widgets:42", None, None);
+        let review = derive_principal("github-review:voytravel/widgets:42", None, None);
+
+        assert_eq!(comment.foreign_id, "github-pull-request-voytravel-widgets-42");
+        assert_eq!(comment.foreign_id, management.foreign_id);
+        assert_eq!(comment.foreign_id, review.foreign_id);
+        assert_eq!(comment.kind.as_deref(), Some("github_pull_request"));
+        assert_eq!(
+            comment.labels.get("github_repository").map(String::as_str),
+            Some("voytravel/widgets")
+        );
+        assert_eq!(
+            comment
+                .labels
+                .get("github_pull_request_number")
+                .map(String::as_str),
+            Some("42")
+        );
+    }
+
+    #[test]
+    fn github_issue_sessions_do_not_receive_pull_request_identity() {
+        let principal = derive_principal("github:voytravel/widgets:issue:42", None, None);
+        assert_eq!(principal.kind, None);
+        assert!(principal.foreign_id.starts_with("thread-github-voytravel-widgets-issue-42"));
     }
 
     #[test]

@@ -2,10 +2,11 @@ class Console::AutomationPoliciesController < ApplicationController
   layout "console"
   before_action :require_admin
   before_action :set_policy, only: %i[edit update destroy]
+  before_action :load_execution_roles, only: %i[new create edit update]
 
   def index
-    @policies = AutomationPolicy.includes(:created_by).order(:provider, :repository, :linear_team_id, :id)
-    @workstreams = AutomationWorkstream.includes(:automation_policy)
+    @policies = AutomationPolicy.includes(:created_by, :execution_role).order(:provider, :repository, :linear_team_id, :id)
+    @workstreams = AutomationWorkstream.includes(:automation_policy, :principal, :authorization_role)
       .order(last_event_at: :desc, id: :desc)
       .limit(30)
   end
@@ -51,7 +52,8 @@ class Console::AutomationPoliciesController < ApplicationController
   def policy_attributes
     values = policy_params
     provider = values.fetch(:provider)
-    common = values.slice(:name, :provider, :repository, :linear_team_id, :linear_project_id, :enabled, :mode)
+    common = values.slice(:name, :provider, :repository, :linear_team_id, :linear_project_id,
+                          :execution_role_id, :enabled, :mode)
     common[:settings] =
       if provider == "github"
         {
@@ -90,6 +92,7 @@ class Console::AutomationPoliciesController < ApplicationController
       :repository,
       :linear_team_id,
       :linear_project_id,
+      :execution_role_id,
       :enabled,
       :mode,
       :github_review_mode,
@@ -117,5 +120,9 @@ class Console::AutomationPoliciesController < ApplicationController
 
   def boolean_value(value)
     ActiveModel::Type::Boolean.new.cast(value)
+  end
+
+  def load_execution_roles
+    @automation_roles = Role.automation_execution_roles.order(:name, :id)
   end
 end

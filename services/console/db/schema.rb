@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_08_23_130000) do
+ActiveRecord::Schema[8.1].define(version: 2026_08_23_130100) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
   enable_extension "pg_search"
@@ -48,6 +48,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_08_23_130000) do
     t.datetime "created_at", null: false
     t.bigint "created_by_id", null: false
     t.boolean "enabled", default: true, null: false
+    t.bigint "execution_role_id"
     t.string "linear_project_id"
     t.string "linear_team_id"
     t.string "mode", default: "observe", null: false
@@ -58,25 +59,30 @@ ActiveRecord::Schema[8.1].define(version: 2026_08_23_130000) do
     t.datetime "updated_at", null: false
     t.index "provider, linear_team_id, COALESCE(linear_project_id, ''::character varying)", name: "index_automation_policies_unique_linear_scope", unique: true, where: "((provider)::text = 'linear'::text)"
     t.index ["created_by_id"], name: "index_automation_policies_on_created_by_id"
+    t.index ["execution_role_id"], name: "index_automation_policies_on_execution_role_id"
     t.index ["provider", "linear_team_id", "linear_project_id"], name: "index_automation_policies_on_linear_scope"
     t.index ["provider", "repository"], name: "index_automation_policies_on_provider_and_repository", unique: true, where: "(repository IS NOT NULL)"
   end
 
   create_table "automation_workstreams", force: :cascade do |t|
+    t.bigint "authorization_role_id"
     t.bigint "automation_policy_id"
     t.datetime "created_at", null: false
     t.integer "event_count", default: 0, null: false
     t.datetime "last_event_at"
     t.string "last_execution_id"
     t.jsonb "metadata", default: {}, null: false
+    t.bigint "principal_id"
     t.string "provider", null: false
     t.string "repository"
     t.string "session_key", null: false
     t.string "state", default: "idle", null: false
     t.string "subject_key", null: false
     t.datetime "updated_at", null: false
+    t.index ["authorization_role_id"], name: "index_automation_workstreams_on_authorization_role_id"
     t.index ["automation_policy_id"], name: "index_automation_workstreams_on_automation_policy_id"
     t.index ["last_event_at"], name: "index_automation_workstreams_on_last_event_at"
+    t.index ["principal_id"], name: "index_automation_workstreams_on_principal_id"
     t.index ["provider", "subject_key"], name: "index_automation_workstreams_on_provider_and_subject", unique: true
   end
 
@@ -612,8 +618,11 @@ ActiveRecord::Schema[8.1].define(version: 2026_08_23_130000) do
 
   add_foreign_key "api_keys", "users"
   add_foreign_key "automation_events", "automation_workstreams"
+  add_foreign_key "automation_policies", "roles", column: "execution_role_id"
   add_foreign_key "automation_policies", "users", column: "created_by_id"
   add_foreign_key "automation_workstreams", "automation_policies"
+  add_foreign_key "automation_workstreams", "principals"
+  add_foreign_key "automation_workstreams", "roles", column: "authorization_role_id"
   add_foreign_key "aws_auth_secrets", "users", column: "created_by_id"
   add_foreign_key "broker_credentials", "oauth_apps"
   add_foreign_key "broker_credentials", "users", column: "created_by_id"

@@ -20,7 +20,10 @@ class AutomationEventIngestor
     # *current* policy before authorizing another ingress attempt. Disabling or
     # narrowing a policy therefore takes effect immediately rather than letting
     # an old recorded `act` decision revive work on a webhook redelivery.
-    return response_for(existing, existing.automation_workstream, policy_outcome(policy), policy) if existing
+    if existing
+      AutomationPrincipalAuthorizer.reconcile_workstream(existing.automation_workstream)
+      return response_for(existing, existing.automation_workstream, policy_outcome(policy), policy)
+    end
 
     return no_policy_response unless policy
 
@@ -44,6 +47,7 @@ class AutomationEventIngestor
         state: outcome["decision"] == "act" ? "active" : workstream.state
       )
     end
+    AutomationPrincipalAuthorizer.reconcile_workstream(workstream)
 
     response_for(record, workstream, nil, policy)
   rescue ActiveRecord::RecordNotUnique
@@ -52,6 +56,7 @@ class AutomationEventIngestor
       deduplication_key: @event.fetch("deduplication_key")
     )
     policy = resolve_policy
+    AutomationPrincipalAuthorizer.reconcile_workstream(existing.automation_workstream)
     response_for(existing, existing.automation_workstream, policy_outcome(policy), policy)
   end
 

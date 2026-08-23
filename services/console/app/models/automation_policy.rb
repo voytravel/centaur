@@ -13,6 +13,7 @@ class AutomationPolicy < ApplicationRecord
   CHECK_EVENT_TYPES = %w[check_run check_suite status workflow_run].freeze
 
   belongs_to :created_by, class_name: "User"
+  belongs_to :execution_role, class_name: "Role", optional: true
   has_many :automation_workstreams, dependent: :nullify
 
   normalizes :name, :provider, with: ->(value) { value.to_s.strip }
@@ -25,6 +26,7 @@ class AutomationPolicy < ApplicationRecord
   validates :name, presence: true, length: { maximum: 120 }
   validates :provider, inclusion: { in: PROVIDERS }
   validates :mode, inclusion: { in: MODES }
+  validates :execution_role, presence: true, if: :act?
   validates :repository, format: {
     with: %r{\A[^/\s]+/[^/\s]+\z},
     message: "must be an owner/repository name"
@@ -33,7 +35,12 @@ class AutomationPolicy < ApplicationRecord
   validates :linear_team_id, presence: true, if: :linear?
   validates :repository, uniqueness: { scope: :provider }, if: :github?
   validate :linear_scope_is_unique
+  validate :execution_role_is_safe_for_automation
   validate :settings_are_valid
+
+  after_update_commit :reconcile_workstream_authorizations,
+                      if: :authorization_changed?
+  before_destroy :revoke_workstream_authorizations
 
   def github?
     provider == "github"
@@ -41,6 +48,10 @@ class AutomationPolicy < ApplicationRecord
 
   def linear?
     provider == "linear"
+  end
+
+  def act?
+    mode == "act"
   end
 
   def github_settings
@@ -151,6 +162,13 @@ class AutomationPolicy < ApplicationRecord
     )
     relation = relation.where.not(id: id) if persisted?
     errors.add(:linear_project_id, "already has a policy in this team") if relation.exists?
+  end
+
+  def execution_role_is_safe_for_automation
+    return unless act? && execution_role
+    return if execution_role.automation_execution_role?
+
+    errors.add(:execution_role, "is not approved for autonomous repository automation")
   end
 
   def settings_are_valid
@@ -286,5 +304,17 @@ class AutomationPolicy < ApplicationRecord
 
   def ignored(reason)
     { "decision" => "ignored", "reason" => reason, "actions" => [] }
+  end
+
+  def authorization_changed?
+    saved_change_to_enabled? || saved_change_to_mode? || saved_change_to_execution_role_id?
+  end
+
+  def reconcile_workstream_authorizations
+    AutomationPrincipalAuthorizer.reconcile_policy(self)
+  end
+
+  def revoke_workstream_authorizations
+    AutomationPrincipalAuthorizer.revoke_policy(self)
   end
 end
