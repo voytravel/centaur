@@ -49,8 +49,11 @@ control plane is unchanged (`linear:…` thread keys flow through identically).
   unresolved Linear blockers;
   the agent re-checks readiness, opens a linked draft PR only when the issue is actionable, requests
   the configured human reviewers, and reports verified preview/screenshot evidence for visual work
-  when the repository supports it. The issue moves to In Review only after a PR exists. The policy
-  is disabled by default and starts in Observe mode.
+  when the repository supports it. The PR title must begin with the exact Linear identifier from
+  the injected issue context, which creates durable review/release evidence without relying on an
+  LLM to infer a link. The instruction prohibits closing magic words in the PR body, so a merge
+  cannot imply deployment or move the issue to Done. The issue moves to In Review only after a PR
+  exists. The policy is disabled by default and starts in Observe mode.
 - **Ownership contract**: when the issue is assigned or delegated to the bot — on the assignment
   turn AND on comment turns where the bot is the delegate — an ownership note is injected so the
   agent carries the work forward (and knows how to signal status), not just answers, plus the

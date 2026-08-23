@@ -757,6 +757,16 @@ describe("linearbot comment-thread pipeline", () => {
         text.includes("selected by an automation policy"),
       ),
     ).toBe(true);
+    expect(
+      executeInputTexts(threadKey).some((text) =>
+        text.includes("exact Linear issue identifier"),
+      ),
+    ).toBe(true);
+    expect(
+      executeInputTexts(threadKey).some((text) =>
+        text.includes("do not use closing magic words"),
+      ),
+    ).toBe(true);
     const executionsBeforeRedelivery = codexApi.executes.filter(
       (execution) => execution.threadKey === threadKey,
     ).length;
