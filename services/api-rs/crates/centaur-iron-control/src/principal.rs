@@ -669,7 +669,10 @@ mod tests {
         let management = derive_principal("github-manage:voytravel/widgets:42", None, None);
         let review = derive_principal("github-review:voytravel/widgets:42", None, None);
 
-        assert_eq!(comment.foreign_id, "github-pull-request-voytravel-widgets-42");
+        assert_eq!(
+            comment.foreign_id,
+            "github-pull-request-voytravel-widgets-42"
+        );
         assert_eq!(comment.foreign_id, management.foreign_id);
         assert_eq!(comment.foreign_id, review.foreign_id);
         assert_eq!(comment.kind.as_deref(), Some("github_pull_request"));
@@ -690,7 +693,11 @@ mod tests {
     fn github_issue_sessions_do_not_receive_pull_request_identity() {
         let principal = derive_principal("github:voytravel/widgets:issue:42", None, None);
         assert_eq!(principal.kind, None);
-        assert!(principal.foreign_id.starts_with("thread-github-voytravel-widgets-issue-42"));
+        assert!(
+            principal
+                .foreign_id
+                .starts_with("thread-github-voytravel-widgets-issue-42")
+        );
     }
 
     #[test]
