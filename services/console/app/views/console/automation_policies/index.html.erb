@@ -60,6 +60,21 @@
 
   <div>
     <h2 class="mb-3 text-sm font-semibold text-zinc-200">Recent workstreams</h2>
+    <%= form_with url: console_automation_policies_path,
+                  method: :get,
+                  class: "mb-3 flex flex-wrap items-end gap-2" do |form| %>
+      <div class="min-w-64 flex-1">
+        <%= form.label :q, "Search workstreams", class: "sr-only" %>
+        <%= form.search_field :q,
+                              value: @workstream_query,
+                              placeholder: "Work key, session, execution, repository, or delivery ID",
+                              class: "form-input w-full" %>
+      </div>
+      <%= form.submit "Search", class: "btn-secondary" %>
+      <% if @workstream_query.present? %>
+        <%= link_to "Clear", console_automation_policies_path, class: "btn-secondary" %>
+      <% end %>
+    <% end %>
     <div class="console-panel overflow-hidden">
       <table class="console-table">
         <thead class="console-table-head">
@@ -70,17 +85,24 @@
             <th class="console-th">Events</th>
             <th class="console-th">Latest decision</th>
             <th class="console-th">Last event</th>
+            <th class="console-th"><span class="sr-only">Audit trail</span></th>
           </tr>
         </thead>
         <tbody class="divide-y divide-ink-700">
           <% if @workstreams.empty? %>
             <tr>
-              <td colspan="6" class="px-5 py-8 text-center text-zinc-600">No inbound automation events yet.</td>
+              <td colspan="7" class="px-5 py-8 text-center text-zinc-600">
+                <%= @workstream_query.present? ? "No workstreams match that audit query." : "No inbound automation events yet." %>
+              </td>
             </tr>
           <% end %>
           <% @workstreams.each do |workstream| %>
             <tr class="console-row-hover">
-              <td class="console-td font-mono text-xs text-zinc-300"><%= workstream.subject_key %></td>
+              <td class="console-td font-mono text-xs text-zinc-300">
+                <%= link_to workstream.subject_key,
+                            console_automation_workstream_path(workstream.oid),
+                            class: "console-link" %>
+              </td>
               <td class="console-td text-xs">
                 <%= link_to workstream.session_key,
                             console_threads_path(thread: workstream.session_key),
@@ -107,6 +129,9 @@
                 <% end %>
               </td>
               <td class="console-td text-xs text-zinc-500"><%= local_time(workstream.last_event_at, relative: true, format: :compact) %></td>
+              <td class="console-td text-right text-xs">
+                <%= link_to "Audit", console_automation_workstream_path(workstream.oid), class: "console-link" %>
+              </td>
             </tr>
           <% end %>
         </tbody>

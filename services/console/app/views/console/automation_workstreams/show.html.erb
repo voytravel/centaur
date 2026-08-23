@@ -1,0 +1,143 @@
+<% content_for :title, "Automation audit · Centaur Console" %>
+
+<% actions = link_to("All automations", console_automation_policies_path, class: "btn-secondary") %>
+<%= render "console/page_header",
+           title: "Automation audit",
+           subtitle: @workstream.subject_key,
+           icon: "workflow",
+           actions: actions %>
+
+<section class="space-y-6">
+  <div class="console-panel p-5">
+    <dl class="grid gap-x-6 gap-y-5 sm:grid-cols-2 xl:grid-cols-3">
+      <div>
+        <dt class="text-xs font-medium uppercase tracking-wide text-zinc-500">Provider</dt>
+        <dd class="mt-1 text-sm text-zinc-200"><%= @workstream.provider.capitalize %></dd>
+      </div>
+      <div>
+        <dt class="text-xs font-medium uppercase tracking-wide text-zinc-500">State</dt>
+        <dd class="mt-1 text-sm text-zinc-200"><%= @workstream.state %></dd>
+      </div>
+      <div>
+        <dt class="text-xs font-medium uppercase tracking-wide text-zinc-500">Events</dt>
+        <dd class="mt-1 text-sm text-zinc-200"><%= @workstream.event_count %></dd>
+      </div>
+      <div>
+        <dt class="text-xs font-medium uppercase tracking-wide text-zinc-500">Session</dt>
+        <dd class="mt-1 text-sm font-mono">
+          <%= link_to @workstream.session_key,
+                      console_threads_path(thread: @workstream.session_key),
+                      class: "console-link" %>
+        </dd>
+        <p class="mt-1 text-xs text-zinc-500">Thread access remains subject to the Console's existing sharing policy.</p>
+      </div>
+      <div>
+        <dt class="text-xs font-medium uppercase tracking-wide text-zinc-500">Policy</dt>
+        <dd class="mt-1 text-sm text-zinc-200">
+          <% if @workstream.automation_policy %>
+            <%= link_to @workstream.automation_policy.name,
+                        edit_console_automation_policy_path(@workstream.automation_policy.oid),
+                        class: "console-link" %>
+          <% else %>
+            <span class="text-zinc-500">No matching policy</span>
+          <% end %>
+        </dd>
+      </div>
+      <div>
+        <dt class="text-xs font-medium uppercase tracking-wide text-zinc-500">Execution role</dt>
+        <dd class="mt-1 text-sm text-zinc-200"><%= @workstream.authorization_role&.name || "None" %></dd>
+      </div>
+      <% if @workstream.principal %>
+        <div>
+          <dt class="text-xs font-medium uppercase tracking-wide text-zinc-500">Derived principal</dt>
+          <dd class="mt-1 text-sm font-mono">
+            <%= link_to @workstream.principal.foreign_id,
+                        console_principal_path(@workstream.principal.oid),
+                        class: "console-link" %>
+          </dd>
+        </div>
+      <% end %>
+      <% if @workstream.last_event_at %>
+        <div>
+          <dt class="text-xs font-medium uppercase tracking-wide text-zinc-500">Last event</dt>
+          <dd class="mt-1 text-sm text-zinc-200"><%= local_time(@workstream.last_event_at) %></dd>
+        </div>
+      <% end %>
+    </dl>
+  </div>
+
+  <div>
+    <h2 class="mb-3 text-sm font-semibold text-zinc-200">Native session executions</h2>
+    <p class="mb-3 text-xs text-zinc-500">Read from Centaur's durable session API for this workstream.</p>
+    <div class="console-panel overflow-hidden">
+      <table class="console-table">
+        <thead class="console-table-head">
+          <tr>
+            <th class="console-th">Execution</th>
+            <th class="console-th">Status</th>
+            <th class="console-th">Started</th>
+            <th class="console-th">Completed</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-ink-700">
+          <% if @executions.empty? %>
+            <tr>
+              <td colspan="4" class="px-5 py-8 text-center text-zinc-600">No session executions recorded yet.</td>
+            </tr>
+          <% end %>
+          <% @executions.each do |execution| %>
+            <tr>
+              <td class="console-td font-mono text-xs text-zinc-300"><%= execution.execution_id %></td>
+              <td class="console-td text-xs text-zinc-300"><%= execution.status %></td>
+              <td class="console-td whitespace-nowrap text-xs text-zinc-500"><%= local_time(execution.started_at || execution.created_at) %></td>
+              <td class="console-td whitespace-nowrap text-xs text-zinc-500"><%= execution.completed_at ? local_time(execution.completed_at) : "In progress" %></td>
+            </tr>
+          <% end %>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div>
+    <h2 class="mb-3 text-sm font-semibold text-zinc-200">Normalized event history</h2>
+    <p class="mb-3 text-xs text-zinc-500">Raw webhook bodies are intentionally not stored or rendered here.</p>
+    <div class="console-panel overflow-hidden">
+      <table class="console-table">
+        <thead class="console-table-head">
+          <tr>
+            <th class="console-th">Received</th>
+            <th class="console-th">Event</th>
+            <th class="console-th">Decision</th>
+            <th class="console-th">Requested action</th>
+            <th class="console-th">Reason</th>
+            <th class="console-th">Provider delivery</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-ink-700">
+          <% if @events.empty? %>
+            <tr>
+              <td colspan="6" class="px-5 py-8 text-center text-zinc-600">No normalized events retained for this workstream.</td>
+            </tr>
+          <% end %>
+          <% @events.each do |event| %>
+            <tr>
+              <td class="console-td whitespace-nowrap text-xs text-zinc-500"><%= local_time(event.received_at) %></td>
+              <td class="console-td text-xs text-zinc-300"><%= [event.event_type, event.event_action].compact.join(" · ") %></td>
+              <td class="console-td text-xs">
+                <% decision_class = case event.decision
+                                    when "act" then "border-amber-400/40 bg-amber-400/10 text-amber-200"
+                                    when "observe" then "border-sky-400/40 bg-sky-400/10 text-sky-200"
+                                    else "border-zinc-700 text-zinc-400"
+                                    end %>
+                <span class="rounded border px-2 py-1 <%= decision_class %>"><%= event.decision %></span>
+              </td>
+              <td class="console-td text-xs text-zinc-400"><%= event.action_kind.presence || "None" %></td>
+              <td class="console-td max-w-lg text-xs text-zinc-400"><%= event.operator_reason || "Not recorded" %></td>
+              <td class="console-td max-w-sm truncate font-mono text-xs text-zinc-500" title="<%= event.deduplication_key %>"><%= event.deduplication_key %></td>
+            </tr>
+          <% end %>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
