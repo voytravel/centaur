@@ -690,6 +690,91 @@ describe("linearbot comment-thread pipeline", () => {
     ).toBe(before);
   });
 
+  it("picks up a later-ready policy issue once on its durable issue session", async () => {
+    const threadKey = `linear:${ISSUE_ID}`;
+    const policyEvents: Array<{ deduplication_key?: string }> = [];
+    bot = createTestBot({
+      automationApiUrl: "http://console",
+      automationIngressToken: "automation-token",
+      fetch: async (request, init) => {
+        const url = request instanceof Request ? request.url : request.toString();
+        if (!url.startsWith("http://console/")) {
+          return globalThis.fetch(request, init);
+        }
+        const body = JSON.parse(String(init?.body)) as {
+          event?: { deduplication_key?: string };
+        };
+        const event = body.event ?? {};
+        policyEvents.push(event);
+        const ready = event.deduplication_key?.endsWith("07:01:00.000Z") === true;
+        return Response.json({
+          data: ready
+            ? {
+                actions: [ "implement_issue" ],
+                decision: "act",
+                github_repository: "acme/widgets",
+                move_to_in_progress: false,
+                reason: "policy authorizes automation",
+                reviewer_logins: [],
+                reviewer_team_slugs: [],
+                session_key: threadKey,
+              }
+            : {
+                actions: [],
+                decision: "ignored",
+                reason: "issue description is missing",
+                session_key: threadKey,
+              },
+        });
+      },
+    });
+
+    const notReady = issueAutomationPayload({
+      updatedAt: "2026-06-16T07:00:00.000Z",
+    });
+    const notReadyResponse = await postWebhook(notReady);
+    expect(notReadyResponse.status).toBe(200);
+    await Bun.sleep(100);
+    expect(codexApi.executes).toHaveLength(0);
+    expect(policyEvents.map((event) => event.deduplication_key)).toEqual([
+      "linear:issue-1:2026-06-16T07:00:00.000Z",
+    ]);
+
+    const ready = issueAutomationPayload({
+      updatedAt: "2026-06-16T07:01:00.000Z",
+    });
+    const readyResponse = await postWebhook(ready);
+    expect(readyResponse.status).toBe(200);
+    expect(policyEvents.map((event) => event.deduplication_key)).toEqual([
+      "linear:issue-1:2026-06-16T07:00:00.000Z",
+      "linear:issue-1:2026-06-16T07:01:00.000Z",
+    ]);
+    await waitFor(() =>
+      codexApi.executes.some((execution) => execution.threadKey === threadKey),
+    );
+    expect(
+      executeInputTexts(threadKey).some((text) =>
+        text.includes("selected by an automation policy"),
+      ),
+    ).toBe(true);
+    const executionsBeforeRedelivery = codexApi.executes.filter(
+      (execution) => execution.threadKey === threadKey,
+    ).length;
+
+    const redeliveryResponse = await postWebhook(ready);
+    expect(redeliveryResponse.status).toBe(200);
+    await Bun.sleep(100);
+    expect(
+      codexApi.executes.filter((execution) => execution.threadKey === threadKey)
+        .length,
+    ).toBe(executionsBeforeRedelivery);
+    expect(policyEvents.map((event) => event.deduplication_key)).toEqual([
+      "linear:issue-1:2026-06-16T07:00:00.000Z",
+      "linear:issue-1:2026-06-16T07:01:00.000Z",
+      "linear:issue-1:2026-06-16T07:01:00.000Z",
+    ]);
+  });
+
   it("settles a vestigial agent session minimally (no widget render)", async () => {
     const sessionId = "sess-settle";
     linearApi.addAgentSession({ id: sessionId, rootCommentId: "comment-x" });
@@ -884,6 +969,24 @@ function issueAssignmentPayload(input: {
       ...(input.delegateId !== undefined
         ? { delegateId: input.delegateId }
         : {}),
+      updatedAt: input.updatedAt,
+    },
+  };
+}
+
+function issueAutomationPayload(input: { updatedAt: string }) {
+  return {
+    action: "update",
+    type: "Issue",
+    createdAt: new Date().toISOString(),
+    organizationId: ORG_ID,
+    webhookTimestamp: Date.now(),
+    webhookId: "wh-automation",
+    actor: { id: USER_ID, name: "Ada Lovelace", type: "user" },
+    data: {
+      id: ISSUE_ID,
+      assigneeId: null,
+      delegateId: null,
       updatedAt: input.updatedAt,
     },
   };
@@ -1241,6 +1344,10 @@ function startFakeLinearApi(): FakeLinearApi {
           url: "https://linear.app/acme/issue/ENG-1",
           state: { name: "Todo" },
           delegate: issueDelegateId ? { id: issueDelegateId } : null,
+          team: { id: "team-1" },
+          project: { id: "project-1" },
+          labels: { nodes: [] },
+          inverseRelations: { nodes: [], pageInfo: { hasNextPage: false } },
         },
       };
     }
