@@ -164,9 +164,9 @@ not translated to an environment variable or exposed to Console web pods.
 {{- $console := include "centaur.consoleValues" . | fromYaml -}}
 {{- if $console.githubAppInstallation.enabled -}}
 {{- $name := required "console.githubAppInstallation.existingSecretName is required when GitHub App installation tokens are enabled" $console.githubAppInstallation.existingSecretName -}}
-{{- include "centaur.secretResourceVersion" (dict "root" . "name" $name) -}}
+{{- include "centaur.secretResourceVersion" (dict "root" . "name" $name) | quote -}}
 {{- else -}}
-disabled
+{{- "disabled" | quote -}}
 {{- end -}}
 {{- end -}}
 
