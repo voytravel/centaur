@@ -153,19 +153,17 @@ class AutomationEventIngestorTest < ActiveSupport::TestCase
       "labels" => []
     ).call
 
-    # The fixture transaction normally defers after_create_commit until test
-    # teardown. This mirrors the committed API upsert that api-rs waits for
-    # before it starts the session execution.
-    principal = nil
-    Principal.transaction(requires_new: true, joinable: false) do
-      principal = Principal.create!(
-        foreign_id: "linear-issue-role-#{SecureRandom.hex(6)}",
-        name: "ENG-42",
-        kind: "linear_issue",
-        labels: { "linear_issue_id" => "issue-role" },
-        created_by: users(:acme_admin)
-      )
-    end
+    principal = Principal.create!(
+      foreign_id: "linear-issue-role-#{SecureRandom.hex(6)}",
+      name: "ENG-42",
+      kind: "linear_issue",
+      labels: { "linear_issue_id" => "issue-role" },
+      created_by: users(:acme_admin)
+    )
+    # Transactional fixtures defer after_create_commit until teardown. Exercise
+    # the model's committed callback chain rather than calling the authorizer
+    # directly, which keeps this test coupled to the production boundary.
+    principal.run_callbacks(:commit) {}
 
     workstream = AutomationWorkstream.sole
     assert_equal principal, workstream.reload.principal
