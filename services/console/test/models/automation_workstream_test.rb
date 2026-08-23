@@ -9,7 +9,7 @@ class AutomationWorkstreamTest < ActiveSupport::TestCase
       session_key: "github-manage:voytravel/centaur:42"
     )
 
-    assert_equal "https://github.com/voytravel/centaur/pull/42", workstream.source_url
+    assert_equal "https://github.com/voytravel/centaur/pull/42", workstream.safe_source_url
   end
 
   test "does not form a GitHub source URL when the subject and repository disagree" do
@@ -20,7 +20,7 @@ class AutomationWorkstreamTest < ActiveSupport::TestCase
       session_key: "github-manage:voytravel/centaur:42"
     )
 
-    assert_nil workstream.source_url
+    assert_nil workstream.safe_source_url
   end
 
   test "keeps only a provider-owned Linear HTTPS issue URL" do
@@ -33,7 +33,7 @@ class AutomationWorkstreamTest < ActiveSupport::TestCase
       }
     )
 
-    assert_equal "https://linear.app/voytravel/issue/ENG-42/implement-it", workstream.source_url
+    assert_equal "https://linear.app/voytravel/issue/ENG-42/implement-it", workstream.safe_source_url
   end
 
   test "does not render a non-Linear URL as a source link" do
@@ -44,7 +44,7 @@ class AutomationWorkstreamTest < ActiveSupport::TestCase
       metadata: { "linear_issue_url" => "https://linear.app.example.test/issue/ENG-42" }
     )
 
-    assert_nil workstream.source_url
+    assert_nil workstream.safe_source_url
   end
 
   test "does not render a Linear host on a nonstandard port" do
@@ -55,6 +55,6 @@ class AutomationWorkstreamTest < ActiveSupport::TestCase
       metadata: { "linear_issue_url" => "https://linear.app:444/issue/ENG-42" }
     )
 
-    assert_nil workstream.source_url
+    assert_nil workstream.safe_source_url
   end
 end

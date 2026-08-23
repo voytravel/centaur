@@ -65,7 +65,7 @@ class AutomationWorkstream < ApplicationRecord
   # destination is derived from a normalized, provider-owned identifier. This
   # keeps provider payload URLs out of templates and prevents a future event
   # field from becoming an arbitrary external-link sink.
-  def source_url
+  def safe_source_url
     case provider
     when "github" then github_pull_request_url
     when "linear" then self.class.normalize_linear_issue_url(metadata["linear_issue_url"])

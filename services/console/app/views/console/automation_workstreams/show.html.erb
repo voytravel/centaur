@@ -31,11 +31,11 @@
         </dd>
         <p class="mt-1 text-xs text-zinc-500">Thread access remains subject to the Console's existing sharing policy.</p>
       </div>
-      <% if @workstream.source_url %>
+      <% if @source_url %>
         <div>
           <dt class="text-xs font-medium uppercase tracking-wide text-zinc-500">Source work item</dt>
           <dd class="mt-1 text-sm">
-            <%= link_to "Open source", @workstream.source_url,
+            <%= link_to "Open source", @source_url,
                         target: "_blank", rel: "noopener noreferrer", class: "console-link" %>
           </dd>
         </div>
