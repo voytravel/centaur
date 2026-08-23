@@ -23,9 +23,12 @@ class Principal < ApplicationRecord
   include SlackChannelPermissionOwner
 
   after_commit :auto_grant_matching_oauth_credentials, on: %i[create update]
-  after_create_commit :reconcile_automation_workstream_authorizations,
+  # Rails de-duplicates commit callbacks by filter name. Keep create and update
+  # entry points distinct so registering the update callback cannot replace the
+  # create callback that authorizes a newly derived automation principal.
+  after_create_commit :reconcile_created_automation_workstream_authorizations,
                       if: :automation_workstream_kind?
-  after_update_commit :reconcile_automation_workstream_authorizations,
+  after_update_commit :reconcile_updated_automation_workstream_authorizations,
                       if: :automation_workstream_identity_changed?
   after_create_commit :enqueue_slack_channel_catalog_refresh, if: :slack_channel_catalog_refreshable?
   after_create :assign_default_roles, if: :roles_blank_for_defaulting?
@@ -295,6 +298,14 @@ class Principal < ApplicationRecord
 
   def automation_workstream_identity_changed?
     automation_workstream_kind? && (saved_change_to_kind? || saved_change_to_labels?)
+  end
+
+  def reconcile_created_automation_workstream_authorizations
+    reconcile_automation_workstream_authorizations
+  end
+
+  def reconcile_updated_automation_workstream_authorizations
+    reconcile_automation_workstream_authorizations
   end
 
   def reconcile_automation_workstream_authorizations
