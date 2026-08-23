@@ -5,9 +5,41 @@ import { createGithubbot, type GithubbotOptions } from "./index";
 const port = numberEnv("PORT", 3001);
 const apiUrl = stringEnv("CENTAUR_API_URL", "http://127.0.0.1:8080");
 
-// Personal access token for the bot's GitHub teammate account (the bot acts as a
-// real GitHub user — it can be requested as a reviewer, @-mentioned, assigned).
-const token = requiredEnv("GITHUB_TOKEN");
+// The receiver supports either its historical teammate PAT or the preferred
+// fixed GitHub App installation. The latter mints and refreshes installation
+// tokens in-process, so a deployment never writes a short-lived token into a
+// Kubernetes Secret. Do not accept both: a mixed configuration would make the
+// identity used for webhook actions ambiguous.
+const token = optionalEnv("GITHUB_TOKEN");
+const githubAppId = optionalEnv("GITHUB_APP_ID");
+const githubInstallationIdRaw = optionalEnv("GITHUB_INSTALLATION_ID");
+const githubPrivateKeyInline = optionalEnv("GITHUB_PRIVATE_KEY");
+const githubPrivateKeyFile = optionalEnv("GITHUB_PRIVATE_KEY_FILE");
+if (githubPrivateKeyInline && githubPrivateKeyFile) {
+  throw new Error("set only one of GITHUB_PRIVATE_KEY and GITHUB_PRIVATE_KEY_FILE");
+}
+const githubPrivateKey = githubPrivateKeyInline ?? readOptionalFile(githubPrivateKeyFile);
+const appConfigPresent = Boolean(githubAppId || githubInstallationIdRaw || githubPrivateKey);
+if (token && appConfigPresent) {
+  throw new Error("configure either GITHUB_TOKEN or GitHub App credentials, not both");
+}
+const githubAuth = (() => {
+  if (token) return { token } as const;
+  if (!githubAppId || !githubInstallationIdRaw || !githubPrivateKey) {
+    throw new Error(
+      "GITHUB_TOKEN or GITHUB_APP_ID, GITHUB_INSTALLATION_ID, and GITHUB_PRIVATE_KEY(_FILE) are required",
+    );
+  }
+  const installationId = Number.parseInt(githubInstallationIdRaw, 10);
+  if (!Number.isSafeInteger(installationId) || installationId <= 0) {
+    throw new Error("GITHUB_INSTALLATION_ID must be a positive integer");
+  }
+  return {
+    githubAppId,
+    githubInstallationId: installationId,
+    githubPrivateKey,
+  } as const;
+})();
 
 // Signing secret configured on the GitHub repo/org webhook. The adapter verifies
 // comment webhooks; githubbot verifies the pull_request (review-request) webhook.
@@ -132,7 +164,7 @@ const options: GithubbotOptions = {
   issuePrompt,
   managementPrompt,
   stateKeyPrefix: optionalEnv("GITHUBBOT_STATE_KEY_PREFIX"),
-  token,
+  ...githubAuth,
   userName,
   webhookSecret,
   logger: consoleLogger,
@@ -174,12 +206,19 @@ function optionalEnv(name: string): string | undefined {
   return value ? value : undefined;
 }
 
-function requiredEnv(name: string): string {
-  const value = optionalEnv(name);
-  if (!value) {
-    throw new Error(`${name} is required`);
+function readOptionalFile(path: string | undefined): string | undefined {
+  if (!path) return undefined;
+  try {
+    const value = readFileSync(path, "utf8").trim();
+    if (!value) throw new Error("file is empty");
+    return value;
+  } catch (error) {
+    throw new Error(
+      `GITHUB_PRIVATE_KEY_FILE (${path}) could not be read: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
   }
-  return value;
 }
 
 function stringEnv(name: string, fallback: string): string {

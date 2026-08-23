@@ -625,13 +625,14 @@ linearbot:
 automation:
   enabled: false
 
-# Chat SDK GitHub bot — GitHub teammate (PAT) ingress. Receives issue/PR comment
+# Chat SDK GitHub bot — GitHub teammate ingress. Receives issue/PR comment
 # webhooks on /api/webhooks/github (the @chat-adapter/github adapter), answers in
 # the comment thread, and runs a review when the bot account is requested as a
 # reviewer. Forwards sessions to the api-rs control plane (:8080). Disabled by
-# default: requires the GITHUBBOT_TOKEN (PAT) and GITHUBBOT_WEBHOOK_SECRET secrets
-# (see contrib/scripts/bootstrap-k8s-secrets.sh). userName must be the bot
-# account's GitHub login so @-mention and review-request matching work.
+# default: requires a GitHub App installation or the legacy GITHUBBOT_TOKEN,
+# plus GITHUBBOT_WEBHOOK_SECRET (see contrib/scripts/bootstrap-k8s-secrets.sh).
+# userName must be the bot account's GitHub login so @-mention and
+# review-request matching work.
 githubbot:
   enabled: false
   replicaCount: 1
@@ -640,6 +641,17 @@ githubbot:
     tag: latest
     pullPolicy: Always
   userName: ""
+  # Preferred fixed GitHub App auth. The receiver mounts its PEM read-only and
+  # mints short-lived installation tokens itself; no one-hour token is stored
+  # in the shared Secret. When false, legacy PAT auth uses GITHUBBOT_TOKEN.
+  githubAppInstallation:
+    enabled: false
+    existingSecretName: ""
+    clientIdSecretKey: client-id
+    installationIdSecretKey: installation-id
+    privateKeySecretKey: private-key.pem
+    webhookSecretKey: webhook-secret
+    privateKeyMountPath: /var/run/centaur/github-app
   # v2 PR self-management (only acts on PRs assigned to the bot account).
   # Auto-merge respects branch protection and is paused per-PR by the hold label
   # / draft status.

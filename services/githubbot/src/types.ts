@@ -160,8 +160,14 @@ export type GithubbotOptions = {
   holdLabel?: string;
   /** Merge method for auto-merge: "merge" | "squash" | "rebase". Default "squash". */
   mergeMethod?: "merge" | "squash" | "rebase";
-  /** Personal access token for the bot's GitHub teammate account. */
-  token: string;
+  /** Personal access token for the bot's teammate account (legacy mode). */
+  token?: string;
+  /** GitHub App Client ID used as the JWT issuer by GitHub's App API. */
+  githubAppId?: string;
+  /** Fixed installation whose repositories this bot may handle. */
+  githubInstallationId?: number;
+  /** PEM key used only by the receiver to mint short-lived installation tokens. */
+  githubPrivateKey?: string;
   userName?: string;
   /**
    * GitHub `author_association` values allowed to drive the conversational

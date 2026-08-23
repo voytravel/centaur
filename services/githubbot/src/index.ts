@@ -74,14 +74,19 @@ const DEDUP_WINDOW = 200;
 export function createGithubbot(options: GithubbotOptions): Githubbot {
   const userName = options.userName ?? "github-bot";
   const logger = options.logger ?? noopLogger;
-  const github = createGitHubAdapter({
-    token: options.token,
+  const adapterConfig = {
     webhookSecret: options.webhookSecret,
     userName,
     ...(options.botUserId ? { botUserId: Number(options.botUserId) } : {}),
     ...(options.githubApiUrl ? { apiUrl: options.githubApiUrl } : {}),
     logger,
-  });
+  };
+  const github = options.token
+    ? createGitHubAdapter({ ...adapterConfig, token: options.token })
+    : createGitHubAdapter({
+        ...adapterConfig,
+        ...githubAppInstallationConfig(options),
+      });
   const state = options.state ?? createDefaultState(options, logger);
   const chat = new Chat<{ github: typeof github }, GithubbotThreadState>({
     userName,
@@ -213,6 +218,24 @@ export function createGithubbot(options: GithubbotOptions): Githubbot {
   }
 
   return { app, chat };
+}
+
+function githubAppInstallationConfig(options: GithubbotOptions): {
+  appId: string;
+  installationId: number;
+  privateKey: string;
+} {
+  const { githubAppId, githubInstallationId, githubPrivateKey } = options;
+  if (!githubAppId || !githubInstallationId || !githubPrivateKey) {
+    throw new Error(
+      "GitHubbot requires a token or a complete GitHub App installation",
+    );
+  }
+  return {
+    appId: githubAppId,
+    installationId: githubInstallationId,
+    privateKey: githubPrivateKey,
+  };
 }
 
 type MessageHandlerInput = {

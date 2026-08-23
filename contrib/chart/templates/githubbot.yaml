@@ -39,6 +39,7 @@ spec:
     metadata:
       annotations:
         checksum/infra-secrets: {{ include "centaur.infraSecretsChecksum" . }}
+        checksum/github-app-private-key: {{ include "centaur.githubbotAppInstallationChecksum" . }}
 {{- if or .Values.githubbot.reviewPrompt .Values.githubbot.issuePrompt .Values.githubbot.managementPrompt }}
         checksum/prompts: {{ dict "review" .Values.githubbot.reviewPrompt "issue" .Values.githubbot.issuePrompt "management" .Values.githubbot.managementPrompt | toJson | sha256sum }}
 {{- end }}
@@ -76,20 +77,46 @@ spec:
             # the deployment's default harness.
             - name: GITHUBBOT_DEFAULT_HARNESS
               value: {{ .Values.sandbox.harnessEngine | quote }}
-            # Personal access token for the bot's GitHub teammate account — kept
-            # distinct from the sandbox tool token so the bot acts as its own
-            # GitHub user (requestable as a reviewer, @-mentionable).
+{{- if .Values.githubbot.githubAppInstallation.enabled }}
+            # Preferred GitHub App installation identity. The private key is a
+            # read-only file; Githubbot mints short-lived installation tokens
+            # in-process and never receives an agent sandbox credential.
+            - name: GITHUB_APP_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ required "githubbot.githubAppInstallation.existingSecretName is required when GitHub App authentication is enabled" .Values.githubbot.githubAppInstallation.existingSecretName }}
+                  key: {{ required "githubbot.githubAppInstallation.clientIdSecretKey is required when GitHub App authentication is enabled" .Values.githubbot.githubAppInstallation.clientIdSecretKey }}
+            - name: GITHUB_INSTALLATION_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ required "githubbot.githubAppInstallation.existingSecretName is required when GitHub App authentication is enabled" .Values.githubbot.githubAppInstallation.existingSecretName }}
+                  key: {{ required "githubbot.githubAppInstallation.installationIdSecretKey is required when GitHub App authentication is enabled" .Values.githubbot.githubAppInstallation.installationIdSecretKey }}
+            - name: GITHUB_PRIVATE_KEY_FILE
+              value: {{ printf "%s/%s" (required "githubbot.githubAppInstallation.privateKeyMountPath is required when GitHub App authentication is enabled" .Values.githubbot.githubAppInstallation.privateKeyMountPath) (required "githubbot.githubAppInstallation.privateKeySecretKey is required when GitHub App authentication is enabled" .Values.githubbot.githubAppInstallation.privateKeySecretKey) | quote }}
+{{- else }}
+            # Legacy personal access token mode. Keep it distinct from the
+            # sandbox GitHub credential so the bot identity remains explicit.
             - name: GITHUB_TOKEN
               valueFrom:
                 secretKeyRef:
                   name: {{ include "centaur.secretEnvName" . }}
                   key: {{ printf "%sGITHUBBOT_TOKEN" .Values.secretManager.envPrefix }}
-            # githubbot's own webhook signing secret (the GitHub repo/org webhook).
+{{- end }}
+            # Githubbot's own GitHub webhook signing secret. In preferred App
+            # mode it stays in the dedicated App Secret rather than the shared
+            # infrastructure Secret; legacy PAT mode retains its old key.
             - name: GITHUB_WEBHOOK_SECRET
+{{- if .Values.githubbot.githubAppInstallation.enabled }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ required "githubbot.githubAppInstallation.existingSecretName is required when GitHub App authentication is enabled" .Values.githubbot.githubAppInstallation.existingSecretName }}
+                  key: {{ required "githubbot.githubAppInstallation.webhookSecretKey is required when GitHub App authentication is enabled" .Values.githubbot.githubAppInstallation.webhookSecretKey }}
+{{- else }}
               valueFrom:
                 secretKeyRef:
                   name: {{ include "centaur.secretEnvName" . }}
                   key: {{ printf "%sGITHUBBOT_WEBHOOK_SECRET" .Values.secretManager.envPrefix }}
+{{- end }}
             - name: GITHUBBOT_API_KEY
               valueFrom:
                 secretKeyRef:
@@ -156,15 +183,32 @@ spec:
 {{ toYaml .Values.containerSecurityContext | nindent 12 }}
           resources:
 {{ toYaml .Values.githubbot.resources | nindent 12 }}
-{{- if or .Values.githubbot.reviewPrompt .Values.githubbot.issuePrompt .Values.githubbot.managementPrompt }}
+{{- if or .Values.githubbot.reviewPrompt .Values.githubbot.issuePrompt .Values.githubbot.managementPrompt .Values.githubbot.githubAppInstallation.enabled }}
           volumeMounts:
+{{- if .Values.githubbot.githubAppInstallation.enabled }}
+            - name: github-app-private-key
+              mountPath: {{ required "githubbot.githubAppInstallation.privateKeyMountPath is required when GitHub App authentication is enabled" .Values.githubbot.githubAppInstallation.privateKeyMountPath | quote }}
+              readOnly: true
+{{- end }}
+{{- if or .Values.githubbot.reviewPrompt .Values.githubbot.issuePrompt .Values.githubbot.managementPrompt }}
             - name: prompts
               mountPath: /etc/githubbot/prompts
               readOnly: true
+{{- end }}
       volumes:
+{{- if .Values.githubbot.githubAppInstallation.enabled }}
+        - name: github-app-private-key
+          secret:
+            secretName: {{ required "githubbot.githubAppInstallation.existingSecretName is required when GitHub App authentication is enabled" .Values.githubbot.githubAppInstallation.existingSecretName | quote }}
+            items:
+              - key: {{ required "githubbot.githubAppInstallation.privateKeySecretKey is required when GitHub App authentication is enabled" .Values.githubbot.githubAppInstallation.privateKeySecretKey | quote }}
+                path: {{ required "githubbot.githubAppInstallation.privateKeySecretKey is required when GitHub App authentication is enabled" .Values.githubbot.githubAppInstallation.privateKeySecretKey | quote }}
+{{- end }}
+{{- if or .Values.githubbot.reviewPrompt .Values.githubbot.issuePrompt .Values.githubbot.managementPrompt }}
         - name: prompts
           configMap:
             name: {{ include "centaur.componentName" (dict "root" . "component" "githubbot") }}-prompts
+{{- end }}
 {{- end }}
 ---
 apiVersion: v1
