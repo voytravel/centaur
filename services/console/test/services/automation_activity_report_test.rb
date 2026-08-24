@@ -28,6 +28,23 @@ class AutomationActivityReportTest < ActiveSupport::TestCase
     assert_nil AutomationActivityReport.new(event).workflow_input
   end
 
+  test "builds a redacted app-created pull request report" do
+    event, workstream = configured_event(activity_report: { "kind" => "pr_created", "slack_channel" => "C0123456789" })
+    with_env("CENTAUR_CONSOLE_PUBLIC_URL" => "https://console.example.test") do
+      input = AutomationActivityReport.new(event).workflow_input
+
+      assert_equal "pr_created", input.fetch("kind")
+      assert_equal(
+        [
+          ":sparkles: *Centaur created a pull request*",
+          "Pull request: <https://github.com/acme/widgets/pull/42|github:acme/widgets:pr:42>",
+          "Audit: <https://console.example.test/console/automation_workstreams/#{workstream.oid}|#{workstream.oid}>"
+        ].join("\n"),
+        input.fetch("text")
+      )
+    end
+  end
+
   test "omits a malformed public console URL rather than emitting it" do
     event, workstream = configured_event
     with_env("CENTAUR_CONSOLE_PUBLIC_URL" => "https://user@example.test/?token=not-for-slack") do

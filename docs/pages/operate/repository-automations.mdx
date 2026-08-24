@@ -47,11 +47,19 @@ credentials do not enter the policy store.
 ## Optional Slack activity report
 
 Each policy can optionally name a Slack channel and enable **Report accepted
-work**. This posts one compact notification when an Act policy first accepts a
-new PR or issue workstream (or accepts it again after a safety block). It links
-only the provider source item and the Console audit record, and lists the
-deterministic authorized action. It does not repeat raw webhook content, agent
-output, credentials, or a message for every continuation/replayed delivery.
+work** and/or **Report pull requests created by the app**. Accepted-work
+reporting posts one compact notification when an Act policy first accepts a new
+PR or issue workstream (or accepts it again after a safety block). PR-created
+reporting posts only for a signed `pull_request.opened` webhook whose PR author
+matches the configured GitHub App login. It does not infer that a human-created
+PR came from an agent, and it does not turn the report into another agent run.
+
+Each notice links only the provider source item and the Console audit record;
+accepted-work notices also list the deterministic authorized action. Neither
+kind repeats raw webhook content, agent output, credentials, or a message for
+every continuation/replayed delivery. Direct messages are deliberately not
+inferred from an issue assignee: a future identity-mapping policy can add that
+explicitly without making a Slack routing guess.
 
 The channel must already be accessible to the installed Slack bot. Leaving the
 setting off keeps the audit Console-only. Slack delivery itself runs as a

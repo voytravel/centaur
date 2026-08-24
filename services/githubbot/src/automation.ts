@@ -17,6 +17,8 @@ export type GithubAutomationEvent = {
   base_branch?: string;
   /** True only when Githubbot's own principal is assigned to the pull request. */
   bot_owned?: boolean;
+  /** True only when the signed pull-request payload names Githubbot as author. */
+  created_by_bot?: boolean;
   /** Derived by Console from a previously authorized durable PR workstream. */
   continuation_authorized?: boolean;
   deduplication_key: string;
@@ -52,6 +54,7 @@ export async function evaluateGithubAutomation(
     eventType,
     rawBody,
     deliveryId,
+    options.userName,
     associatedPrNumbers,
   );
   if (events.length === 0) return [];
@@ -68,6 +71,7 @@ async function normalizeGithubEvents(
   eventType: string,
   rawBody: string,
   deliveryId: string,
+  botUserName?: string,
   associatedPrNumbers?: (repository: string, headSha: string) => Promise<number[]>,
 ): Promise<GithubAutomationEvent[]> {
   const payload = parseJson(rawBody);
@@ -83,6 +87,9 @@ async function normalizeGithubEvents(
     return [
       {
         base_branch: stringValue(isRecord(pullRequest.base) ? pullRequest.base.ref : undefined),
+        ...(pullRequestOpenedByBot(eventType, eventAction, pullRequest, botUserName)
+          ? { created_by_bot: true }
+          : {}),
         deduplication_key: "github:" + deliveryId + ":" + number,
         draft: pullRequest.draft === true,
         event_action: eventAction,
@@ -160,6 +167,22 @@ async function normalizeGithubEvents(
     number,
     repository,
   }));
+}
+
+// `pull_request.user.login` is supplied by GitHub's signed webhook payload.
+// Keep this distinct from `bot_owned`, which means Githubbot is assigned to a
+// PR and is used by repair policy gates. A PR author match is solely a safe
+// reporting fact: it must never authorize a new agent turn by itself.
+function pullRequestOpenedByBot(
+  eventType: string,
+  eventAction: string | undefined,
+  pullRequest: JsonRecord,
+  botUserName: string | undefined,
+): boolean {
+  if (eventType !== "pull_request" || eventAction !== "opened") return false;
+  const author = stringValue(isRecord(pullRequest.user) ? pullRequest.user.login : undefined);
+  const configuredBot = stringValue(botUserName);
+  return Boolean(author && configuredBot && author.toLowerCase() === configuredBot.toLowerCase());
 }
 
 function ciAutomationEvent(input: {

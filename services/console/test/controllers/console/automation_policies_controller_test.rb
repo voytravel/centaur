@@ -30,7 +30,8 @@ class Console::AutomationPoliciesControllerTest < ActionDispatch::IntegrationTes
           github_excluded_labels: "no-agent",
           github_auto_merge: "0",
           activity_reporting_slack_channel: "c0123456789",
-          activity_reporting_accepted: "1"
+          activity_reporting_accepted: "1",
+          activity_reporting_pr_created: "1"
         }
       }
     end
@@ -42,6 +43,7 @@ class Console::AutomationPoliciesControllerTest < ActionDispatch::IntegrationTes
     assert_equal [ "main" ], policy.github_settings["base_branches"]
     assert_equal "C0123456789", policy.activity_reporting_settings["slack_channel"]
     assert policy.reports_activity?("accepted")
+    assert policy.reports_activity?("pr_created")
   end
 
   test "does not let a non-admin write policies" do

@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 WORKFLOW_NAME = "automation_activity_report"
-REPORT_KIND = "accepted"
+REPORT_KINDS = ("accepted", "pr_created")
 SLACK_CHANNEL_PREFIXES = ("C", "G")
 SLACK_MESSAGE_MAX_LENGTH = 3_800
 
@@ -28,7 +28,7 @@ def _channel(params: Any) -> str:
 
 async def handler(params: Any, ctx: Any) -> dict[str, Any]:
     kind = _required_string(params, "kind")
-    if kind != REPORT_KIND:
+    if kind not in REPORT_KINDS:
         raise ValueError(f"automation_activity_report does not support kind {kind}")
 
     channel = _channel(params)
@@ -37,7 +37,7 @@ async def handler(params: Any, ctx: Any) -> dict[str, Any]:
         raise ValueError("automation_activity_report text is too long")
 
     delivery = await ctx.step(
-        "post_accepted_activity",
+        f"post_{kind}_activity",
         lambda: ctx.post_to_slack(
             channel,
             text,
