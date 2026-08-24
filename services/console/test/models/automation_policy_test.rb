@@ -211,7 +211,7 @@ class AutomationPolicyTest < ActiveSupport::TestCase
 
     assert_predicate policy, :valid?
     assert_equal "C0123456789", policy.activity_reporting_settings["slack_channel"]
-    assert_predicate policy, :reports_activity?, "accepted"
+    assert policy.reports_activity?("accepted")
     assert_includes policy.automation_summary, "Slack accepted-work report"
 
     invalid = github_policy(

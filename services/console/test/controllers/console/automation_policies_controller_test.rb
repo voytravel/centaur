@@ -41,7 +41,7 @@ class Console::AutomationPoliciesControllerTest < ActionDispatch::IntegrationTes
     assert_equal "all_eligible", policy.github_settings["review"]
     assert_equal [ "main" ], policy.github_settings["base_branches"]
     assert_equal "C0123456789", policy.activity_reporting_settings["slack_channel"]
-    assert_predicate policy, :reports_activity?, "accepted"
+    assert policy.reports_activity?("accepted")
   end
 
   test "does not let a non-admin write policies" do

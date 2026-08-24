@@ -74,8 +74,12 @@ class Console::AutomationPoliciesController < ApplicationController
   def policy_attributes
     values = policy_params
     provider = values.fetch(:provider)
+    # Turn the permitted slice into an ordinary hash before adding generated
+    # settings. Mutating a nested ActionController::Parameters value would
+    # leave that child unpermitted and make Active Record reject the whole
+    # policy payload.
     common = values.slice(:name, :provider, :repository, :linear_team_id, :linear_project_id,
-                          :execution_role_id, :enabled, :mode)
+                          :execution_role_id, :enabled, :mode).to_h.symbolize_keys
     common[:settings] =
       if provider == "github"
         {
