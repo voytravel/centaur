@@ -9,6 +9,14 @@ describe("mentionsBot", () => {
     expect(mentionsBot("ping\n@centaur-bot", "centaur-bot")).toBe(true);
   });
 
+  test("matches the Markdown slug for a GitHub App bot actor", () => {
+    expect(mentionsBot("hey @centaur-bot please look", "centaur-bot[bot]")).toBe(true);
+    // Keep accepting the full actor form for compatibility with synthetic or
+    // future provider payloads, even though GitHub Markdown does not render it
+    // as a normal user mention.
+    expect(mentionsBot("hey @centaur-bot[bot] please look", "centaur-bot[bot]")).toBe(true);
+  });
+
   test("does not match substrings, emails, or absence", () => {
     expect(mentionsBot("see @centaur-bot-helper", "centaur-bot")).toBe(false);
     expect(mentionsBot("mail me@centaur-bot.com", "centaur-bot")).toBe(false);

@@ -145,7 +145,10 @@ For new deployments, prefer a fixed GitHub App installation: set `GITHUB_APP_ID`
 or `GITHUB_PRIVATE_KEY_FILE`. The adapter mints short-lived installation tokens
 itself; the PEM remains local to Githubbot and is never passed to an agent
 sandbox. Configure exactly one authentication mode. The chart wires legacy PAT
-mode from a separate `GITHUBBOT_TOKEN` secret key to avoid collision.
+mode from a separate `GITHUBBOT_TOKEN` secret key to avoid collision. Configure
+`GITHUB_BOT_USERNAME` with the complete App actor login (for example,
+`centaur-hz[bot]`); Githubbot retains that identity for lifecycle checks and
+automatically recognizes the GitHub Markdown mention form `@centaur-hz`.
 
 Webhook events to subscribe: **Issue comments**, **Pull request review comments**, **Issues**, **Pull
 requests**, **Pull request reviews**, **Check runs**, **Check suites**, and **Workflow runs**

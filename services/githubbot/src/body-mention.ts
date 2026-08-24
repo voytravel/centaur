@@ -9,7 +9,14 @@ import type {
   GithubbotApiMessage,
   GithubbotTrace,
 } from "./types";
-import { errorMessage, noopLogger, nowMs, stringValue, traceLog } from "./utils";
+import {
+  errorMessage,
+  githubTextMentionName,
+  noopLogger,
+  nowMs,
+  stringValue,
+  traceLog,
+} from "./utils";
 
 /**
  * The adapter only surfaces issue/PR *comments*, so an @-mention written into the
@@ -150,10 +157,17 @@ const BODY_MENTION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
 /** Whether `body` contains a standalone @-mention of `userName` (case-insensitive). */
 export function mentionsBot(body: string, userName: string): boolean {
-  const escaped = userName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return new RegExp(`(^|[^a-zA-Z0-9_/-])@${escaped}(?![a-zA-Z0-9_-])`, "i").test(
-    body,
-  );
+  // A GitHub App's API actor is `<slug>[bot]`, while normal Markdown uses
+  // `@<slug>`. Accept both here so an older stored/configured actor name never
+  // prevents a valid App mention in a newly opened issue or pull request.
+  return [userName, githubTextMentionName(userName)]
+    .filter((candidate, index, candidates) => candidate && candidates.indexOf(candidate) === index)
+    .some((candidate) => {
+      const escaped = candidate.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      return new RegExp(`(^|[^a-zA-Z0-9_/-])@${escaped}(?![a-zA-Z0-9_-])`, "i").test(
+        body,
+      );
+    });
 }
 
 function bodyMentionMessage(
