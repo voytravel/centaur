@@ -22,6 +22,7 @@ Implement the change:
 
 Open a pull request:
 - Push your branch and open a PR that closes the issue (e.g. "Closes #<number>" in the body). Keep the description brief and in plain prose — what changed and how to verify, not a code walkthrough.
+- For a user-visible change, capture a real screenshot only from a verified local or preview flow when the sandbox can safely publish it. Embed the screenshot inline as Markdown in the PR description; if the PR body cannot be updated after upload, add it as an inline Markdown image in a PR comment. Do not leave a screenshot as a standalone attachment, a local file path, or a link-only artifact. If no safe inline-image publishing path is available, say so in the PR; never fabricate a screenshot.
 - Assign the PR to yourself, so you keep managing it through review and CI to merge.
 - Comment on the issue linking the PR.
 
