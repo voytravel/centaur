@@ -1155,16 +1155,19 @@ function automationInstructionMessage(
   const reviewerInstruction = reviewers.length
     ? "Request review from " + reviewers.join(", ") + " when you open the PR."
     : "Request the appropriate human reviewers using CODEOWNERS and GitHub suggestions.";
+  const inlineScreenshotInstruction =
+    "For a user-visible change, capture a real screenshot only from a verified local or preview flow when the sandbox can safely publish it. Embed the screenshot inline as Markdown in the PR description; if the PR body cannot be updated after upload, add it as an inline Markdown image in a PR comment. Do not leave a screenshot as a standalone attachment, a local file path, or a link-only artifact. If no safe inline-image publishing path is available, say so in the PR; never fabricate a screenshot.";
   const previewInstruction = decision.previewLabel
     ? "For a user-visible change, after opening the draft PR apply the configured preview label " +
       JSON.stringify(decision.previewLabel) +
       " with `gh pr edit --add-label`. Then inspect the PR's verified checks and comments for a preview URL. Include it only after it exists; otherwise say that preview provisioning is pending. Do not apply the label for a non-visual change, and never create or guess a preview URL yourself."
-    : "For a user-visible change, capture a real screenshot from a verified local or preview flow and include it inline in the PR and Linear update when the available tools support upload. If the repository's normal verified deployment flow provides a preview URL, include that URL in both updates; otherwise state that no preview URL is available. Never fabricate a screenshot or preview URL. For a non-visual change, say that no screenshot or preview URL applies.";
+    : "If the repository's normal verified deployment flow provides a preview URL for a user-visible change, include that URL in the PR and Linear update; otherwise state that no preview URL is available. Never create or guess a preview URL yourself. For a non-visual change, say that no screenshot or preview URL applies.";
   const text = [
     "This Linear issue was selected by an automation policy after a new or updated issue event.",
     "First assess whether the issue is genuinely ready and actionable. If scope, acceptance criteria, repository fit, or a dependency is unclear, do not create a PR; post one concise Linear comment naming what is missing and stop.",
     "If it is actionable, implement it in " + (decision.githubRepository ?? "the mapped GitHub repository") + ". Use git and gh in your sandbox, run the relevant verification, open a draft PR that links this Linear issue, and do not merge it.",
     "Use the exact Linear issue identifier from the injected issue context as a prefix in the draft PR title (for example, `ENG-123: concise summary`). This is the durable link contract for review and release evidence. Include the issue URL in the PR body, but do not use closing magic words such as `Fixes`, `Closes`, or `Resolves`; the issue must not move to Done merely because its PR merges.",
+    inlineScreenshotInstruction,
     previewInstruction,
     reviewerInstruction,
     "When and only when the PR exists, finish with Linear-Status: in_review so the issue can move to review. If no PR is appropriate, finish with Linear-Status: todo."

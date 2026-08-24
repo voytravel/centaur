@@ -773,6 +773,11 @@ describe("linearbot comment-thread pipeline", () => {
         text.includes("configured preview label \"preview\""),
       ),
     ).toBe(true);
+    expect(
+      executeInputTexts(threadKey).some((text) =>
+        text.includes("Embed the screenshot inline as Markdown in the PR description"),
+      ),
+    ).toBe(true);
     const executionsBeforeRedelivery = codexApi.executes.filter(
       (execution) => execution.threadKey === threadKey,
     ).length;
