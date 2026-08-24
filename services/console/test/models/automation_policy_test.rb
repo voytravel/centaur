@@ -201,6 +201,52 @@ class AutomationPolicyTest < ActiveSupport::TestCase
     assert_equal "issue is blocked", blocked["reason"]
   end
 
+  test "normalizes and validates optional Slack accepted-work reporting" do
+    policy = github_policy(
+      settings: {
+        "github" => { "review" => "all_eligible" },
+        "activity_reporting" => { "slack_channel" => "c0123456789", "accepted" => "1" }
+      }
+    )
+
+    assert_predicate policy, :valid?
+    assert_equal "C0123456789", policy.activity_reporting_settings["slack_channel"]
+    assert policy.reports_activity?("accepted")
+    assert_includes policy.automation_summary, "Slack accepted-work report"
+
+    invalid = AutomationPolicy.new(
+      name: "Invalid activity reporting",
+      provider: "github",
+      repository: "acme/invalid-activity-reporting",
+      enabled: true,
+      execution_role: automation_role,
+      created_by: users(:acme_admin),
+      settings: {
+        "github" => { "review" => "all_eligible" },
+        "activity_reporting" => { "slack_channel" => "U0123456789", "accepted" => true }
+      }
+    )
+
+    assert_not invalid.valid?
+    assert_includes invalid.errors[:settings], "activity reporting has an invalid Slack channel"
+
+    malformed = AutomationPolicy.new(
+      name: "Malformed activity reporting",
+      provider: "github",
+      repository: "acme/malformed-activity-reporting",
+      enabled: true,
+      execution_role: automation_role,
+      created_by: users(:acme_admin),
+      settings: {
+        "github" => { "review" => "all_eligible" },
+        "activity_reporting" => "C0123456789"
+      }
+    )
+
+    assert_not malformed.valid?
+    assert_includes malformed.errors[:settings], "activity reporting must be an object"
+  end
+
   test "ready issue policy requires a GitHub repository mapping" do
     policy = AutomationPolicy.new(
       name: "Broken",

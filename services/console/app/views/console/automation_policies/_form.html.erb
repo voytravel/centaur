@@ -1,5 +1,6 @@
 <% github = policy.github_settings %>
 <% linear = policy.linear_settings %>
+<% activity_reporting = policy.activity_reporting_settings %>
 <% repository_routes = Array(linear["repository_routes"]).select { |route| route.is_a?(Hash) } %>
 <% repository_route_slots = repository_routes + [ {} ] %>
 <% repository_route_slots.concat(Array.new(3 - repository_route_slots.length) { {} }) if repository_route_slots.length < 3 %>
@@ -85,6 +86,30 @@
       <p class="mt-2 text-xs text-zinc-500">Required for Act mode. Only roles explicitly marked for repository automation appear here; the role is attached only to the matching PR or issue workstream while its latest event remains authorized.</p>
     </div>
   </div>
+
+  <fieldset class="rounded border border-ink-700 p-5">
+    <legend class="px-2 text-sm font-semibold text-zinc-200">Slack activity reporting</legend>
+    <p class="mb-5 text-xs text-zinc-500">Optional. A policy sends one concise, redacted notification when it first accepts work for a PR or issue. Repeated deliveries and already-active continuations stay in the Console audit instead of spamming Slack.</p>
+    <div class="grid gap-5 lg:grid-cols-2">
+      <div>
+        <label class="mb-2 block text-sm font-medium text-zinc-200" for="automation_policy_activity_reporting_slack_channel">Destination channel ID</label>
+        <%= text_field_tag "automation_policy[activity_reporting_slack_channel]", activity_reporting["slack_channel"],
+                           id: "automation_policy_activity_reporting_slack_channel",
+                           placeholder: "C0123456789",
+                           class: "form-input font-mono" %>
+        <p class="mt-2 text-xs text-zinc-500">The installed Slack bot must already belong to this public or private channel.</p>
+      </div>
+      <label class="mt-7 flex items-start gap-3 rounded border border-ink-700 bg-ink-900/50 px-4 py-3">
+        <%= check_box_tag "automation_policy[activity_reporting_accepted]", "1", activity_reporting["accepted"] == true,
+                          id: "automation_policy_activity_reporting_accepted",
+                          class: "mt-0.5 rounded border-ink-500 bg-ink-900 text-centaur-500" %>
+        <span>
+          <span class="block text-sm font-medium text-zinc-200">Report accepted work</span>
+          <span class="mt-1 block text-xs text-zinc-500">Reports the authorized source item and Console audit link, never raw webhook contents or agent output.</span>
+        </span>
+      </label>
+    </div>
+  </fieldset>
 
   <fieldset class="rounded border border-ink-700 p-5">
     <legend class="px-2 text-sm font-semibold text-zinc-200">GitHub behavior</legend>

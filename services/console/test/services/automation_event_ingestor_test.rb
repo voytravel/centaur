@@ -39,6 +39,52 @@ class AutomationEventIngestorTest < ActiveSupport::TestCase
     assert_equal 1, workstream.event_count
   end
 
+  test "queues one Slack activity report for a newly accepted workstream, not continuations" do
+    policy = AutomationPolicy.create!(
+      name: "Reported widgets",
+      provider: "github",
+      repository: "acme/reported-widgets",
+      enabled: true,
+      mode: "act",
+      execution_role: automation_role,
+      created_by: users(:acme_admin),
+      settings: {
+        "github" => { "review" => "all_eligible", "feedback" => "eligible" },
+        "activity_reporting" => { "slack_channel" => "C0123456789", "accepted" => true }
+      }
+    )
+    first_event = {
+      "provider" => "github",
+      "deduplication_key" => "reported-review",
+      "event_type" => "pull_request",
+      "event_action" => "opened",
+      "repository" => policy.repository,
+      "subject_number" => 42,
+      "draft" => false,
+      "labels" => []
+    }
+    continuation_event = first_event.merge(
+      "deduplication_key" => "reported-feedback",
+      "event_type" => "pull_request_review",
+      "event_action" => "submitted"
+    )
+    queued_event_ids = []
+
+    AutomationActivityReportJob.stub(:perform_later, ->(event_id) { queued_event_ids << event_id }) do
+      assert_equal "act", AutomationEventIngestor.new(first_event).call.fetch("decision")
+      assert_equal "act", AutomationEventIngestor.new(continuation_event).call.fetch("decision")
+      assert_equal "act", AutomationEventIngestor.new(first_event).call.fetch("decision")
+    end
+
+    first = AutomationEvent.find_by!(deduplication_key: "reported-review")
+    assert_equal [ first.id ], queued_event_ids
+    assert_equal(
+      { "kind" => "accepted", "slack_channel" => "C0123456789" },
+      first.metadata.fetch("activity_report")
+    )
+    assert_nil AutomationEvent.find_by!(deduplication_key: "reported-feedback").metadata["activity_report"]
+  end
+
   test "continues an explicitly requested GitHub PR while blocking safety rejections" do
     role = automation_role
     AutomationPolicy.create!(

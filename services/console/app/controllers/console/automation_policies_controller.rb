@@ -74,8 +74,12 @@ class Console::AutomationPoliciesController < ApplicationController
   def policy_attributes
     values = policy_params
     provider = values.fetch(:provider)
+    # Turn the permitted slice into an ordinary hash before adding generated
+    # settings. Mutating a nested ActionController::Parameters value would
+    # leave that child unpermitted and make Active Record reject the whole
+    # policy payload.
     common = values.slice(:name, :provider, :repository, :linear_team_id, :linear_project_id,
-                          :execution_role_id, :enabled, :mode)
+                          :execution_role_id, :enabled, :mode).to_h.symbolize_keys
     common[:settings] =
       if provider == "github"
         {
@@ -108,6 +112,10 @@ class Console::AutomationPoliciesController < ApplicationController
           }
         }
       end
+    common[:settings]["activity_reporting"] = {
+      "slack_channel" => values[:activity_reporting_slack_channel].to_s.strip.upcase,
+      "accepted" => boolean_value(values[:activity_reporting_accepted])
+    }
     common
   end
 
@@ -129,6 +137,8 @@ class Console::AutomationPoliciesController < ApplicationController
       :github_base_branches,
       :github_required_labels,
       :github_excluded_labels,
+      :activity_reporting_slack_channel,
+      :activity_reporting_accepted,
       :linear_issue_mode,
       :linear_ready_statuses,
       :linear_required_fields,

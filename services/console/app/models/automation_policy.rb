@@ -6,6 +6,7 @@ class AutomationPolicy < ApplicationRecord
   GITHUB_REVIEW_MODES = %w[off assigned_or_mentioned all_eligible].freeze
   GITHUB_REPAIR_MODES = %w[off observe bot_owned explicit eligible].freeze
   LINEAR_ISSUE_MODES = %w[off ready_issues].freeze
+  ACTIVITY_REPORT_KINDS = %w[accepted].freeze
   LINEAR_REPOSITORY_ROUTE_KEYS = %w[
     repository
     required_labels
@@ -16,6 +17,7 @@ class AutomationPolicy < ApplicationRecord
   MANAGED_SOURCE_KEY = "_centaur_managed_source".freeze
   MANAGED_SOURCE_FIELDS = %w[kind repository path revision content_sha256].freeze
   GITHUB_REPOSITORY_PATTERN = /\A[A-Za-z0-9][A-Za-z0-9_.-]*\/[A-Za-z0-9][A-Za-z0-9_.-]*\z/.freeze
+  SLACK_CHANNEL_ID_PATTERN = /\A[CG][A-Z0-9]{8,}\z/.freeze
 
   GITHUB_REVIEW_ACTIONS = %w[opened reopened ready_for_review synchronize].freeze
   GITHUB_CONFLICT_ACTIONS = %w[synchronize edited ready_for_review].freeze
@@ -73,6 +75,25 @@ class AutomationPolicy < ApplicationRecord
     linear_defaults.merge(settings.fetch("linear", {}).slice(*linear_defaults.keys))
   end
 
+  # Reporting is deliberately a small, provider-independent policy surface:
+  # a configured channel receives one redacted notification when an Act policy
+  # first accepts work for a workstream. It never receives provider payloads,
+  # agent output, credentials, or a notification for every continuation.
+  def activity_reporting_settings
+    config = settings["activity_reporting"]
+    config = {} unless config.is_a?(Hash)
+    activity_reporting_defaults.merge(
+      config.slice(*activity_reporting_defaults.keys)
+    )
+  end
+
+  def reports_activity?(kind)
+    return false unless ACTIVITY_REPORT_KINDS.include?(kind.to_s)
+
+    config = activity_reporting_settings
+    config["slack_channel"].present? && config[kind.to_s] == true
+  end
+
   def scope_label
     return repository if github?
 
@@ -82,12 +103,12 @@ class AutomationPolicy < ApplicationRecord
   def automation_summary
     if github?
       config = github_settings
-      "review: #{config["review"].tr("_", " ")} · feedback: #{config["feedback"].tr("_", " ")} · checks: #{config["checks"].tr("_", " ")}"
+      "review: #{config["review"].tr("_", " ")} · feedback: #{config["feedback"].tr("_", " ")} · checks: #{config["checks"].tr("_", " ")}#{activity_reporting_summary}"
     else
       config = linear_settings
       required_labels = Array(config["required_labels"])
       label_summary = required_labels.any? ? required_labels.join(", ") : "none"
-      "issues: #{config["issue"].tr("_", " ")} · repo: #{linear_repository_summary(config)} · required labels: #{label_summary}"
+      "issues: #{config["issue"].tr("_", " ")} · repo: #{linear_repository_summary(config)} · required labels: #{label_summary}#{activity_reporting_summary}"
     end
   end
 
@@ -180,11 +201,34 @@ class AutomationPolicy < ApplicationRecord
     }
   end
 
+  def activity_reporting_defaults
+    {
+      "slack_channel" => "",
+      "accepted" => false
+    }
+  end
+
   def normalize_settings
     self.settings = {} unless settings.is_a?(Hash)
     self.settings = settings.deep_stringify_keys
+    if settings.key?("activity_reporting")
+      self.settings["activity_reporting"] = normalize_activity_reporting_config(settings["activity_reporting"])
+    end
     self.settings["github"] = normalize_config(settings["github"]) if github?
     self.settings["linear"] = normalize_linear_config(settings["linear"]) if linear?
+  end
+
+  def normalize_activity_reporting_config(config)
+    return config unless config.is_a?(Hash)
+
+    normalized = normalize_config(config)
+    if normalized["slack_channel"].is_a?(String)
+      normalized["slack_channel"] = normalized["slack_channel"].upcase
+    end
+    return normalized unless normalized.key?("accepted")
+
+    normalized["accepted"] = ActiveModel::Type::Boolean.new.cast(normalized["accepted"])
+    normalized
   end
 
   def normalize_config(config)
@@ -253,6 +297,34 @@ class AutomationPolicy < ApplicationRecord
       config = linear_settings
       errors.add(:settings, "has an invalid issue mode") unless LINEAR_ISSUE_MODES.include?(config["issue"])
       validate_linear_repository_routes(config)
+    end
+    validate_activity_reporting
+  end
+
+  def validate_activity_reporting
+    raw_config = settings["activity_reporting"]
+    return if raw_config.nil?
+
+    unless raw_config.is_a?(Hash)
+      errors.add(:settings, "activity reporting must be an object")
+      return
+    end
+
+    config = raw_config.deep_stringify_keys
+    unsupported = config.keys - activity_reporting_defaults.keys
+    errors.add(:settings, "activity reporting has unsupported fields") if unsupported.any?
+
+    channel = config["slack_channel"]
+    unless channel.nil? || (channel.is_a?(String) && (channel.blank? || SLACK_CHANNEL_ID_PATTERN.match?(channel)))
+      errors.add(:settings, "activity reporting has an invalid Slack channel")
+    end
+
+    accepted = config["accepted"]
+    unless accepted.nil? || accepted == true || accepted == false
+      errors.add(:settings, "activity reporting accepted must be true or false")
+    end
+    if accepted == true && channel.to_s.blank?
+      errors.add(:settings, "activity reporting needs a Slack channel when accepted reporting is enabled")
     end
   end
 
@@ -522,6 +594,10 @@ class AutomationPolicy < ApplicationRecord
     return config["github_repository"].presence || "not mapped" if routes.empty?
 
     routes.map { |route| route["repository"] }.compact.join(", ")
+  end
+
+  def activity_reporting_summary
+    reports_activity?("accepted") ? " · Slack accepted-work report" : ""
   end
 
   def ignored(reason)

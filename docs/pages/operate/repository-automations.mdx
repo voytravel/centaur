@@ -44,6 +44,20 @@ Act mode, or receiving a newly ineligible event revokes that policy-owned role
 binding. It keeps only compact event metadata; raw webhook bodies and
 credentials do not enter the policy store.
 
+## Optional Slack activity report
+
+Each policy can optionally name a Slack channel and enable **Report accepted
+work**. This posts one compact notification when an Act policy first accepts a
+new PR or issue workstream (or accepts it again after a safety block). It links
+only the provider source item and the Console audit record, and lists the
+deterministic authorized action. It does not repeat raw webhook content, agent
+output, credentials, or a message for every continuation/replayed delivery.
+
+The channel must already be accessible to the installed Slack bot. Leaving the
+setting off keeps the audit Console-only. Slack delivery itself runs as a
+native, checkpointed workflow keyed by the persisted automation event, so a
+retried Console job cannot create a second root message.
+
 ## GitHub policies
 
 A GitHub policy scopes to one `owner/repository`. It can independently enable:
@@ -61,9 +75,10 @@ bot-owned PR behavior remains available; the policy only extends automation to
 other eligible PRs.
 
 Enable the GitHubbot, expose `POST /api/webhooks/github`, and subscribe the
-GitHub App or webhook to pull requests, pull-request reviews, check runs,
-check suites, status, and workflow runs. Comment-driven work retains its
-separate fail-closed GitHub author-association gate.
+GitHub App or webhook to **Issue comments**, **Issues**, **Pull requests**,
+**Pull request reviews**, **Pull request review comments**, **Check runs**,
+**Check suites**, **Statuses**, and **Workflow runs**. Comment-driven work
+retains its separate fail-closed GitHub author-association gate.
 
 ## Linear policies
 
