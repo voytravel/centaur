@@ -375,6 +375,7 @@ class AutomationEventIngestorTest < ActiveSupport::TestCase
     event = AutomationEvent.sole
     assert_equal "acme/travel", event.metadata.dig("result", "github_repository")
     assert_equal "preview", event.metadata.dig("result", "preview_label")
+    assert_equal "acme/travel", AutomationWorkstream.sole.repository
   end
 
   test "re-evaluates a duplicate delivery after an operator disables its policy" do
