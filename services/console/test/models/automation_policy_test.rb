@@ -214,7 +214,13 @@ class AutomationPolicyTest < ActiveSupport::TestCase
     assert policy.reports_activity?("accepted")
     assert_includes policy.automation_summary, "Slack accepted-work report"
 
-    invalid = github_policy(
+    invalid = AutomationPolicy.new(
+      name: "Invalid activity reporting",
+      provider: "github",
+      repository: "acme/invalid-activity-reporting",
+      enabled: true,
+      execution_role: automation_role,
+      created_by: users(:acme_admin),
       settings: {
         "github" => { "review" => "all_eligible" },
         "activity_reporting" => { "slack_channel" => "U0123456789", "accepted" => true }
@@ -224,7 +230,13 @@ class AutomationPolicyTest < ActiveSupport::TestCase
     assert_not invalid.valid?
     assert_includes invalid.errors[:settings], "activity reporting has an invalid Slack channel"
 
-    malformed = github_policy(
+    malformed = AutomationPolicy.new(
+      name: "Malformed activity reporting",
+      provider: "github",
+      repository: "acme/malformed-activity-reporting",
+      enabled: true,
+      execution_role: automation_role,
+      created_by: users(:acme_admin),
       settings: {
         "github" => { "review" => "all_eligible" },
         "activity_reporting" => "C0123456789"
