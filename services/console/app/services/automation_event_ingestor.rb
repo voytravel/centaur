@@ -54,6 +54,7 @@ class AutomationEventIngestor
       )
       workstream.update!(
         automation_policy: policy,
+        repository: resolved_workstream_repository(workstream, outcome),
         last_event_at: record.received_at,
         event_count: workstream.event_count + 1,
         state: next_workstream_state(workstream, outcome)
@@ -126,6 +127,18 @@ class AutomationEventIngestor
       "linear_issue_identifier" => @event["linear_issue_identifier"].to_s.strip.presence,
       "linear_issue_url" => AutomationWorkstream.normalize_linear_issue_url(@event["linear_issue_url"])
     }.compact
+  end
+
+  # GitHub supplies a verified normalized repository with every event. Linear
+  # deliberately does not: its selected repository comes only from the matched
+  # policy route. Persist that deterministic outcome on the durable workstream
+  # so the Console audit can trace a source issue to its authorized target
+  # without treating issue text or a provider payload field as repository
+  # authority.
+  def resolved_workstream_repository(workstream, outcome)
+    return @event["repository"] if @event["provider"] == "github"
+
+    outcome["github_repository"].to_s.strip.presence || workstream.repository
   end
 
   def resolve_policy
