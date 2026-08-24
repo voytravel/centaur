@@ -85,6 +85,94 @@ class AutomationEventIngestorTest < ActiveSupport::TestCase
     assert_nil AutomationEvent.find_by!(deduplication_key: "reported-feedback").metadata["activity_report"]
   end
 
+  test "queues one pull-request-created report only for a GitHub App-authored opened event" do
+    policy = AutomationPolicy.create!(
+      name: "App-created PR reporting",
+      provider: "github",
+      repository: "acme/app-created-prs",
+      enabled: true,
+      mode: "act",
+      execution_role: automation_role,
+      created_by: users(:acme_admin),
+      settings: {
+        "github" => { "review" => "off" },
+        "activity_reporting" => { "slack_channel" => "C0123456789", "pr_created" => true }
+      }
+    )
+    created_event = {
+      "provider" => "github",
+      "deduplication_key" => "app-created-pr",
+      "event_type" => "pull_request",
+      "event_action" => "opened",
+      "repository" => policy.repository,
+      "subject_number" => 42,
+      "draft" => true,
+      "labels" => [],
+      "created_by_bot" => true
+    }
+    human_event = created_event.merge(
+      "deduplication_key" => "human-created-pr",
+      "subject_number" => 43,
+      "created_by_bot" => false
+    )
+    queued_event_ids = []
+
+    AutomationActivityReportJob.stub(:perform_later, ->(event_id) { queued_event_ids << event_id }) do
+      assert_equal "ignored", AutomationEventIngestor.new(created_event).call.fetch("decision")
+      assert_equal "ignored", AutomationEventIngestor.new(human_event).call.fetch("decision")
+      assert_equal "ignored", AutomationEventIngestor.new(created_event).call.fetch("decision")
+    end
+
+    created = AutomationEvent.find_by!(deduplication_key: "app-created-pr")
+    assert_equal [ created.id ], queued_event_ids
+    assert_equal(
+      { "kind" => "pr_created", "slack_channel" => "C0123456789" },
+      created.metadata.fetch("activity_report")
+    )
+    assert_equal true, created.metadata.fetch("created_by_bot")
+    assert_nil AutomationEvent.find_by!(deduplication_key: "human-created-pr").metadata["activity_report"]
+  end
+
+  test "prefers one pull-request-created report over accepted-work reporting for the same event" do
+    policy = AutomationPolicy.create!(
+      name: "No duplicate app-created PR reports",
+      provider: "github",
+      repository: "acme/no-duplicate-pr-reports",
+      enabled: true,
+      mode: "act",
+      execution_role: automation_role,
+      created_by: users(:acme_admin),
+      settings: {
+        "github" => { "review" => "all_eligible" },
+        "activity_reporting" => {
+          "slack_channel" => "C0123456789",
+          "accepted" => true,
+          "pr_created" => true
+        }
+      }
+    )
+    event = {
+      "provider" => "github",
+      "deduplication_key" => "no-duplicate-app-created-pr",
+      "event_type" => "pull_request",
+      "event_action" => "opened",
+      "repository" => policy.repository,
+      "subject_number" => 42,
+      "draft" => false,
+      "labels" => [],
+      "created_by_bot" => true
+    }
+    queued_event_ids = []
+
+    AutomationActivityReportJob.stub(:perform_later, ->(event_id) { queued_event_ids << event_id }) do
+      assert_equal "act", AutomationEventIngestor.new(event).call.fetch("decision")
+    end
+
+    report = AutomationEvent.find_by!(deduplication_key: "no-duplicate-app-created-pr")
+    assert_equal [ report.id ], queued_event_ids
+    assert_equal "pr_created", report.metadata.dig("activity_report", "kind")
+  end
+
   test "continues an explicitly requested GitHub PR while blocking safety rejections" do
     role = automation_role
     AutomationPolicy.create!(

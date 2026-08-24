@@ -7,7 +7,7 @@ require "uri"
 class AutomationActivityReport
   WORKFLOW_NAME = "automation_activity_report"
   WORKFLOW_MAX_ATTEMPTS = 3
-  REPORT_KIND = "accepted"
+  REPORT_KINDS = AutomationPolicy::ACTIVITY_REPORT_KINDS.freeze
 
   def initialize(event)
     @event = event
@@ -15,14 +15,14 @@ class AutomationActivityReport
   end
 
   def workflow_input
-    return unless report_kind == REPORT_KIND
+    return unless REPORT_KINDS.include?(report_kind)
 
     channel = report_channel
     return unless AutomationPolicy::SLACK_CHANNEL_ID_PATTERN.match?(channel)
 
     {
       "channel" => channel,
-      "kind" => REPORT_KIND,
+      "kind" => report_kind,
       "text" => message_text
     }
   end
@@ -47,11 +47,21 @@ class AutomationActivityReport
   end
 
   def message_text
+    return pr_created_message_text if report_kind == "pr_created"
+
     lines = [ ":gear: *Centaur automation accepted*" ]
     lines << "Source: #{source_reference}"
     lines << "Actions: #{action_summary}"
     lines << "Audit: #{audit_reference}"
     lines.join("\n")
+  end
+
+  def pr_created_message_text
+    [
+      ":sparkles: *Centaur created a pull request*",
+      "Pull request: #{source_reference}",
+      "Audit: #{audit_reference}"
+    ].join("\n")
   end
 
   def source_reference

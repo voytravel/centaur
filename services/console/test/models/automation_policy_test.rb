@@ -201,18 +201,23 @@ class AutomationPolicyTest < ActiveSupport::TestCase
     assert_equal "issue is blocked", blocked["reason"]
   end
 
-  test "normalizes and validates optional Slack accepted-work reporting" do
+  test "normalizes and validates optional Slack activity reporting" do
     policy = github_policy(
       settings: {
         "github" => { "review" => "all_eligible" },
-        "activity_reporting" => { "slack_channel" => "c0123456789", "accepted" => "1" }
+        "activity_reporting" => {
+          "slack_channel" => "c0123456789",
+          "accepted" => "1",
+          "pr_created" => "1"
+        }
       }
     )
 
     assert_predicate policy, :valid?
     assert_equal "C0123456789", policy.activity_reporting_settings["slack_channel"]
     assert policy.reports_activity?("accepted")
-    assert_includes policy.automation_summary, "Slack accepted-work report"
+    assert policy.reports_activity?("pr_created")
+    assert_includes policy.automation_summary, "Slack accepted-work + PR-created report"
 
     invalid = AutomationPolicy.new(
       name: "Invalid activity reporting",

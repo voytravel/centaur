@@ -50,6 +50,18 @@ class AutomationActivityReportJobTest < ActiveJob::TestCase
     assert_empty client.requests
   end
 
+  test "starts a PR-created report from the persisted snapshot" do
+    event = reportable_event(activity_report: { "kind" => "pr_created", "slack_channel" => "C0123456789" })
+    client = FakeApiClient.new
+    AutomationActivityReportJob.client_factory = -> { client }
+
+    AutomationActivityReportJob.perform_now(event.id)
+
+    request = client.requests.sole
+    assert_equal "pr_created", request.dig(:input, "kind")
+    assert_includes request.dig(:input, "text"), "Centaur created a pull request"
+  end
+
   private
 
   def reportable_event(activity_report: { "kind" => "accepted", "slack_channel" => "C0123456789" })

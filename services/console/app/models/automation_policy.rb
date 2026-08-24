@@ -6,7 +6,7 @@ class AutomationPolicy < ApplicationRecord
   GITHUB_REVIEW_MODES = %w[off assigned_or_mentioned all_eligible].freeze
   GITHUB_REPAIR_MODES = %w[off observe bot_owned explicit eligible].freeze
   LINEAR_ISSUE_MODES = %w[off ready_issues].freeze
-  ACTIVITY_REPORT_KINDS = %w[accepted].freeze
+  ACTIVITY_REPORT_KINDS = %w[accepted pr_created].freeze
   LINEAR_REPOSITORY_ROUTE_KEYS = %w[
     repository
     required_labels
@@ -76,8 +76,8 @@ class AutomationPolicy < ApplicationRecord
   end
 
   # Reporting is deliberately a small, provider-independent policy surface:
-  # a configured channel receives one redacted notification when an Act policy
-  # first accepts work for a workstream. It never receives provider payloads,
+  # a configured channel receives one redacted notification for selected
+  # policy-owned lifecycle milestones. It never receives provider payloads,
   # agent output, credentials, or a notification for every continuation.
   def activity_reporting_settings
     config = settings["activity_reporting"]
@@ -204,7 +204,8 @@ class AutomationPolicy < ApplicationRecord
   def activity_reporting_defaults
     {
       "slack_channel" => "",
-      "accepted" => false
+      "accepted" => false,
+      "pr_created" => false
     }
   end
 
@@ -225,9 +226,11 @@ class AutomationPolicy < ApplicationRecord
     if normalized["slack_channel"].is_a?(String)
       normalized["slack_channel"] = normalized["slack_channel"].upcase
     end
-    return normalized unless normalized.key?("accepted")
+    ACTIVITY_REPORT_KINDS.each do |kind|
+      next unless normalized.key?(kind)
 
-    normalized["accepted"] = ActiveModel::Type::Boolean.new.cast(normalized["accepted"])
+      normalized[kind] = ActiveModel::Type::Boolean.new.cast(normalized[kind])
+    end
     normalized
   end
 
@@ -319,12 +322,16 @@ class AutomationPolicy < ApplicationRecord
       errors.add(:settings, "activity reporting has an invalid Slack channel")
     end
 
-    accepted = config["accepted"]
-    unless accepted.nil? || accepted == true || accepted == false
-      errors.add(:settings, "activity reporting accepted must be true or false")
+    enabled_kinds = []
+    ACTIVITY_REPORT_KINDS.each do |kind|
+      enabled = config[kind]
+      unless enabled.nil? || enabled == true || enabled == false
+        errors.add(:settings, "activity reporting #{kind.tr('_', ' ')} must be true or false")
+      end
+      enabled_kinds << kind if enabled == true
     end
-    if accepted == true && channel.to_s.blank?
-      errors.add(:settings, "activity reporting needs a Slack channel when accepted reporting is enabled")
+    if enabled_kinds.any? && channel.to_s.blank?
+      errors.add(:settings, "activity reporting needs a Slack channel when reporting is enabled")
     end
   end
 
@@ -597,7 +604,10 @@ class AutomationPolicy < ApplicationRecord
   end
 
   def activity_reporting_summary
-    reports_activity?("accepted") ? " · Slack accepted-work report" : ""
+    kinds = []
+    kinds << "accepted-work" if reports_activity?("accepted")
+    kinds << "PR-created" if reports_activity?("pr_created")
+    kinds.any? ? " · Slack #{kinds.join(' + ')} report" : ""
   end
 
   def ignored(reason)
