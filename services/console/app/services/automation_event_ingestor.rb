@@ -33,18 +33,25 @@ class AutomationEventIngestor
     return no_policy_response unless policy
 
     workstream = find_or_create_workstream!
-    outcome = policy.evaluate(policy_event(workstream, policy))
-    record = workstream.automation_events.create!(
-      provider: @event.fetch("provider"),
-      deduplication_key: @event.fetch("deduplication_key"),
-      event_type: @event.fetch("event_type"),
-      event_action: @event["event_action"],
-      decision: outcome.fetch("decision"),
-      action_kind: outcome.fetch("actions").join(",").presence,
-      metadata: safe_metadata(outcome),
-      received_at: Time.current
-    )
+    record = outcome = activity_report = nil
     workstream.with_lock do
+      # Evaluate and persist each event serially per durable workstream. In
+      # particular, this makes the accepted-work notification a true state
+      # transition: concurrent first events cannot each observe `idle` and
+      # schedule duplicate Slack reports.
+      previous_state = workstream.state
+      outcome = policy.evaluate(policy_event(workstream, policy))
+      activity_report = activity_report_metadata(policy, outcome, previous_state)
+      record = workstream.automation_events.create!(
+        provider: @event.fetch("provider"),
+        deduplication_key: @event.fetch("deduplication_key"),
+        event_type: @event.fetch("event_type"),
+        event_action: @event["event_action"],
+        decision: outcome.fetch("decision"),
+        action_kind: outcome.fetch("actions").join(",").presence,
+        metadata: safe_metadata(outcome, activity_report:),
+        received_at: Time.current
+      )
       workstream.update!(
         automation_policy: policy,
         last_event_at: record.received_at,
@@ -53,6 +60,7 @@ class AutomationEventIngestor
       )
     end
     AutomationPrincipalAuthorizer.reconcile_workstream(workstream)
+    enqueue_activity_report(record) if activity_report
 
     response_for(record, workstream, nil, policy)
   rescue ActiveRecord::RecordNotUnique
@@ -151,7 +159,7 @@ class AutomationEventIngestor
     end
   end
 
-  def safe_metadata(outcome)
+  def safe_metadata(outcome, activity_report: nil)
     {
       "result" => {
         "actions" => outcome.fetch("actions"),
@@ -170,7 +178,35 @@ class AutomationEventIngestor
       "status" => @event["status"],
       "title_present" => @event["title"].to_s.strip.present?,
       "description_present" => @event["description"].to_s.strip.present?
-    }.compact
+    }.compact.tap do |metadata|
+      metadata["activity_report"] = activity_report if activity_report
+    end
+  end
+
+  # A report is a notification of a newly accepted workstream, not a second
+  # activity/event store. We snapshot only the destination selected by the
+  # policy at authorization time; a later policy edit cannot redirect a queued
+  # report. Active workstreams deliberately suppress continuation noise.
+  def activity_report_metadata(policy, outcome, previous_state)
+    return unless outcome["decision"] == "act"
+    return if previous_state == "active"
+    return unless policy.reports_activity?("accepted")
+
+    {
+      "kind" => "accepted",
+      "slack_channel" => policy.activity_reporting_settings.fetch("slack_channel")
+    }
+  end
+
+  def enqueue_activity_report(record)
+    AutomationActivityReportJob.perform_later(record.id)
+  rescue StandardError => e
+    # Reporting must not make verified ingress retry or prevent the already
+    # authorized workstream from starting. The durable event remains visible in
+    # Console and operators get a concise infrastructure log to investigate.
+    Rails.logger.warn(
+      "automation_activity_report_enqueue_failed event_id=#{record.id} error=#{e.class}: #{e.message}"
+    )
   end
 
   # GitHub repair policies can continue only a PR that this same durable

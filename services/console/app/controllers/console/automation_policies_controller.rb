@@ -108,6 +108,10 @@ class Console::AutomationPoliciesController < ApplicationController
           }
         }
       end
+    common[:settings]["activity_reporting"] = {
+      "slack_channel" => values[:activity_reporting_slack_channel].to_s.strip.upcase,
+      "accepted" => boolean_value(values[:activity_reporting_accepted])
+    }
     common
   end
 
@@ -129,6 +133,8 @@ class Console::AutomationPoliciesController < ApplicationController
       :github_base_branches,
       :github_required_labels,
       :github_excluded_labels,
+      :activity_reporting_slack_channel,
+      :activity_reporting_accepted,
       :linear_issue_mode,
       :linear_ready_statuses,
       :linear_required_fields,
