@@ -58,7 +58,14 @@ import type {
   GithubbotThreadState,
   GithubbotTrace,
 } from "./types";
-import { errorMessage, noopLogger, nowMs, stringValue, traceLog } from "./utils";
+import {
+  errorMessage,
+  githubTextMentionName,
+  noopLogger,
+  nowMs,
+  stringValue,
+  traceLog,
+} from "./utils";
 
 export type {
   Githubbot,
@@ -72,11 +79,15 @@ const POSTGRES_CONNECT_MAX_DELAY_MS = 10_000;
 const DEDUP_WINDOW = 200;
 
 export function createGithubbot(options: GithubbotOptions): Githubbot {
+  // Keep GitHub's complete App actor login for lifecycle ownership/reviewer
+  // checks, but configure the chat parser with the valid Markdown mention
+  // form: GitHub Apps are invoked as `@<slug>`, not `@<slug>[bot]`.
   const userName = options.userName ?? "github-bot";
+  const mentionUserName = githubTextMentionName(userName);
   const logger = options.logger ?? noopLogger;
   const adapterConfig = {
     webhookSecret: options.webhookSecret,
-    userName,
+    userName: mentionUserName,
     ...(options.botUserId ? { botUserId: Number(options.botUserId) } : {}),
     ...(options.githubApiUrl ? { apiUrl: options.githubApiUrl } : {}),
     logger,
@@ -89,7 +100,7 @@ export function createGithubbot(options: GithubbotOptions): Githubbot {
       });
   const state = options.state ?? createDefaultState(options, logger);
   const chat = new Chat<{ github: typeof github }, GithubbotThreadState>({
-    userName,
+    userName: mentionUserName,
     adapters: { github },
     state,
     // Serialize handling per thread so a redelivered or near-simultaneous comment
