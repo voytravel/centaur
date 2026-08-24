@@ -44,6 +44,22 @@ def test_handler_posts_one_checkpointed_accepted_notice():
     ]
 
 
+def test_handler_posts_one_checkpointed_pr_created_notice():
+    context = FakeContext()
+    params = {
+        "channel": "c0123456789",
+        "kind": "pr_created",
+        "text": ":sparkles: *Centaur created a pull request*",
+    }
+
+    result = asyncio.run(automation_activity_report.handler(params, context))
+    asyncio.run(automation_activity_report.handler(params, context))
+
+    assert result == {"kind": "pr_created", "delivery": {"channel": "C0123456789", "ts": "123.456"}}
+    assert context.step_calls == ["post_pr_created_activity", "post_pr_created_activity"]
+    assert len(context.slack_calls) == 1
+
+
 def test_handler_rejects_non_channel_destinations_and_unknown_kinds():
     context = FakeContext()
 

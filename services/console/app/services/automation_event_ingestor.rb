@@ -179,15 +179,24 @@ class AutomationEventIngestor
       "title_present" => @event["title"].to_s.strip.present?,
       "description_present" => @event["description"].to_s.strip.present?
     }.compact.tap do |metadata|
+      metadata["created_by_bot"] = true if @event["created_by_bot"] == true
       metadata["activity_report"] = activity_report if activity_report
     end
   end
 
-  # A report is a notification of a newly accepted workstream, not a second
-  # activity/event store. We snapshot only the destination selected by the
-  # policy at authorization time; a later policy edit cannot redirect a queued
-  # report. Active workstreams deliberately suppress continuation noise.
+  # A report is a policy-selected lifecycle notice, not a second activity/event
+  # store. We snapshot only the destination selected by the policy at
+  # authorization time; a later policy edit cannot redirect a queued report.
+  # App-created PRs are reported independently of the normal action decision,
+  # so notification never manufactures another agent turn.
   def activity_report_metadata(policy, outcome, previous_state)
+    if reports_pr_created?(policy)
+      return {
+        "kind" => "pr_created",
+        "slack_channel" => policy.activity_reporting_settings.fetch("slack_channel")
+      }
+    end
+
     return unless outcome["decision"] == "act"
     return if previous_state == "active"
     return unless policy.reports_activity?("accepted")
@@ -196,6 +205,15 @@ class AutomationEventIngestor
       "kind" => "accepted",
       "slack_channel" => policy.activity_reporting_settings.fetch("slack_channel")
     }
+  end
+
+  def reports_pr_created?(policy)
+    policy.enabled? && policy.act? &&
+      policy.reports_activity?("pr_created") &&
+      @event["provider"] == "github" &&
+      @event["event_type"] == "pull_request" &&
+      @event["event_action"] == "opened" &&
+      @event["created_by_bot"] == true
   end
 
   def enqueue_activity_report(record)
