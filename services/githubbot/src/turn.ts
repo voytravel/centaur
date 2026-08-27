@@ -5,7 +5,11 @@ import {
 } from "@centaur/rendering";
 import type { GitHubAdapter } from "@chat-adapter/github";
 import type { Thread } from "chat";
-import { buildCommentReplyBody, CommentReplyCollector } from "./comment-bot";
+import {
+  buildCommentReplyBody,
+  buildWorkingReplyBody,
+  CommentReplyCollector,
+} from "./comment-bot";
 import { runExclusive } from "./context";
 import { resolveStickyProvider } from "./overrides";
 import {
@@ -51,7 +55,6 @@ export type ReviewCommentContext = {
 /** Accumulated result of one streamed agent turn. */
 export type TurnResult = {
   answer: string;
-  cotLines: string[];
   errorText: string;
   failed: boolean;
   fallbackText: string;
@@ -154,6 +157,22 @@ export function githubContextPreamble(
   );
 }
 
+/**
+ * GitHub gets a concise, public result while Console retains execution detail.
+ * This applies to every comment-driven turn even when the caller supplied its
+ * own subject preamble.
+ */
+export function githubTurnPreamble(preamble?: string): string {
+  const publicReplyContract = [
+    "Public GitHub response contract:",
+    "- An acknowledgement is already visible. Work silently; do not narrate intermediate reasoning, plans, commands, raw logs, or tool output in GitHub.",
+    "- Keep detailed execution evidence in Console. Your final GitHub reply must be a concise outcome: what changed (if anything), local verification, GitHub CI status, and any concrete blocker or next step.",
+    "- If you change code, inspect the repository CI workflow and run the closest local equivalent before pushing. Do not call CI green based only on a narrow test subset when a broader local equivalent is available.",
+    "- When relevant and feasible, start the local app or preview needed to validate the change. After pushing, monitor checks for the new head; if a check fails because of your change, diagnose, fix, and verify it before finalizing. If you cannot run a check, name it and explain why.",
+  ].join("\n");
+  return [preamble, publicReplyContract].filter(Boolean).join("\n\n");
+}
+
 export async function reactSafe(
   adapter: GitHubAdapter,
   threadKey: string,
@@ -213,7 +232,6 @@ async function runTurnStreamInner(
       }
       return {
         answer: collector.answer,
-        cotLines: collector.cotLines,
         errorText: collector.errorText,
         failed: collector.failed,
         fallbackText: fallback.text(),
@@ -234,7 +252,6 @@ async function runTurnStreamInner(
       });
       return {
         answer: "",
-        cotLines: [],
         errorText: errorMessage(error),
         failed: true,
         fallbackText: "",
@@ -243,7 +260,6 @@ async function runTurnStreamInner(
   }
   return {
     answer: "",
-    cotLines: [],
     errorText: "exhausted retries",
     failed: true,
     fallbackText: "",
@@ -289,6 +305,13 @@ export async function runSessionTurn(input: {
     trace,
   } = input;
   const logger = options.logger ?? noopLogger;
+  try {
+    await thread.post(buildWorkingReplyBody());
+  } catch (error) {
+    logger.warn("githubbot_thread_acknowledgement_failed", {
+      error: errorMessage(error),
+    });
+  }
   // The 👀 working ack is fired by the caller (handleMessage) before this turn's
   // setup so it lands instantly; here we only settle it to 🚀/😕 at the end.
   const threadState = (await thread.state) ?? {};
@@ -301,7 +324,9 @@ export async function runSessionTurn(input: {
   let lastEventId = threadState.lastEventId ?? 0;
   const forwardInput: ForwardSessionInput = {
     afterEventId: lastEventId,
-    contextPreamble: input.contextPreamble ?? githubContextPreamble(threadKey),
+    contextPreamble: githubTurnPreamble(
+      input.contextPreamble ?? githubContextPreamble(threadKey),
+    ),
     conversationName,
     executeMessage,
     harnessType: overrides.harnessType,
@@ -326,11 +351,9 @@ export async function runSessionTurn(input: {
   const body = result.failed
     ? buildCommentReplyBody({
         answer: `⚠️ I ran into an error before finishing:\n\n${result.errorText || "unknown error"}`,
-        cotLines: result.cotLines,
       })
     : buildCommentReplyBody({
         answer: result.answer,
-        cotLines: result.cotLines,
         fallback: result.fallbackText,
       });
   try {
@@ -474,6 +497,10 @@ function rendererOptions(
   const mapper = options.mapper;
   return {
     ...mapper,
+    // Some providers emit unphased assistant messages for interim narration.
+    // Treat those as Console-only commentary; GitHub receives the terminal
+    // completion payload rather than a raw execution transcript.
+    unknownAgentMessagePhase: "commentary",
     async onRendererEvent(event: RendererEvent) {
       await mapper?.onRendererEvent?.(event);
     },

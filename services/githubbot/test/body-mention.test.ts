@@ -24,7 +24,7 @@ describe("mentionsBot", () => {
   });
 });
 
-type Spies = { reactions: number; comments: number };
+type Spies = { reactions: number; comments: number; commentBodies?: string[] };
 
 function makeCtx(spies: Spies): PrManagerContext {
   const m = new Map<string, unknown>();
@@ -49,8 +49,9 @@ function makeCtx(spies: Spies): PrManagerContext {
           },
         },
         issues: {
-          createComment: async () => {
+          createComment: async (input: { body?: unknown }) => {
             spies.comments += 1;
+            if (typeof input.body === "string") spies.commentBodies?.push(input.body);
             return { data: { id: 2 } };
           },
         },
@@ -143,8 +144,8 @@ describe("handleBodyMention", () => {
     expect(spies.comments).toBe(0);
   });
 
-  test("runs a turn and replies once for an authorized mention; dedups redelivery", async () => {
-    const spies = { reactions: 0, comments: 0 };
+  test("acknowledges then replies once for an authorized mention; dedups redelivery", async () => {
+    const spies = { reactions: 0, comments: 0, commentBodies: [] as string[] };
     const ctx = makeCtx(spies);
     const first = handleBodyMention(
       ctx,
@@ -159,7 +160,8 @@ describe("handleBodyMention", () => {
       "pull_request",
       openedPr("@centaur-bot please review"),
     );
-    expect(spies.comments).toBe(1);
+    expect(spies.comments).toBe(2);
+    expect(spies.commentBodies[0]).toContain("reproduce relevant failures locally");
     expect(spies.reactions).toBeGreaterThanOrEqual(1);
   });
 });

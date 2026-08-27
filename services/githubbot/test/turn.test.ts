@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import {
+  GithubRenderFallback,
   githubContextPreamble,
+  githubTurnPreamble,
   parseGithubThreadKey,
   reviewCommentContextFromRaw,
 } from "../src/turn";
@@ -99,5 +101,33 @@ describe("githubContextPreamble", () => {
 
   test("returns undefined for an unparseable key", () => {
     expect(githubContextPreamble("not-a-github-key")).toBeUndefined();
+  });
+
+  test("adds a concise public-response and CI-verification contract", () => {
+    const preamble = githubTurnPreamble("Inspect the pull request.");
+    expect(preamble).toContain("Public GitHub response contract:");
+    expect(preamble).toContain("do not narrate intermediate reasoning");
+    expect(preamble).toContain("closest local equivalent");
+    expect(preamble).toContain("monitor checks for the new head");
+  });
+});
+
+describe("GithubRenderFallback", () => {
+  test("captures the canonical terminal result for the public reply", async () => {
+    const fallback = new GithubRenderFallback();
+    async function* source() {
+      yield {
+        eventKind: "session.execution_completed",
+        data: { result_text: "Pushed the fix; CI is running." },
+      };
+    }
+
+    const forwarded: unknown[] = [];
+    for await (const event of fallback.collectSource(source())) {
+      forwarded.push(event);
+    }
+
+    expect(forwarded).toHaveLength(1);
+    expect(fallback.text()).toBe("Pushed the fix; CI is running.");
   });
 });
