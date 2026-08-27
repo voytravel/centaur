@@ -1,9 +1,9 @@
 import { resolveAllowedAuthorAssociations } from "./authorization";
 import { backgroundWaitUntil } from "./context";
-import { buildCommentReplyBody } from "./comment-bot";
+import { buildCommentReplyBody, buildWorkingReplyBody } from "./comment-bot";
 import type { PrManagerContext } from "./pr-manager";
 import { reactWorkingOnSubject, settleSubjectReaction } from "./reactions";
-import { githubContextPreamble, runTurnStream } from "./turn";
+import { githubContextPreamble, githubTurnPreamble, runTurnStream } from "./turn";
 import type {
   ForwardSessionInput,
   GithubbotApiMessage,
@@ -105,10 +105,22 @@ export function handleBodyMention(
       subject: `${repo.owner}/${repo.repo}#${number}`,
     });
     await reactWorkingOnSubject(ctx.octokit, repo.owner, repo.repo, number, logger);
+    try {
+      await ctx.octokit.rest.issues.createComment({
+        owner: repo.owner,
+        repo: repo.repo,
+        issue_number: number,
+        body: buildWorkingReplyBody(),
+      });
+    } catch (error) {
+      logger.warn("githubbot_body_mention_acknowledgement_failed", {
+        error: errorMessage(error),
+      });
+    }
 
     const forwardInput: ForwardSessionInput = {
       afterEventId: 0,
-      contextPreamble: githubContextPreamble(threadKey),
+      contextPreamble: githubTurnPreamble(githubContextPreamble(threadKey)),
       conversationName: `${repo.owner}/${repo.repo}#${number}`,
       executeMessage: bodyMentionMessage(threadKey, number, body),
       messages: [],
@@ -123,11 +135,9 @@ export function handleBodyMention(
     const reply = result.failed
       ? buildCommentReplyBody({
           answer: `⚠️ I ran into an error before finishing:\n\n${result.errorText || "unknown error"}`,
-          cotLines: result.cotLines,
         })
       : buildCommentReplyBody({
           answer: result.answer,
-          cotLines: result.cotLines,
           fallback: result.fallbackText,
         });
     try {
