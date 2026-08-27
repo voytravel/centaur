@@ -37,4 +37,62 @@ describe("parseSessionEventStream", () => {
       },
     ]);
   });
+
+  test("keeps normal output lines while suppressing only terminal provider records", async () => {
+    const encoder = new TextEncoder();
+    const sse = [
+      "id: 1",
+      "event: session.output.line",
+      `data: ${JSON.stringify({ type: "item.started", item: { id: "work-1" } })}`,
+      "",
+      "id: 2",
+      "event: session.execution_completed",
+      `data: ${JSON.stringify({ result_text: "GITHUB_SUMMARY:\nOutcome: Done." })}`,
+      "",
+      "",
+    ].join("\n");
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encode(sse));
+        controller.close();
+      },
+    });
+    const events = [];
+    for await (const event of parseSessionEventStream(stream, () => undefined)) {
+      events.push(event);
+    }
+
+    expect(events).toHaveLength(2);
+    expect(events[0]).toMatchObject({ eventKind: "session.output.line" });
+    expect(events[1]).toMatchObject({ eventKind: "session.execution_completed" });
+  });
+
+  test("fails safely when a raw terminal record is not followed by durable completion", async () => {
+    const encoder = new TextEncoder();
+    const sse = [
+      "id: 1",
+      "event: session.output.line",
+      `data: ${JSON.stringify({ type: "turn.completed", turn: { status: "completed" } })}`,
+      "",
+      "",
+    ].join("\n");
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encode(sse));
+        controller.close();
+      },
+    });
+    const events = [];
+    for await (const event of parseSessionEventStream(stream, () => undefined)) {
+      events.push(event);
+    }
+
+    expect(events).toEqual([
+      {
+        data: { error: "Session stream ended before durable execution completion" },
+        event: "session.stream_error",
+        eventKind: "session.stream_error",
+      },
+    ]);
+  });
 });

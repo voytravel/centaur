@@ -947,6 +947,7 @@ export async function* parseSessionEventStream(
   stream: ReadableStream<Uint8Array>,
   onEventId: (eventId: number) => void,
 ): AsyncIterable<GithubbotRendererSource> {
+  let rawTerminalSuppressed = false;
   for await (const event of parseSseEvents(stream)) {
     if (typeof event.id === "number") onEventId(event.id);
     if (event.event === "session.output.line") {
@@ -961,6 +962,8 @@ export async function* parseSessionEventStream(
           eventId: event.id,
           eventKind: event.event,
         } satisfies RustSessionStreamEvent;
+      } else {
+        rawTerminalSuppressed = true;
       }
       continue;
     }
@@ -994,6 +997,14 @@ export async function* parseSessionEventStream(
       } satisfies RustSessionStreamEvent;
       return;
     }
+  }
+  if (rawTerminalSuppressed) {
+    // api-rs terminalizes every recognized raw terminal record as a durable
+    // execution event. If that invariant is ever broken, fail visibly and
+    // safely instead of publishing raw provider text or claiming success.
+    yield sessionStreamError(
+      new Error("Session stream ended before durable execution completion"),
+    );
   }
 }
 

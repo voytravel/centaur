@@ -10,8 +10,11 @@ const PUBLIC_SUMMARY_MAX_LINES = 8;
 const PUBLIC_SUMMARY_MARKER = /^\s*GITHUB_SUMMARY\s*:\s*/im;
 const INTERNAL_DETAILS_SECTION =
   /<details\b[^>]*>\s*<summary>\s*(?:chain\s+of\s+thought|thinking|reasoning|work\s+log|execution\s+log)\b[^<]*<\/summary>[\s\S]*?<\/details>\s*/gi;
+// The marker and compact bounds are the primary disclosure boundary. This is
+// only an opportunistic backstop for familiar transcript formats; update it
+// when a concrete new leak is observed rather than treating it as a parser.
 const EXECUTION_TRANSCRIPT_MARKERS =
-  /<details\b|<summary\b|\b(?:chain\s+of\s+thought|command execution|tool output|raw log|execution log)\b|(?:^|\n)\s*(?:let me|i need to|i'll|i’ll|now i'll|now i’ll|first,? let me|plan(?:'|’)s clear)\b/im;
+  /<details\b|<summary\b|\b(?:chain\s+of\s+thought|command execution|tool output|raw log|execution log)\b|^\s*(?:let me|i need to|i'll|i’ll|now i'll|now i’ll|first,? let me)\b/im;
 const MISSING_PUBLIC_SUMMARY =
   "Execution completed, but a concise verified summary was unavailable. Review the latest PR commit and checks; Centaur Console has the detailed record.";
 const FAILED_PUBLIC_SUMMARY =
@@ -35,18 +38,8 @@ export class CommentReplyCollector {
     this.sawError = true;
   }
 
-  get answer(): string {
-    return "";
-  }
-
   get failed(): boolean {
     return this.sawError;
-  }
-
-  get errorText(): string {
-    // Do not surface command/tool diagnostics in a public comment. Callers
-    // use this only for observability; the public failure body is fixed text.
-    return this.sawError ? "agent task reported an error" : "";
   }
 }
 
@@ -59,22 +52,25 @@ export function buildWorkingReplyBody(): string {
 }
 
 /**
- * Composes the final public comment. Prefer the terminal result because it is
- * the harness's concise completion payload; streamed text may include
- * intermediary narration from providers that do not label message phases.
+ * A rendered GitHub reply and whether it had a verified concise summary. The
+ * boolean is deliberately observable so operators can measure how often a
+ * provider misses the public-summary contract without logging its contents.
  */
-export function buildCommentReplyBody(input: {
-  answer: string;
+export type GithubPublicReply = {
+  body: string;
+  summaryAvailable: boolean;
+};
+
+export function buildPublicCommentReply(input: {
   fallback?: string;
-}): string {
-  // A provider may put hidden work narration in either stream. Only accept an
-  // explicitly-delimited, compact final summary. If the harness cannot supply
-  // one, fail closed to a truthful status note rather than leaking a trace.
-  for (const candidate of [input.fallback, input.answer]) {
-    const summary = extractPublicSummary(candidate);
-    if (summary) return summary;
-  }
-  return MISSING_PUBLIC_SUMMARY;
+}): GithubPublicReply {
+  // Only use the structured terminal result. Providers can classify their
+  // entire work trace as assistant prose, so streamed markdown is never a
+  // public-reply source.
+  const summary = extractPublicSummary(input.fallback);
+  return summary
+    ? { body: summary, summaryAvailable: true }
+    : { body: MISSING_PUBLIC_SUMMARY, summaryAvailable: false };
 }
 
 /** Fixed public error text; Console remains the diagnostic surface. */

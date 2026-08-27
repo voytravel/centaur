@@ -1,8 +1,8 @@
 import { resolveAllowedAuthorAssociations } from "./authorization";
 import { backgroundWaitUntil } from "./context";
 import {
-  buildCommentReplyBody,
   buildFailedReplyBody,
+  buildPublicCommentReply,
   buildWorkingReplyBody,
 } from "./comment-bot";
 import type { PrManagerContext } from "./pr-manager";
@@ -136,18 +136,20 @@ export function handleBodyMention(
     };
 
     const result = await runTurnStream(options, forwardInput);
-    const reply = result.failed
-      ? buildFailedReplyBody()
-      : buildCommentReplyBody({
-          answer: result.answer,
-          fallback: result.fallbackText,
-        });
+    const publicReply = result.failed
+      ? { body: buildFailedReplyBody(), summaryAvailable: false }
+      : buildPublicCommentReply({ fallback: result.fallbackText });
+    if (!result.failed && !publicReply.summaryAvailable) {
+      traceLog(options, "githubbot_public_summary_unavailable", trace, {
+        terminal_result_available: Boolean(result.fallbackText),
+      });
+    }
     try {
       await ctx.octokit.rest.issues.createComment({
         owner: repo.owner,
         repo: repo.repo,
         issue_number: number,
-        body: reply,
+        body: publicReply.body,
       });
     } catch (error) {
       logger.warn("githubbot_body_mention_reply_failed", {
