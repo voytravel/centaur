@@ -1208,6 +1208,16 @@ impl SandboxArgs {
     fn workflow_host_env_template(&self) -> Result<Vec<(String, String)>, ServerError> {
         let mut envs = vec![("CENTAUR_API_URL".to_owned(), self.centaur_api_url())];
 
+        // A public Console URL is non-secret deployment metadata. Supplying it
+        // to the trusted workflow host lets a deterministic workflow report
+        // link back to its durable approval record without exposing a Console
+        // credential to an agent session.
+        if let Ok(console_public_url) = env::var("CENTAUR_CONSOLE_PUBLIC_URL")
+            && let Some(value) = clean_optional_value(Some(console_public_url.as_str()))
+        {
+            envs.push(("CENTAUR_CONSOLE_PUBLIC_URL".to_owned(), value));
+        }
+
         for (name, value) in self.iron_proxy.sandbox_placeholder_env()? {
             envs.push((name, value));
         }
@@ -2577,6 +2587,7 @@ mod tests {
             ),
             ("SLACK_ETL_ENABLED", "true"),
             ("SLACK_BACKFILL_ENABLED", "true"),
+            ("CENTAUR_CONSOLE_PUBLIC_URL", "https://console.example.test"),
         ]);
         let args = Args::try_parse_from([
             "centaur-api-server",
@@ -2597,6 +2608,13 @@ mod tests {
                 .find(|env| env.name == "CENTAUR_API_URL")
                 .map(|env| env.value.as_str()),
             Some("http://centaur-api-rs:8080")
+        );
+        assert_eq!(
+            spec.env
+                .iter()
+                .find(|env| env.name == "CENTAUR_CONSOLE_PUBLIC_URL")
+                .map(|env| env.value.as_str()),
+            Some("https://console.example.test")
         );
         assert_eq!(
             spec.env

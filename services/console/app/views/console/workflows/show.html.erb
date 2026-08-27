@@ -77,12 +77,18 @@
     </dl>
   </section>
 
+  <% if @workflow_name == GithubDependencyMaintenanceFinding::WORKFLOW_NAME && @maintenance_findings.present? %>
+    <%= render "maintenance_findings",
+               findings: @maintenance_findings,
+               maintenance_run_detail: @maintenance_run_detail %>
+  <% end %>
+
   <% debug_rows = [] %>
-  <% if @latest_run_detail.present? %>
-    <% input = @latest_run_detail["input"] %>
+  <% if @display_run_detail.present? %>
+    <% input = @display_run_detail["input"] %>
     <% debug_rows << [ "Input", input, nil ] unless input.nil? || input == {} || input == "" %>
-    <% debug_rows << [ "Result", @latest_run_detail["result"], nil ] unless @latest_run_detail["result"].nil? %>
-    <% debug_rows << [ "Failure", @latest_run_detail["failure"], @latest_run_detail["run_id"] ] unless @latest_run_detail["failure"].nil? %>
+    <% debug_rows << [ "Result", @display_run_detail["result"], nil ] unless @display_run_detail["result"].nil? %>
+    <% debug_rows << [ "Failure", @display_run_detail["failure"], @display_run_detail["run_id"] ] unless @display_run_detail["failure"].nil? %>
   <% end %>
   <% if @latest_failure_detail.present? && @latest_failure_detail["failure"].present? %>
     <% debug_rows << [ "Last failure", @latest_failure_detail["failure"], @latest_failure_detail["run_id"] ] %>

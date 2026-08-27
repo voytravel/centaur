@@ -57,10 +57,15 @@ class Console::WorkflowsControllerTest < ActionDispatch::IntegrationTest
       { "ok" => true, "run" => detail }
     end
 
-    def create_workflow_run(workflow_name:, input: nil)
+    def create_workflow_run(workflow_name:, input: nil, idempotency_key: nil, max_attempts: nil)
       raise CentaurApiClient::Error, @create_error if @create_error
 
-      @created_runs << { workflow_name: workflow_name, input: input }
+      @created_runs << {
+        workflow_name: workflow_name,
+        input: input,
+        idempotency_key: idempotency_key,
+        max_attempts: max_attempts
+      }
       @create_result
     end
   end
@@ -167,7 +172,82 @@ class Console::WorkflowsControllerTest < ActionDispatch::IntegrationTest
 
     assert_redirected_to console_workflow_path("slack_sync")
     assert_match(/Run queued \(run-new\)/, flash[:notice])
-    assert_equal [ { workflow_name: "slack_sync", input: { "mode" => "incremental" } } ], client.created_runs
+    assert_equal [
+      {
+        workflow_name: "slack_sync",
+        input: { "mode" => "incremental" },
+        idempotency_key: nil,
+        max_attempts: nil
+      }
+    ], client.created_runs
+  end
+
+  test "renders an approval-required dependency-maintenance finding from the selected observation run" do
+    run = fake_run(workflow_name: "github_dependency_maintenance")
+    detail = maintenance_run_detail(run.run_id)
+    with_api_client(FakeApiClient.new(run_details: { run.run_id => detail }))
+
+    with_workflow_history("github_dependency_maintenance", runs: [ run ]) do
+      get console_workflow_url("github_dependency_maintenance", run_id: run.run_id)
+    end
+
+    assert_response :ok
+    assert_select "h2", text: "Approval-required findings"
+    assert_select "p", text: /acme\/widgets.*security alert #19/
+    assert_select "form[action=?]", approve_finding_console_workflow_path("github_dependency_maintenance")
+    assert_select "button", text: "Approve scoped action"
+  end
+
+  test "approving a validated dependency finding queues one scoped action with a durable idempotency key" do
+    source_run_id = "run-observation-1"
+    client = FakeApiClient.new(run_details: { source_run_id => maintenance_run_detail(source_run_id) })
+    with_api_client(client)
+
+    post approve_finding_console_workflow_path("github_dependency_maintenance"), params: {
+      run_id: source_run_id,
+      repository: "acme/widgets",
+      finding_key: "security:19"
+    }
+
+    assert_redirected_to console_workflow_path("github_dependency_maintenance", run_id: source_run_id)
+    assert_match(/Scoped action queued/, flash[:notice])
+    assert_equal [
+      {
+        workflow_name: "github_dependency_maintenance_action",
+        input: {
+          "source_run_id" => source_run_id,
+          "repository" => "acme/widgets",
+          "base_branch" => "main",
+          "finding" => {
+            "key" => "security:19",
+            "kind" => "security_advisory",
+            "action" => "draft_pr",
+            "source_numbers" => [ 19 ]
+          },
+          "approved_by" => @operator.oid
+        },
+        idempotency_key: "github-dependency-maintenance-action:#{source_run_id}:security:19",
+        max_attempts: nil
+      }
+    ], client.created_runs
+  end
+
+  test "does not queue an action when a proposal fails the approval-required contract" do
+    source_run_id = "run-observation-1"
+    detail = maintenance_run_detail(source_run_id)
+    detail["result"]["routes"][0]["security_advisories"]["mode"] = "observe"
+    client = FakeApiClient.new(run_details: { source_run_id => detail })
+    with_api_client(client)
+
+    post approve_finding_console_workflow_path("github_dependency_maintenance"), params: {
+      run_id: source_run_id,
+      repository: "acme/widgets",
+      finding_key: "security:19"
+    }
+
+    assert_redirected_to console_workflow_path("github_dependency_maintenance")
+    assert_match(/Could not approve finding/, flash[:alert])
+    assert_empty client.created_runs
   end
 
   test "force starting a workflow surfaces api errors" do
@@ -186,6 +266,23 @@ class Console::WorkflowsControllerTest < ActionDispatch::IntegrationTest
     with_api_client(client)
 
     post run_console_workflow_url("slack_sync")
+
+    assert_redirected_to console_threads_path
+    assert_empty client.created_runs
+  end
+
+  test "a non-admin cannot approve a dependency-maintenance finding" do
+    delete logout_url
+    post login_url, params: { email: users(:member_user).email, password: "password123456" }
+    source_run_id = "run-observation-1"
+    client = FakeApiClient.new(run_details: { source_run_id => maintenance_run_detail(source_run_id) })
+    with_api_client(client)
+
+    post approve_finding_console_workflow_url("github_dependency_maintenance"), params: {
+      run_id: source_run_id,
+      repository: "acme/widgets",
+      finding_key: "security:19"
+    }
 
     assert_redirected_to console_threads_path
     assert_empty client.created_runs
@@ -216,6 +313,41 @@ class Console::WorkflowsControllerTest < ActionDispatch::IntegrationTest
       "input" => { "mode" => "incremental" },
       "enabled" => true,
       "no_delivery" => false
+    }
+  end
+
+  def maintenance_run_detail(run_id)
+    {
+      "workflow_name" => "github_dependency_maintenance",
+      "run_id" => run_id,
+      "status" => "completed",
+      "result" => {
+        "status" => "completed",
+        "routes" => [
+          {
+            "schema_version" => "2",
+            "repository" => "acme/widgets",
+            "base_branch" => "main",
+            "security_advisories" => {
+              "mode" => "approval_required",
+              "outcome" => "observed",
+              "alert_numbers" => [ 19 ]
+            },
+            "dependabot" => {
+              "mode" => "approval_required",
+              "outcome" => "none",
+              "source_pr_numbers" => []
+            },
+            "proposals" => [
+              {
+                "kind" => "security_advisory",
+                "action" => "draft_pr",
+                "source_numbers" => [ 19 ]
+              }
+            ]
+          }
+        ]
+      }
     }
   end
 
