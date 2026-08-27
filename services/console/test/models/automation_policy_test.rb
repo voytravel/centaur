@@ -115,7 +115,7 @@ class AutomationPolicyTest < ActiveSupport::TestCase
     assert_equal [ "resolve_conflict" ], conflict["actions"]
   end
 
-  test "requires an explicit verified-manual-mention opt-in for GitHub comments" do
+  test "requires an explicit verified-manual-mention opt-in and permits it on drafts" do
     policy = github_policy(
       mode: "act",
       settings: {
@@ -140,6 +140,29 @@ class AutomationPolicyTest < ActiveSupport::TestCase
     assert_equal [ "respond_to_mention" ], allowed["actions"]
     assert_includes policy.automation_summary, "manual mentions: enabled"
 
+    draft_allowed = policy.evaluate(
+      "repository" => "acme/widgets",
+      "event_type" => "pull_request",
+      "event_action" => "manual_mention",
+      "mentioned_bot" => true,
+      "base_branch" => "main",
+      "draft" => true,
+      "labels" => []
+    )
+    assert_equal "act", draft_allowed["decision"]
+    assert_equal [ "respond_to_mention" ], draft_allowed["actions"]
+
+    unattended_draft = policy.evaluate(
+      "repository" => "acme/widgets",
+      "event_type" => "pull_request",
+      "event_action" => "opened",
+      "base_branch" => "main",
+      "draft" => true,
+      "labels" => []
+    )
+    assert_equal "ignored", unattended_draft["decision"]
+    assert_equal "draft pull requests are excluded", unattended_draft["reason"]
+
     unverified = policy.evaluate(
       "repository" => "acme/widgets",
       "event_type" => "pull_request",
@@ -158,7 +181,7 @@ class AutomationPolicyTest < ActiveSupport::TestCase
       "event_action" => "manual_mention",
       "mentioned_bot" => true,
       "base_branch" => "main",
-      "draft" => false,
+      "draft" => true,
       "labels" => [ "no-agent" ]
     )
     assert_equal "ignored", excluded["decision"]
