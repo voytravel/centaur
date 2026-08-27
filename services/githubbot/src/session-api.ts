@@ -938,20 +938,30 @@ type ParsedSessionEvent = {
   id?: number;
 };
 
-async function* parseSessionEventStream(
+/**
+ * Converts the durable session SSE feed into renderer input. Exported for the
+ * adapter transport regression test: GitHub must wait for the structured
+ * completion event instead of terminating on a raw provider record.
+ */
+export async function* parseSessionEventStream(
   stream: ReadableStream<Uint8Array>,
   onEventId: (eventId: number) => void,
 ): AsyncIterable<GithubbotRendererSource> {
   for await (const event of parseSseEvents(stream)) {
     if (typeof event.id === "number") onEventId(event.id);
     if (event.event === "session.output.line") {
-      yield {
-        data: event.data,
-        event: event.event,
-        eventId: event.id,
-        eventKind: event.event,
-      } satisfies RustSessionStreamEvent;
-      if (isTerminalCodexOutputLine(event.data)) return;
+      // A raw Codex terminal record makes the renderer stop consuming before
+      // api-rs emits the structured session.execution_completed event. GitHub
+      // needs that event's canonical result_text, so suppress the raw terminal
+      // protocol record and continue until the durable completion arrives.
+      if (!isTerminalCodexOutputLine(event.data)) {
+        yield {
+          data: event.data,
+          event: event.event,
+          eventId: event.id,
+          eventKind: event.event,
+        } satisfies RustSessionStreamEvent;
+      }
       continue;
     }
     if (

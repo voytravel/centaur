@@ -7,6 +7,7 @@ import type { GitHubAdapter } from "@chat-adapter/github";
 import type { Thread } from "chat";
 import {
   buildCommentReplyBody,
+  buildFailedReplyBody,
   buildWorkingReplyBody,
   CommentReplyCollector,
 } from "./comment-bot";
@@ -166,7 +167,7 @@ export function githubTurnPreamble(preamble?: string): string {
   const publicReplyContract = [
     "Public GitHub response contract:",
     "- An acknowledgement is already visible. Work silently; do not narrate intermediate reasoning, plans, commands, raw logs, or tool output in GitHub.",
-    "- Keep detailed execution evidence in Console. Your final GitHub reply must be a concise outcome: what changed (if anything), local verification, GitHub CI status, and any concrete blocker or next step.",
+    "- Keep detailed execution evidence in Console. Your terminal text must be exactly one concise block in this form (use short factual phrases, not process narration):\nGITHUB_SUMMARY:\nOutcome: ...\nChanges: ...\nVerification: ...\nCI: ...\nNext: ...",
     "- If you change code, inspect the repository CI workflow and run the closest local equivalent before pushing. Do not call CI green based only on a narrow test subset when a broader local equivalent is available.",
     "- When relevant and feasible, start the local app or preview needed to validate the change. After pushing, monitor checks for the new head; if a check fails because of your change, diagnose, fix, and verify it before finalizing. If you cannot run a check, name it and explain why.",
   ].join("\n");
@@ -349,9 +350,7 @@ export async function runSessionTurn(input: {
     lastEventId,
   });
   const body = result.failed
-    ? buildCommentReplyBody({
-        answer: `⚠️ I ran into an error before finishing:\n\n${result.errorText || "unknown error"}`,
-      })
+    ? buildFailedReplyBody()
     : buildCommentReplyBody({
         answer: result.answer,
         fallback: result.fallbackText,
@@ -379,8 +378,8 @@ export async function runSessionTurn(input: {
 }
 
 /**
- * Captures the terminal result text from the raw session stream so the final
- * answer has a fallback when the chat-SDK mapper emits no markdown.
+ * Captures the structured terminal result text. Raw provider output is never a
+ * GitHub reply source: providers can encode their full work trace as prose.
  */
 export class GithubRenderFallback {
   private terminalText = "";
@@ -409,8 +408,7 @@ export class GithubRenderFallback {
     );
     if (
       eventKind !== "session.execution_completed" &&
-      eventKind !== "session.execution_cancelled" &&
-      !isTerminalCodexAppServerEvent(event)
+      eventKind !== "session.execution_cancelled"
     ) {
       return;
     }
@@ -421,12 +419,6 @@ export class GithubRenderFallback {
     const text = terminalResultText(data);
     if (text) this.terminalText = text;
   }
-}
-
-function isTerminalCodexAppServerEvent(event: unknown): boolean {
-  if (!event || typeof event !== "object") return false;
-  const type = (event as { type?: unknown }).type;
-  return type === "result" || type === "turn.done" || type === "turn.completed";
 }
 
 function terminalResultText(event: unknown): string {

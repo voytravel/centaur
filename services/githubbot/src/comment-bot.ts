@@ -5,9 +5,17 @@ import type { ChatSDKStreamChunk } from "@centaur/rendering";
 // durable execution record. In particular, do not carry task updates or model
 // reasoning from the stream into a GitHub comment.
 
-const ANSWER_MAX_CHARS = 8_000;
+const PUBLIC_SUMMARY_MAX_CHARS = 2_000;
+const PUBLIC_SUMMARY_MAX_LINES = 8;
+const PUBLIC_SUMMARY_MARKER = /^\s*GITHUB_SUMMARY\s*:\s*/im;
 const INTERNAL_DETAILS_SECTION =
   /<details\b[^>]*>\s*<summary>\s*(?:chain\s+of\s+thought|thinking|reasoning|work\s+log|execution\s+log)\b[^<]*<\/summary>[\s\S]*?<\/details>\s*/gi;
+const EXECUTION_TRANSCRIPT_MARKERS =
+  /<details\b|<summary\b|\b(?:chain\s+of\s+thought|command execution|tool output|raw log|execution log)\b|(?:^|\n)\s*(?:let me|i need to|i'll|i’ll|now i'll|now i’ll|first,? let me|plan(?:'|’)s clear)\b/im;
+const MISSING_PUBLIC_SUMMARY =
+  "Execution completed, but a concise verified summary was unavailable. Review the latest PR commit and checks; Centaur Console has the detailed record.";
+const FAILED_PUBLIC_SUMMARY =
+  "⚠️ The execution ended before a verified outcome could be posted. Review the latest PR commits and checks; Centaur Console has the detailed diagnostic record.";
 
 /**
  * Accumulates the public final answer from a streamed run. Task updates are
@@ -15,24 +23,20 @@ const INTERNAL_DETAILS_SECTION =
  * execution detail that belongs in the durable Console record instead.
  */
 export class CommentReplyCollector {
-  private answerText = "";
   private sawError = false;
-  private errorTextValue = "";
 
   update(chunk: ChatSDKStreamChunk): void {
-    if (chunk.type === "markdown_text") {
-      this.answerText += chunk.text;
-      return;
-    }
+    // Markdown chunks are deliberately ignored. Some providers classify their
+    // entire work trace as assistant prose, so treating this stream as a final
+    // answer is a chain-of-thought disclosure bug. The structured terminal
+    // result is captured separately by GithubRenderFallback.
+    if (chunk.type === "markdown_text") return;
     if (chunk.type !== "task_update" || chunk.status !== "error") return;
     this.sawError = true;
-    this.errorTextValue = [chunk.title, chunk.output ?? chunk.details]
-      .filter(Boolean)
-      .join("\n");
   }
 
   get answer(): string {
-    return this.answerText.trim();
+    return "";
   }
 
   get failed(): boolean {
@@ -40,7 +44,9 @@ export class CommentReplyCollector {
   }
 
   get errorText(): string {
-    return this.errorTextValue;
+    // Do not surface command/tool diagnostics in a public comment. Callers
+    // use this only for observability; the public failure body is fixed text.
+    return this.sawError ? "agent task reported an error" : "";
   }
 }
 
@@ -61,14 +67,33 @@ export function buildCommentReplyBody(input: {
   answer: string;
   fallback?: string;
 }): string {
-  const raw =
-    input.fallback?.trim() ||
-    input.answer.trim() ||
-    "Execution completed, but no final text was captured.";
-  const answer =
-    raw.replace(INTERNAL_DETAILS_SECTION, "").trim() ||
-    "Execution completed, but no final text was captured.";
-  return answer.length > ANSWER_MAX_CHARS
-    ? answer.slice(0, ANSWER_MAX_CHARS).trimEnd() + "\n[truncated]"
-    : answer;
+  // A provider may put hidden work narration in either stream. Only accept an
+  // explicitly-delimited, compact final summary. If the harness cannot supply
+  // one, fail closed to a truthful status note rather than leaking a trace.
+  for (const candidate of [input.fallback, input.answer]) {
+    const summary = extractPublicSummary(candidate);
+    if (summary) return summary;
+  }
+  return MISSING_PUBLIC_SUMMARY;
+}
+
+/** Fixed public error text; Console remains the diagnostic surface. */
+export function buildFailedReplyBody(): string {
+  return FAILED_PUBLIC_SUMMARY;
+}
+
+function extractPublicSummary(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  const marker = PUBLIC_SUMMARY_MARKER.exec(value);
+  if (!marker || marker.index === undefined) return undefined;
+  const summary = value
+    .slice(marker.index + marker[0].length)
+    .replace(INTERNAL_DETAILS_SECTION, "")
+    .trim();
+  if (!summary || summary.length > PUBLIC_SUMMARY_MAX_CHARS) return undefined;
+  if (summary.split(/\r?\n/).filter((line) => line.trim()).length > PUBLIC_SUMMARY_MAX_LINES) {
+    return undefined;
+  }
+  if (EXECUTION_TRANSCRIPT_MARKERS.test(summary)) return undefined;
+  return summary;
 }

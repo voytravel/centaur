@@ -1,6 +1,10 @@
 import { resolveAllowedAuthorAssociations } from "./authorization";
 import { backgroundWaitUntil } from "./context";
-import { buildCommentReplyBody, buildWorkingReplyBody } from "./comment-bot";
+import {
+  buildCommentReplyBody,
+  buildFailedReplyBody,
+  buildWorkingReplyBody,
+} from "./comment-bot";
 import type { PrManagerContext } from "./pr-manager";
 import { reactWorkingOnSubject, settleSubjectReaction } from "./reactions";
 import { githubContextPreamble, githubTurnPreamble, runTurnStream } from "./turn";
@@ -133,9 +137,7 @@ export function handleBodyMention(
 
     const result = await runTurnStream(options, forwardInput);
     const reply = result.failed
-      ? buildCommentReplyBody({
-          answer: `⚠️ I ran into an error before finishing:\n\n${result.errorText || "unknown error"}`,
-        })
+      ? buildFailedReplyBody()
       : buildCommentReplyBody({
           answer: result.answer,
           fallback: result.fallbackText,
