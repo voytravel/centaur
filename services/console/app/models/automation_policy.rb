@@ -435,11 +435,17 @@ class AutomationPolicy < ApplicationRecord
     # verified, explicitly enabled manual mention is different: it is a
     # collaborator's deliberate request to start the scoped workstream, while
     # still passing the normal repository, branch, and label gates below.
-    if event["draft"] == true && !github_manual_mention_enabled?(event)
+    manual_mention = event["event_action"] == "manual_mention"
+    config = github_settings
+    if manual_mention
+      return [ false, "manual mentions are disabled" ] unless config["manual_mentions"] == true
+      return [ false, "event is not a verified bot mention" ] unless event["mentioned_bot"] == true
+    end
+
+    if event["draft"] == true && !manual_mention
       return [ false, "draft pull requests are excluded" ]
     end
 
-    config = github_settings
     base_branches = Array(config["base_branches"]).map(&:downcase)
     base_branch = event["base_branch"].to_s.downcase
     if base_branches.any? && !base_branches.any? { |pattern| File.fnmatch?(pattern, base_branch) }
