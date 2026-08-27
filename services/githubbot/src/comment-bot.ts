@@ -8,6 +8,9 @@ import type { ChatSDKStreamChunk } from "@centaur/rendering";
 const PUBLIC_SUMMARY_MAX_CHARS = 2_000;
 const PUBLIC_SUMMARY_MAX_LINES = 8;
 const PUBLIC_SUMMARY_MARKER = /^\s*GITHUB_SUMMARY\s*:\s*/im;
+const PUBLIC_SUMMARY_FIELDS = [ "Outcome", "Changes", "Verification", "CI", "Next" ] as const;
+const PUBLIC_SUMMARY_FIELD_MARKER =
+  /(?:^|\s)(Outcome|Changes|Verification|CI|Next)\s*:\s*/gi;
 const INTERNAL_DETAILS_SECTION =
   /<details\b[^>]*>\s*<summary>\s*(?:chain\s+of\s+thought|thinking|reasoning|work\s+log|execution\s+log)\b[^<]*<\/summary>[\s\S]*?<\/details>\s*/gi;
 // The marker and compact bounds are the primary disclosure boundary. This is
@@ -92,5 +95,40 @@ function extractPublicSummary(value: string | undefined): string | undefined {
     return undefined;
   }
   if (EXECUTION_TRANSCRIPT_MARKERS.test(summary)) return undefined;
-  return summary;
+  return formatPublicSummary(summary);
+}
+
+/**
+ * Models occasionally emit the required fields on one long line even when the
+ * terminal contract asks for line breaks. A complete, ordered contract is safe
+ * to reflow because the labels delimit each field; partial summaries remain
+ * verbatim for backwards compatibility.
+ */
+function formatPublicSummary(summary: string): string {
+  const matches = Array.from(summary.matchAll(PUBLIC_SUMMARY_FIELD_MARKER));
+  if (
+    matches.length !== PUBLIC_SUMMARY_FIELDS.length ||
+    matches.some(
+      (match, index) =>
+        match[1]?.toLowerCase() !== PUBLIC_SUMMARY_FIELDS[index]?.toLowerCase(),
+    ) ||
+    summary.slice(0, matches[0]?.index ?? 0).trim()
+  ) {
+    return summary;
+  }
+
+  const fields = matches.map((match, index) => {
+    const start = (match.index ?? 0) + match[0].length;
+    const end = matches[index + 1]?.index ?? summary.length;
+    return summary.slice(start, end).replace(/\s+/g, " ").trim();
+  });
+  if (fields.some((field) => !field)) return summary;
+
+  return [
+    "### Centaur update",
+    "",
+    ...PUBLIC_SUMMARY_FIELDS.map(
+      (label, index) => `- **${label}:** ${fields[index]}`,
+    ),
+  ].join("\n");
 }

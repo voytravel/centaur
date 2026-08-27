@@ -25,7 +25,9 @@ collaborator.
   reasoning, task commands, and raw tool output stay in Console rather than appearing in GitHub.
   The terminal reply is accepted only from the structured execution result behind a compact
   `GITHUB_SUMMARY:` block; a missing or unsafe summary falls back to a safe status note and emits
-  `githubbot_public_summary_unavailable` for operational rate monitoring.
+  `githubbot_public_summary_unavailable` for operational rate monitoring. A complete five-field
+  summary is deterministically rendered as a compact Markdown update, so a model omitting line
+  breaks cannot create a wall of public text.
   Mention detection is the adapter's (matches the bot account's `@username`). Only authors
   whose GitHub `author_association` is allowed (default `OWNER` / `MEMBER` / `COLLABORATOR`) can drive
   a turn — the agent runs in a write-capable sandbox and posts a concise result back, so untrusted

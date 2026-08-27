@@ -109,6 +109,8 @@ describe("githubContextPreamble", () => {
     const preamble = githubTurnPreamble("Inspect the pull request.");
     expect(preamble).toContain("Public GitHub response contract:");
     expect(preamble).toContain("do not narrate intermediate reasoning");
+    expect(preamble).toContain("compact Markdown update");
+    expect(preamble).toContain("detailed nit lists");
     expect(preamble).toContain("closest local equivalent");
     expect(preamble).toContain("monitor checks for the new head");
   });

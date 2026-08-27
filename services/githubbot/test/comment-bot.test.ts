@@ -22,16 +22,22 @@ describe("GitHub public reply rendering", () => {
     ).toContain("concise verified summary was unavailable");
   });
 
-  test("renders only an explicitly marked concise terminal outcome", () => {
+  test("renders a complete terminal contract as a scannable Markdown update", () => {
     expect(
       buildPublicCommentReply({
         fallback:
-          "GITHUB_SUMMARY:\nOutcome: Fixed the conflict.\nChanges: Pushed one commit.\nVerification: Full local suite passed.\nCI: Running.\nNext: Monitor checks.",
+          "GITHUB_SUMMARY:\nOutcome: Fixed the conflict. Changes: Pushed one commit. Verification: Full local suite passed. CI: Running. Next: Monitor checks.",
       }),
     ).toMatchObject({
       body:
-        "Outcome: Fixed the conflict.\nChanges: Pushed one commit.\nVerification: Full local suite passed.\nCI: Running.\nNext: Monitor checks.",
+        "### Centaur update\n\n- **Outcome:** Fixed the conflict.\n- **Changes:** Pushed one commit.\n- **Verification:** Full local suite passed.\n- **CI:** Running.\n- **Next:** Monitor checks.",
     });
+  });
+
+  test("keeps a concise partial terminal summary backwards-compatible", () => {
+    expect(
+      buildPublicCommentReply({ fallback: "GITHUB_SUMMARY:\nOutcome: Completed." }),
+    ).toMatchObject({ body: "Outcome: Completed." });
   });
 
   test("fails closed rather than publishing an unmarked execution transcript", () => {
