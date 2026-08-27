@@ -21,9 +21,11 @@ export type LinearAutomationEvent = {
   blocked?: boolean;
   deduplication_key: string;
   description?: string;
-  event_action: "create" | "update";
+  event_action: "create" | "update" | "manual_mention";
   event_type: "Issue";
   labels: string[];
+  /** True only after Linearbot verifies that the comment addressed this app. */
+  mentioned_bot?: boolean;
   linear_issue_id: string;
   /** Safe, provider-owned issue permalink for the operator audit view. */
   linear_issue_identifier?: string;

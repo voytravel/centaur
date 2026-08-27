@@ -156,6 +156,12 @@ export type LinearbotThreadState = {
    */
   ingestedCommentIds?: string[];
   /**
+   * Console's authorized durable issue session for this comment thread. When a
+   * direct mention is policy-gated, later non-mention replies must append to
+   * this same workspace instead of creating a sibling comment-key session.
+   */
+  policySessionKey?: string;
+  /**
    * Centaur-forward model: the last assignment trigger (issue `updatedAt`) the
    * bot ran a turn for, so a redelivered Issue webhook doesn't re-run.
    */

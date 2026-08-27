@@ -193,6 +193,7 @@ class AutomationEventIngestor
       "description_present" => @event["description"].to_s.strip.present?
     }.compact.tap do |metadata|
       metadata["created_by_bot"] = true if @event["created_by_bot"] == true
+      metadata["mentioned_bot"] = true if @event["mentioned_bot"] == true
       metadata["activity_report"] = activity_report if activity_report
     end
   end
@@ -262,6 +263,14 @@ class AutomationEventIngestor
     return "active" if outcome["decision"] == "act"
     return workstream.state unless outcome["decision"] == "ignored"
     return workstream.state if outcome["reason"] == "no automatic action is enabled for this event"
+    # A repository can enable lifecycle automation without permitting humans to
+    # start turns by comment. Recording that denied manual mention is useful for
+    # audit, but it must not revoke an already-authorized lifecycle workstream.
+    # Safety-gate rejections (draft/no-agent/etc.) intentionally still block it.
+    if @event["event_action"] == "manual_mention" &&
+       [ "manual mentions are disabled", "event is not a verified bot mention" ].include?(outcome["reason"])
+      return workstream.state
+    end
 
     "blocked"
   end

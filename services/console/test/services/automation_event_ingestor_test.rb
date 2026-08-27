@@ -267,6 +267,53 @@ class AutomationEventIngestorTest < ActiveSupport::TestCase
     assert_not_includes principal.reload.roles, role
   end
 
+  test "records a disabled manual mention without revoking an active PR workstream" do
+    role = automation_role
+    AutomationPolicy.create!(
+      name: "Lifecycle-only widgets",
+      provider: "github",
+      repository: "acme/lifecycle-only-widgets",
+      enabled: true,
+      mode: "act",
+      execution_role: role,
+      created_by: users(:acme_admin),
+      settings: {
+        "github" => {
+          "review" => "all_eligible",
+          "manual_mentions" => false
+        }
+      }
+    )
+
+    review = AutomationEventIngestor.new(
+      "provider" => "github",
+      "deduplication_key" => "lifecycle-review",
+      "event_type" => "pull_request",
+      "event_action" => "opened",
+      "repository" => "acme/lifecycle-only-widgets",
+      "subject_number" => 42,
+      "draft" => false,
+      "labels" => []
+    ).call
+    assert_equal "act", review["decision"]
+    workstream = AutomationWorkstream.sole
+
+    denied = AutomationEventIngestor.new(
+      "provider" => "github",
+      "deduplication_key" => "disabled-manual-mention",
+      "event_type" => "pull_request",
+      "event_action" => "manual_mention",
+      "mentioned_bot" => true,
+      "repository" => "acme/lifecycle-only-widgets",
+      "subject_number" => 42,
+      "draft" => false,
+      "labels" => []
+    ).call
+    assert_equal "ignored", denied["decision"]
+    assert_equal "no automatic action is enabled for this event", denied["reason"]
+    assert_equal "active", workstream.reload.state
+  end
+
   test "does not persist unmatched events or authorize work" do
     result = AutomationEventIngestor.new(
       "provider" => "github",

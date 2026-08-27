@@ -192,6 +192,7 @@ function logger(ctx: PrManagerContext) {
 
 type PullRequestSummary = {
   assignees: string[];
+  baseBranch: string;
   draft: boolean;
   headRef: string;
   headRepoFullName: string | null;
@@ -212,6 +213,7 @@ function assigneeLogins(
 }
 
 function summarizePr(pr: {
+  base?: { ref?: string } | null;
   draft?: boolean | null;
   head: { ref: string; repo?: { full_name?: string | null } | null; sha: string };
   labels: { name?: string }[];
@@ -224,6 +226,7 @@ function summarizePr(pr: {
 }): PullRequestSummary {
   return {
     assignees: assigneeLogins(pr.assignees),
+    baseBranch: pr.base?.ref ?? "",
     draft: pr.draft === true,
     headRef: pr.head.ref,
     headRepoFullName: pr.head.repo?.full_name ?? null,
@@ -257,6 +260,33 @@ async function fetchPr(
     });
     return null;
   }
+}
+
+/**
+ * Fetch the small, provider-owned PR projection required to authorize a
+ * comment mention. The comment webhook itself does not safely carry all of
+ * the branch, label, and draft facts that Console policy evaluation needs.
+ */
+export async function fetchPrAutomationContext(
+  ctx: PrManagerContext,
+  owner: string,
+  repo: string,
+  number: number,
+): Promise<{
+  baseBranch: string;
+  draft: boolean;
+  headSha: string;
+  labels: string[];
+} | null> {
+  const pr = await fetchPr(ctx, owner, repo, number);
+  if (!pr) return null;
+
+  return {
+    baseBranch: pr.baseBranch,
+    draft: pr.draft,
+    headSha: pr.headSha,
+    labels: pr.labels,
+  };
 }
 
 const OWNED_CACHE_TTL_MS = 10 * 60 * 1000;

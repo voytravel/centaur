@@ -40,6 +40,7 @@ import {
   formatIssueContext,
   formatIssueContextHeader,
   OWNERSHIP_CONTEXT,
+  type LinearIssueContext,
 } from "./linear-context";
 import { ackWorking } from "./linear-narrator";
 import {
@@ -513,6 +514,13 @@ function handleCommentMention(
     });
     const client = (thread.adapter as unknown as LinearSessionCapableAdapter)
       .linearClient;
+    const authorization = await authorizeManualMention(
+      thread,
+      event,
+      client,
+      input,
+    );
+    if (!authorization) return;
     const serialized = await serializeMessage(
       issueCommentMessage(event, threadKey),
     );
@@ -534,11 +542,107 @@ function handleCommentMention(
         parentCommentId: rootCommentId,
         reactCommentId: event.commentId,
         thread,
-        threadKey,
+        threadKey: authorization.sessionKey ?? threadKey,
         trace,
+        issueContext: authorization.issueContext,
       }),
     );
   })();
+}
+
+/**
+ * A Linear comment is conversational input, not an authority to launch an
+ * agent. On installations that configure Console automation ingress, turn the
+ * verified mention into a normalized event first. Console then applies the
+ * same readiness, no-agent, and one-repository-route gates as issue pickup and
+ * activates the scoped execution role before api-rs creates the sandbox.
+ *
+ * Older installations without that optional ingress retain the pre-existing
+ * conversational behavior; HZ has ingress, so lookup failure is fail-closed.
+ */
+async function authorizeManualMention(
+  thread: Thread<LinearbotThreadState>,
+  event: IssueCommentEvent,
+  client: LinearSessionCapableAdapter["linearClient"],
+  input: ThreadHandlerInput,
+): Promise<{ issueContext?: LinearIssueContext; sessionKey?: string } | null> {
+  const { options } = input;
+  const logger = options.logger ?? noopLogger;
+  if (!options.automationApiUrl || !options.automationIngressToken) return {};
+
+  const issueContext = client
+    ? await fetchLinearIssueContext(client, event.issueId, logger)
+    : null;
+  if (!issueContext?.teamId) {
+    traceLog(options, "linearbot_manual_mention_context_missing", undefined, {
+      issue_id: event.issueId,
+    });
+    await refuseManualMention(
+      thread,
+      "I couldn't verify this issue's policy context, so I didn't start an agent run.",
+      logger,
+    );
+    return null;
+  }
+
+  const decision = await evaluateLinearAutomation(options, {
+    blocked: issueContext.blocked,
+    deduplication_key: `linear:manual-mention:${event.issueId}:${event.commentId}`,
+    description: issueContext.description,
+    event_action: "manual_mention",
+    event_type: "Issue",
+    labels: issueContext.labels ?? [],
+    linear_issue_id: event.issueId,
+    linear_issue_identifier: issueContext.identifier,
+    linear_issue_url: issueContext.url,
+    linear_project_id: issueContext.projectId,
+    linear_team_id: issueContext.teamId,
+    mentioned_bot: true,
+    provider: "linear",
+    status: issueContext.status,
+    title: issueContext.title,
+  });
+  const expectedSessionKey = "linear:" + event.issueId;
+  if (
+    !decision ||
+    decision.decision !== "act" ||
+    !decision.actions.includes("respond_to_mention") ||
+    decision.sessionKey !== expectedSessionKey
+  ) {
+    traceLog(options, "linearbot_manual_mention_denied", undefined, {
+      decision: decision?.decision ?? "unavailable",
+      issue_id: event.issueId,
+      policy_id: decision?.policyId,
+      reason: decision?.reason ?? "policy lookup unavailable",
+    });
+    await refuseManualMention(
+      thread,
+      "I couldn't start an agent run because this issue is not enabled for a Centaur manual mention.",
+      logger,
+    );
+    return null;
+  }
+
+  try {
+    await thread.setState({ policySessionKey: decision.sessionKey });
+  } catch {
+    // Best-effort cache only. The current turn still uses the authorized key.
+  }
+  return { issueContext, sessionKey: decision.sessionKey };
+}
+
+async function refuseManualMention(
+  thread: Thread<LinearbotThreadState>,
+  body: string,
+  logger: Logger,
+): Promise<void> {
+  try {
+    await thread.post(body);
+  } catch (error) {
+    logger.warn("linearbot_manual_mention_refusal_failed", {
+      error: errorMessage(error),
+    });
+  }
 }
 
 /**
@@ -618,8 +722,14 @@ function handleThreadFollowup(
     const serialized = await serializeMessage(
       issueCommentMessage(event, threadKey),
     );
+    const sessionKey = threadState.policySessionKey ?? threadKey;
     backgroundWaitUntil(
-      appendThreadFollowup({ options, serialized, threadKey, trace }),
+      appendThreadFollowup({
+        options,
+        serialized,
+        threadKey: sessionKey,
+        trace: { ...trace, threadId: sessionKey },
+      }),
     );
   })();
 }
@@ -832,6 +942,8 @@ async function runThreadTurn(input: {
   parentCommentId?: string;
   /** Comment to react to (👀 → ✅/❌); the triggering mention, if any. */
   reactCommentId?: string;
+  /** A preflight fetch may provide this so one mention does not query Linear twice. */
+  issueContext?: LinearIssueContext;
   thread: Thread<LinearbotThreadState>;
   threadKey: string;
   trace: LinearbotTrace;
@@ -847,6 +959,7 @@ async function runThreadTurn(input: {
     overrides,
     parentCommentId,
     reactCommentId,
+    issueContext: suppliedIssueContext,
     thread,
     threadKey,
     trace,
@@ -880,9 +993,9 @@ async function runThreadTurn(input: {
   // message, so a recycled sandbox or a single failed fetch never leaves the
   // agent guessing what "this task" is. Full context (with description) on the
   // thread's first turn; a compact id/title header thereafter.
-  const issueContext = client
+  const issueContext = suppliedIssueContext ?? (client
     ? await fetchLinearIssueContext(client, issueId, logger)
-    : null;
+    : null);
   // "Owned" = handed to the bot via the assignment turn (applyStatus) OR the
   // issue is delegated to the bot (true on a comment turn too, e.g. a question
   // on a delegated issue). Ownership injects the work-it-forward contract

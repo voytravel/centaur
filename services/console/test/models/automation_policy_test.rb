@@ -115,6 +115,56 @@ class AutomationPolicyTest < ActiveSupport::TestCase
     assert_equal [ "resolve_conflict" ], conflict["actions"]
   end
 
+  test "requires an explicit verified-manual-mention opt-in for GitHub comments" do
+    policy = github_policy(
+      mode: "act",
+      settings: {
+        "github" => {
+          "manual_mentions" => true,
+          "base_branches" => [ "main" ],
+          "excluded_labels" => [ "no-agent" ]
+        }
+      }
+    )
+
+    allowed = policy.evaluate(
+      "repository" => "acme/widgets",
+      "event_type" => "pull_request",
+      "event_action" => "manual_mention",
+      "mentioned_bot" => true,
+      "base_branch" => "main",
+      "draft" => false,
+      "labels" => []
+    )
+    assert_equal "act", allowed["decision"]
+    assert_equal [ "respond_to_mention" ], allowed["actions"]
+    assert_includes policy.automation_summary, "manual mentions: enabled"
+
+    unverified = policy.evaluate(
+      "repository" => "acme/widgets",
+      "event_type" => "pull_request",
+      "event_action" => "manual_mention",
+      "mentioned_bot" => false,
+      "base_branch" => "main",
+      "draft" => false,
+      "labels" => []
+    )
+    assert_equal "ignored", unverified["decision"]
+    assert_equal "no automatic action is enabled for this event", unverified["reason"]
+
+    excluded = policy.evaluate(
+      "repository" => "acme/widgets",
+      "event_type" => "pull_request",
+      "event_action" => "manual_mention",
+      "mentioned_bot" => true,
+      "base_branch" => "main",
+      "draft" => false,
+      "labels" => [ "no-agent" ]
+    )
+    assert_equal "ignored", excluded["decision"]
+    assert_equal "an excluded label is present", excluded["reason"]
+  end
+
   test "uses a Githubbot-derived ownership fact for bot-owned repairs" do
     policy = github_policy(
       mode: "act",
@@ -332,6 +382,73 @@ class AutomationPolicyTest < ActiveSupport::TestCase
     )
     assert_equal "ignored", ambiguous["decision"]
     assert_equal "multiple configured repository routes match issue labels", ambiguous["reason"]
+  end
+
+  test "requires a verified, fully qualified Linear issue for a manual mention" do
+    policy = AutomationPolicy.create!(
+      name: "Manual Linear issues",
+      provider: "linear",
+      linear_team_id: "team-1",
+      enabled: true,
+      mode: "act",
+      execution_role: automation_role,
+      created_by: users(:acme_admin),
+      settings: {
+        "linear" => {
+          "issue" => "ready_issues",
+          "manual_mentions" => true,
+          "ready_statuses" => [ "Ready" ],
+          "required_fields" => [ "description", "acceptance_criteria" ],
+          "required_labels" => [ "agent:ready" ],
+          "repository_routes" => [
+            {
+              "repository" => "acme/widgets",
+              "required_labels" => [ "agent:repo:widgets" ]
+            }
+          ]
+        }
+      }
+    )
+
+    allowed = policy.evaluate(
+      "event_type" => "Issue",
+      "event_action" => "manual_mention",
+      "mentioned_bot" => true,
+      "linear_team_id" => "team-1",
+      "title" => "Ship the widget",
+      "description" => "Acceptance Criteria\n- The widget is shipped.",
+      "status" => "Ready",
+      "labels" => [ "agent:ready", "agent:repo:widgets" ]
+    )
+    assert_equal "act", allowed["decision"]
+    assert_equal [ "respond_to_mention" ], allowed["actions"]
+    assert_equal "acme/widgets", allowed["github_repository"]
+
+    unverified = policy.evaluate(
+      "event_type" => "Issue",
+      "event_action" => "manual_mention",
+      "mentioned_bot" => false,
+      "linear_team_id" => "team-1",
+      "title" => "Ship the widget",
+      "description" => "Acceptance Criteria\n- The widget is shipped.",
+      "status" => "Ready",
+      "labels" => [ "agent:ready", "agent:repo:widgets" ]
+    )
+    assert_equal "ignored", unverified["decision"]
+    assert_equal "event is not a verified bot mention", unverified["reason"]
+
+    incomplete = policy.evaluate(
+      "event_type" => "Issue",
+      "event_action" => "manual_mention",
+      "mentioned_bot" => true,
+      "linear_team_id" => "team-1",
+      "title" => "Ship the widget",
+      "description" => "",
+      "status" => "Ready",
+      "labels" => [ "agent:ready", "agent:repo:widgets" ]
+    )
+    assert_equal "ignored", incomplete["decision"]
+    assert_equal "issue description is missing", incomplete["reason"]
   end
 
   test "requires repository routes to be explicit" do

@@ -46,6 +46,52 @@ describe("parseLinearIssueAutomationWebhook", () => {
 });
 
 describe("evaluateLinearAutomation", () => {
+  test("forwards a verified manual mention as a distinct policy action", async () => {
+    let requestBody = "";
+    const result = await evaluateLinearAutomation(
+      options({
+        fetch: async (_url, init) => {
+          requestBody = String(init?.body);
+          return Response.json({
+            data: {
+              actions: [ "respond_to_mention" ],
+              decision: "act",
+              github_repository: "acme/widgets",
+              move_to_in_progress: true,
+              reason: "policy authorizes automation",
+              reviewer_logins: [],
+              reviewer_team_slugs: [],
+              session_key: "linear:issue-1",
+            },
+          });
+        },
+      }),
+      {
+        deduplication_key: "linear:manual-mention:issue-1:comment-1",
+        event_action: "manual_mention",
+        event_type: "Issue",
+        labels: [ "agent:ready" ],
+        linear_issue_id: "issue-1",
+        linear_team_id: "team-1",
+        mentioned_bot: true,
+        provider: "linear",
+        status: "Ready",
+        title: "Ship it",
+      },
+    );
+
+    expect(result).toMatchObject({
+      actions: [ "respond_to_mention" ],
+      decision: "act",
+      sessionKey: "linear:issue-1",
+    });
+    expect(JSON.parse(requestBody).event).toMatchObject({
+      event_action: "manual_mention",
+      linear_issue_id: "issue-1",
+      mentioned_bot: true,
+    });
+  });
+
   test("returns the mapped repository and reviewer routing from Console", async () => {
     const result = await evaluateLinearAutomation(
       options({

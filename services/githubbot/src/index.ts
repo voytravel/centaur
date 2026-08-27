@@ -25,6 +25,7 @@ import {
 import { extractMessageOverrides } from "./overrides";
 import {
   evaluateGithubAutomation,
+  evaluateGithubManualMention,
   type GithubAutomationDecision,
   type GithubAutomationEvent,
 } from "./automation";
@@ -33,6 +34,7 @@ import {
   handleCiEvent,
   handlePullRequestEvent,
   handleReviewEvent,
+  fetchPrAutomationContext,
   isPrOwned,
   managementThreadKey,
   type PolicyPrAutomation,
@@ -320,7 +322,14 @@ async function handleMessage(
         });
       }
     }
-    const sessionThreadKey = await resolveManagementSession(
+    const policySessionKey = await authorizeManualMention(
+      thread,
+      message,
+      threadKey,
+      input,
+    );
+    if (policySessionKey === null) return;
+    const sessionThreadKey = policySessionKey ?? await resolveManagementSession(
       thread,
       threadKey,
       input,
@@ -395,6 +404,123 @@ async function handleMessage(
     threadId: sessionKey,
   };
   backgroundWaitUntil(appendFollowup(options, serialized, sessionKey, trace));
+}
+
+/**
+ * On deployments with Console automation ingress, direct comments may start a
+ * sandbox only after the same source-managed policy used by webhook automation
+ * authorizes this PR. That policy activation gives api-rs a scoped principal
+ * role before the session is created, so Iron Proxy can replace its model-key
+ * placeholder with the brokered LiteLLM credential.
+ *
+ * Deployments without the optional ingress keep their existing conversational
+ * behavior. HZ configures it, so a failed policy lookup is deliberately a
+ * visible, fail-closed refusal rather than a later unauthenticated model call.
+ */
+async function authorizeManualMention(
+  thread: Thread<GithubbotThreadState>,
+  message: ChatMessage,
+  threadKey: string,
+  input: MessageHandlerInput,
+): Promise<string | undefined | null> {
+  const { adapter, options, prManagerCtx } = input;
+  const logger = options.logger ?? noopLogger;
+  if (!options.automationApiUrl || !options.automationIngressToken) return undefined;
+
+  const ref = parseGithubThreadKey(threadKey);
+  if (!ref || ref.type !== "pr") {
+    await refuseManualMention(
+      thread,
+      adapter,
+      threadKey,
+      message.id,
+      "I can only start policy-authorized agent work from a pull request.",
+      logger,
+    );
+    return null;
+  }
+
+  const pr = await fetchPrAutomationContext(
+    prManagerCtx,
+    ref.owner,
+    ref.repo,
+    ref.number,
+  );
+  if (!pr) {
+    await refuseManualMention(
+      thread,
+      adapter,
+      threadKey,
+      message.id,
+      "I couldn't verify this pull request's policy context, so I didn't start an agent run.",
+      logger,
+    );
+    return null;
+  }
+
+  const repository = `${ref.owner}/${ref.repo}`.toLowerCase();
+  const decision = await evaluateGithubManualMention(options, {
+    baseBranch: pr.baseBranch,
+    commentId: message.id,
+    draft: pr.draft,
+    headSha: pr.headSha,
+    labels: pr.labels,
+    number: ref.number,
+    repository,
+  });
+  const [repositoryOwner, repositoryName] = repository.split("/");
+  const expectedSessionKey = managementThreadKey(
+    repositoryOwner!,
+    repositoryName!,
+    ref.number,
+  );
+  if (
+    !decision ||
+    decision.decision !== "act" ||
+    !decision.actions.includes("respond_to_mention") ||
+    decision.sessionKey !== expectedSessionKey
+  ) {
+    traceLog(options, "githubbot_manual_mention_denied", undefined, {
+      decision: decision?.decision ?? "unavailable",
+      policy_id: decision?.policyId,
+      reason: decision?.reason ?? "policy lookup unavailable",
+      repository,
+    });
+    await refuseManualMention(
+      thread,
+      adapter,
+      threadKey,
+      message.id,
+      "I couldn't start an agent run because this pull request is not enabled for a Centaur manual mention.",
+      logger,
+    );
+    return null;
+  }
+
+  try {
+    await thread.setState({ managementSessionKey: decision.sessionKey });
+  } catch {
+    // Best-effort cache only. The current turn still uses the authorized key.
+  }
+  return decision.sessionKey;
+}
+
+async function refuseManualMention(
+  thread: Thread<GithubbotThreadState>,
+  adapter: GitHubAdapter,
+  threadKey: string,
+  messageId: string,
+  body: string,
+  logger: GithubbotOptions["logger"],
+): Promise<void> {
+  try {
+    await thread.post(body);
+  } catch (error) {
+    (logger ?? noopLogger).warn("githubbot_manual_mention_refusal_failed", {
+      error: errorMessage(error),
+    });
+  }
+  await reactSafe(adapter, threadKey, messageId, "confused", logger);
 }
 
 /**
