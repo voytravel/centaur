@@ -1,11 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import {
+  buildTurnPublicReply,
   GithubRenderFallback,
   githubContextPreamble,
   githubTurnPreamble,
   parseGithubThreadKey,
   reviewCommentContextFromRaw,
 } from "../src/turn";
+import type { GithubbotOptions } from "../src/types";
 
 describe("parseGithubThreadKey", () => {
   test("parses a PR-level thread key", () => {
@@ -129,5 +131,45 @@ describe("GithubRenderFallback", () => {
 
     expect(forwarded).toHaveLength(1);
     expect(fallback.text()).toBe("Pushed the fix; CI is running.");
+  });
+});
+
+describe("buildTurnPublicReply", () => {
+  test("records a missing structured summary without logging its content", () => {
+    const entries: Array<{ event: string; fields: Record<string, unknown> }> = [];
+    const logger = {
+      debug: () => undefined,
+      info(event: string, fields: Record<string, unknown>) {
+        entries.push({ event, fields });
+      },
+      warn: () => undefined,
+      error: () => undefined,
+      child: () => logger,
+    };
+    const options = {
+      apiUrl: "http://console.test",
+      logger,
+      webhookSecret: "test",
+    } satisfies GithubbotOptions;
+    const reply = buildTurnPublicReply(
+      options,
+      {
+        includeContext: false,
+        messageId: "message-1",
+        mode: "execute",
+        openStream: true,
+        startedAtMs: 0,
+        threadId: "github:owner/repo:1",
+      },
+      { failed: false, fallbackText: "unmarked terminal result" },
+    );
+
+    expect(reply.summaryAvailable).toBe(false);
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({
+      event: "githubbot_public_summary_unavailable",
+      fields: { terminal_result_available: true },
+    });
+    expect(JSON.stringify(entries)).not.toContain("unmarked terminal result");
   });
 });

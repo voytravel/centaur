@@ -10,6 +10,7 @@ import {
   buildPublicCommentReply,
   buildWorkingReplyBody,
   CommentReplyCollector,
+  type GithubPublicReply,
 } from "./comment-bot";
 import { runExclusive } from "./context";
 import { resolveStickyProvider } from "./overrides";
@@ -58,6 +59,27 @@ export type TurnResult = {
   failed: boolean;
   fallbackText: string;
 };
+
+/**
+ * Builds the only public reply path shared by comment and body-mention turns.
+ * Keep the summary-availability event here so both entry points provide the
+ * same operational signal without logging any agent text.
+ */
+export function buildTurnPublicReply(
+  options: GithubbotOptions,
+  trace: GithubbotTrace,
+  result: TurnResult,
+): GithubPublicReply {
+  const publicReply = result.failed
+    ? { body: buildFailedReplyBody(), summaryAvailable: false }
+    : buildPublicCommentReply({ fallback: result.fallbackText });
+  if (!result.failed && !publicReply.summaryAvailable) {
+    traceLog(options, "githubbot_public_summary_unavailable", trace, {
+      terminal_result_available: Boolean(result.fallbackText),
+    });
+  }
+  return publicReply;
+}
 
 const THREAD_KEY_PATTERN =
   /^github:([^/:]+)\/([^:]+):(?:issue:(\d+)|(\d+)(?::rc:(\d+))?)$/;
@@ -341,15 +363,8 @@ export async function runSessionTurn(input: {
     historyForwarded: true,
     lastEventId,
   });
-  const publicReply = result.failed
-    ? { body: buildFailedReplyBody(), summaryAvailable: false }
-    : buildPublicCommentReply({ fallback: result.fallbackText });
+  const publicReply = buildTurnPublicReply(options, trace, result);
   const body = publicReply.body;
-  if (!result.failed && !publicReply.summaryAvailable) {
-    traceLog(options, "githubbot_public_summary_unavailable", trace, {
-      terminal_result_available: Boolean(result.fallbackText),
-    });
-  }
   try {
     await thread.post(body);
   } catch (error) {

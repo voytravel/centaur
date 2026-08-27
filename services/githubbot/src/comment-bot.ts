@@ -13,8 +13,9 @@ const INTERNAL_DETAILS_SECTION =
 // The marker and compact bounds are the primary disclosure boundary. This is
 // only an opportunistic backstop for familiar transcript formats; update it
 // when a concrete new leak is observed rather than treating it as a parser.
+// `Plan's clear` appeared in the original leaked GitHub transcript.
 const EXECUTION_TRANSCRIPT_MARKERS =
-  /<details\b|<summary\b|\b(?:chain\s+of\s+thought|command execution|tool output|raw log|execution log)\b|^\s*(?:let me|i need to|i'll|i’ll|now i'll|now i’ll|first,? let me)\b/im;
+  /<details\b|<summary\b|\b(?:chain\s+of\s+thought|command execution|tool output|raw log|execution log)\b|^\s*(?:let me|i need to|i'll|i’ll|now i'll|now i’ll|first,? let me|plan(?:'|’)s clear)\b/im;
 const MISSING_PUBLIC_SUMMARY =
   "Execution completed, but a concise verified summary was unavailable. Review the latest PR commit and checks; Centaur Console has the detailed record.";
 const FAILED_PUBLIC_SUMMARY =

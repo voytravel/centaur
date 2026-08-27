@@ -51,6 +51,14 @@ describe("GitHub public reply rendering", () => {
     ).toContain("concise verified summary was unavailable");
   });
 
+  test("retains the observed Plan's clear transcript backstop", () => {
+    expect(
+      buildPublicCommentReply({
+        fallback: "GITHUB_SUMMARY:\nPlan's clear, let me start the work.",
+      }).body,
+    ).toContain("concise verified summary was unavailable");
+  });
+
   test("reports missing structured summaries for operational rate monitoring", () => {
     expect(buildPublicCommentReply({}).summaryAvailable).toBe(false);
     expect(

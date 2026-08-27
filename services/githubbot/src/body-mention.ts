@@ -1,13 +1,14 @@
 import { resolveAllowedAuthorAssociations } from "./authorization";
 import { backgroundWaitUntil } from "./context";
-import {
-  buildFailedReplyBody,
-  buildPublicCommentReply,
-  buildWorkingReplyBody,
-} from "./comment-bot";
+import { buildWorkingReplyBody } from "./comment-bot";
 import type { PrManagerContext } from "./pr-manager";
 import { reactWorkingOnSubject, settleSubjectReaction } from "./reactions";
-import { githubContextPreamble, githubTurnPreamble, runTurnStream } from "./turn";
+import {
+  buildTurnPublicReply,
+  githubContextPreamble,
+  githubTurnPreamble,
+  runTurnStream,
+} from "./turn";
 import type {
   ForwardSessionInput,
   GithubbotApiMessage,
@@ -136,14 +137,7 @@ export function handleBodyMention(
     };
 
     const result = await runTurnStream(options, forwardInput);
-    const publicReply = result.failed
-      ? { body: buildFailedReplyBody(), summaryAvailable: false }
-      : buildPublicCommentReply({ fallback: result.fallbackText });
-    if (!result.failed && !publicReply.summaryAvailable) {
-      traceLog(options, "githubbot_public_summary_unavailable", trace, {
-        terminal_result_available: Boolean(result.fallbackText),
-      });
-    }
+    const publicReply = buildTurnPublicReply(options, trace, result);
     try {
       await ctx.octokit.rest.issues.createComment({
         owner: repo.owner,
