@@ -55,6 +55,7 @@ Rails.application.routes.draw do
     resources :workflows, only: %i[index show] do
       member do
         post :run, action: :force_start
+        post :approve_finding
       end
     end
     resources :scheduled_tasks, except: :show do

@@ -101,6 +101,44 @@ class Console::WorkflowsController < ApplicationController
     redirect_to console_workflow_path(workflow_name), alert: "Could not start workflow: #{e.message}"
   end
 
+  # A scheduled observation is never itself permission to change a repository.
+  # This trusted Console transition re-reads the immutable workflow result,
+  # validates the selected proposal, and starts one separately scoped action
+  # workflow under an idempotency key. The action workflow must still re-check
+  # the reviewed route and live GitHub state before it can make a Draft PR.
+  def approve_finding
+    workflow_name = params[:id].to_s
+    unless workflow_name == GithubDependencyMaintenanceFinding::WORKFLOW_NAME
+      redirect_to console_workflow_path(workflow_name), alert: "This workflow has no approvable findings."
+      return
+    end
+
+    source_run = api_client.get_workflow_run(params.require(:run_id)).fetch("run")
+    finding = GithubDependencyMaintenanceFinding.find_for_approval(
+      run: source_run,
+      repository: params.require(:repository),
+      finding_key: params.require(:finding_key)
+    )
+    result = api_client.create_workflow_run(
+      workflow_name: GithubDependencyMaintenanceFinding::ACTION_WORKFLOW_NAME,
+      input: finding.action_input(approved_by: current_user.oid),
+      idempotency_key: finding.idempotency_key
+    )
+    run_id = result["run_id"]
+    notice =
+      if result["created"] == false
+        "That scoped action is already queued (#{run_id})."
+      else
+        "Scoped action queued (#{run_id}). It may create only a Draft PR; it cannot merge or deploy."
+      end
+    redirect_to console_workflow_path(workflow_name, run_id: finding.source_run_id), notice: notice
+  rescue GithubDependencyMaintenanceFinding::Invalid, ActionController::ParameterMissing, KeyError => e
+    redirect_to console_workflow_path(workflow_name || params[:id]), alert: "Could not approve finding: #{e.message}"
+  rescue StandardError => e
+    Rails.logger.warn("console_workflow_finding_approval_failed workflow=#{workflow_name} error=#{e.class}: #{e.message}")
+    redirect_to console_workflow_path(workflow_name || params[:id]), alert: "Could not queue scoped action: #{e.message}"
+  end
+
   private
 
   # Best-effort enrichment from the workflows API: the registered schedule
@@ -110,6 +148,16 @@ class Console::WorkflowsController < ApplicationController
   def load_workflow_api_details
     @workflow_schedules = workflow_schedules_for(@workflow_name)
     @latest_run_detail = fetch_run_detail(@latest_run&.run_id)
+    selected_detail = fetch_run_detail(params[:run_id]) if params[:run_id].present?
+    @selected_run_detail = selected_detail if selected_detail&.fetch("workflow_name", nil) == @workflow_name
+    @maintenance_run_detail = @selected_run_detail || @latest_run_detail
+    @display_run_detail = @maintenance_run_detail
+    @maintenance_findings =
+      if @workflow_name == GithubDependencyMaintenanceFinding::WORKFLOW_NAME
+        GithubDependencyMaintenanceFinding.for_run(@maintenance_run_detail)
+      else
+        []
+      end
 
     return if @latest_run_detail.blank? && @workflow_schedules.blank?
     return if @latest_run&.display_status == "failed"
