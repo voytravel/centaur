@@ -187,7 +187,7 @@ export function githubTurnPreamble(preamble?: string): string {
   const publicReplyContract = [
     "Public GitHub response contract:",
     "- An acknowledgement is already visible. Work silently; do not narrate intermediate reasoning, plans, commands, raw logs, or tool output in GitHub.",
-    "- Keep detailed execution evidence in Console. Your terminal text must be exactly one concise block in this form (use short factual phrases, not process narration; use `None.` for a field with no relevant value):\nGITHUB_SUMMARY:\nOutcome: ...\nChanges: ...\nVerification: ...\nCI: ...\nNext: ...",
+    "- Keep detailed execution evidence in Console. Your terminal text must be exactly one concise block in this form (use one short factual sentence or phrase per field; use `None.` for a field with no relevant value):\nGITHUB_SUMMARY:\nOutcome: ...\nChanges: ...\nVerification: ...\nCI: ...\nNext: ...\nThe GitHub renderer turns a complete block into a compact Markdown update. For reviews, report the verdict and high-level next step only; keep code walkthroughs, command lines, hashes, timings, detailed nit lists, and baseline diagnosis in Console.",
     "- If you change code, inspect the repository CI workflow and run the closest local equivalent before pushing. Do not call CI green based only on a narrow test subset when a broader local equivalent is available.",
     "- When relevant and feasible, start the local app or preview needed to validate the change. After pushing, monitor checks for the new head; if a check fails because of your change, diagnose, fix, and verify it before finalizing. If you cannot run a check, name it and explain why.",
   ].join("\n");
