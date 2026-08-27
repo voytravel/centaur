@@ -40,6 +40,7 @@ module Api
           :head_sha,
           :base_branch,
           :draft,
+          :mentioned_bot,
           :linear_issue_id,
           :linear_issue_identifier,
           :linear_issue_url,

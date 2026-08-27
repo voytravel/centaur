@@ -70,6 +70,38 @@ class Api::Internal::AutomationEventsControllerTest < ActionDispatch::Integratio
     assert_equal "https://linear.app/voytravel/issue/ENG-42/implement-it", workstream.metadata["linear_issue_url"]
   end
 
+  test "permits the verified-manual-mention fact without accepting raw comment content" do
+    AutomationPolicy.create!(
+      name: "Manual mentions",
+      provider: "github",
+      repository: "acme/widgets",
+      enabled: true,
+      mode: "observe",
+      created_by: users(:acme_admin),
+      settings: { "github" => { "manual_mentions" => true } }
+    )
+
+    with_env("CENTAUR_AUTOMATION_INGRESS_TOKEN" => "expected") do
+      post api_internal_automation_events_url,
+           params: {
+             event: github_event.merge(
+               deduplication_key: "manual-mention-test",
+               event_action: "manual_mention",
+               mentioned_bot: true,
+               labels: []
+             )
+           },
+           headers: { "Authorization" => "Bearer expected" },
+           as: :json
+    end
+
+    assert_response :ok
+    body = response.parsed_body.fetch("data")
+    assert_equal "observe", body["decision"]
+    assert_equal [ "respond_to_mention" ], body["actions"]
+    assert_equal true, AutomationEvent.sole.metadata["mentioned_bot"]
+  end
+
   private
 
   def github_event

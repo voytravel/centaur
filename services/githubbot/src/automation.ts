@@ -27,12 +27,49 @@ export type GithubAutomationEvent = {
   event_type: string;
   head_sha?: string;
   labels: string[];
+  /** True only after Githubbot verifies a direct @-mention on this PR. */
+  mentioned_bot?: boolean;
   provider: "github";
   repository: string;
   /** True only after Githubbot verifies a requested reviewer/team targets it. */
   review_requested_for_bot?: boolean;
   subject_number: number;
 };
+
+/**
+ * Authorizes one direct PR mention through the same Console policy boundary as
+ * lifecycle automation. The caller must obtain every PR fact from the GitHub
+ * App API; a comment payload alone is not a trusted source for branch, label,
+ * draft, or head data.
+ */
+export async function evaluateGithubManualMention(
+  options: GithubbotOptions,
+  input: {
+    baseBranch: string;
+    commentId: string;
+    draft: boolean;
+    headSha: string;
+    labels: string[];
+    number: number;
+    repository: string;
+  },
+): Promise<GithubAutomationDecision | null> {
+  if (!options.automationApiUrl || !options.automationIngressToken) return null;
+
+  return submitEvent(options, {
+    base_branch: input.baseBranch,
+    deduplication_key: `github:manual-mention:${input.repository}:${input.number}:${input.commentId}`,
+    draft: input.draft,
+    event_action: "manual_mention",
+    event_type: "pull_request",
+    head_sha: input.headSha,
+    labels: input.labels,
+    mentioned_bot: true,
+    provider: "github",
+    repository: input.repository,
+    subject_number: input.number,
+  });
+}
 
 /**
  * Sends a compact, verified webhook summary to the Console automation service.

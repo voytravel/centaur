@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { evaluateGithubAutomation } from "../src/automation";
+import {
+  evaluateGithubAutomation,
+  evaluateGithubManualMention,
+} from "../src/automation";
 import type { GithubbotOptions } from "../src/types";
 
 function options(overrides: Partial<GithubbotOptions> = {}): GithubbotOptions {
@@ -27,6 +30,54 @@ function options(overrides: Partial<GithubbotOptions> = {}): GithubbotOptions {
 }
 
 describe("evaluateGithubAutomation", () => {
+  test("sends a verified PR mention through the same policy ingress", async () => {
+    let requestBody = "";
+    const decision = await evaluateGithubManualMention(
+      options({
+        fetch: async (_url, init) => {
+          requestBody = String(init?.body);
+          return Response.json({
+            data: {
+              actions: [ "respond_to_mention" ],
+              auto_merge: false,
+              decision: "act",
+              reason: "policy authorizes automation",
+              session_key: "github-manage:acme/widgets:9",
+            },
+          });
+        },
+      }),
+      {
+        baseBranch: "main",
+        commentId: "comment-7",
+        draft: false,
+        headSha: "abc123",
+        labels: [ "agent-ok" ],
+        number: 9,
+        repository: "acme/widgets",
+      },
+    );
+
+    expect(decision).toMatchObject({
+      actions: [ "respond_to_mention" ],
+      decision: "act",
+      sessionKey: "github-manage:acme/widgets:9",
+    });
+    expect(JSON.parse(requestBody).event).toEqual({
+      base_branch: "main",
+      deduplication_key: "github:manual-mention:acme/widgets:9:comment-7",
+      draft: false,
+      event_action: "manual_mention",
+      event_type: "pull_request",
+      head_sha: "abc123",
+      labels: [ "agent-ok" ],
+      mentioned_bot: true,
+      provider: "github",
+      repository: "acme/widgets",
+      subject_number: 9,
+    });
+  });
+
   test("normalizes a PR event and returns the Console decision", async () => {
     let requestBody = "";
     const decisions = await evaluateGithubAutomation(

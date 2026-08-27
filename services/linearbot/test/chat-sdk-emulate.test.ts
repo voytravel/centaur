@@ -138,6 +138,69 @@ describe("linearbot comment-thread pipeline", () => {
     );
   });
 
+  it("authorizes a direct mention before starting the issue-scoped policy workspace", async () => {
+    const policyEvents: Array<Record<string, unknown>> = [];
+    bot = createTestBot({
+      automationApiUrl: "http://console",
+      automationIngressToken: "automation-token",
+      fetch: async (request, init) => {
+        const url = request instanceof Request ? request.url : request.toString();
+        if (!url.startsWith("http://console/")) {
+          return globalThis.fetch(request, init);
+        }
+        const body = JSON.parse(String(init?.body)) as {
+          event?: Record<string, unknown>;
+        };
+        policyEvents.push(body.event ?? {});
+        return Response.json({
+          data: {
+            actions: [ "respond_to_mention" ],
+            decision: "act",
+            github_repository: "acme/widgets",
+            move_to_in_progress: false,
+            reason: "policy authorizes automation",
+            reviewer_logins: [],
+            reviewer_team_slugs: [],
+            session_key: `linear:${ISSUE_ID}`,
+          },
+        });
+      },
+    });
+
+    const response = await postWebhook(
+      commentCreatedPayload({
+        id: "comment-policy-mention",
+        body: "@centaur please investigate",
+      }),
+    );
+    expect(response.status).toBe(200);
+    await waitFor(() =>
+      codexApi.executes.some((execution) => execution.threadKey === `linear:${ISSUE_ID}`),
+    );
+    expect(policyEvents).toEqual([
+      expect.objectContaining({
+        deduplication_key: "linear:manual-mention:issue-1:comment-policy-mention",
+        event_action: "manual_mention",
+        linear_issue_id: ISSUE_ID,
+        mentioned_bot: true,
+      }),
+    ]);
+
+    const appendsBeforeFollowup = codexApi.appends.length;
+    await postWebhook(
+      commentCreatedPayload({
+        id: "comment-policy-followup",
+        parentId: "comment-policy-mention",
+        body: "More context for the investigation.",
+      }),
+    );
+    await waitFor(() =>
+      codexApi.appends.slice(appendsBeforeFollowup).some(
+        (append) => append.threadKey === `linear:${ISSUE_ID}`,
+      ),
+    );
+  });
+
   it("seeds full context on the first turn, then only the compact header on later turns", async () => {
     const threadKey = `linear:${ISSUE_ID}:c:comment-twoturn`;
     await postWebhook(

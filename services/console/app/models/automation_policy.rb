@@ -103,12 +103,14 @@ class AutomationPolicy < ApplicationRecord
   def automation_summary
     if github?
       config = github_settings
-      "review: #{config["review"].tr("_", " ")} · feedback: #{config["feedback"].tr("_", " ")} · checks: #{config["checks"].tr("_", " ")}#{activity_reporting_summary}"
+      manual_mentions = config["manual_mentions"] ? " · manual mentions: enabled" : ""
+      "review: #{config["review"].tr("_", " ")} · feedback: #{config["feedback"].tr("_", " ")} · checks: #{config["checks"].tr("_", " ")}#{manual_mentions}#{activity_reporting_summary}"
     else
       config = linear_settings
       required_labels = Array(config["required_labels"])
       label_summary = required_labels.any? ? required_labels.join(", ") : "none"
-      "issues: #{config["issue"].tr("_", " ")} · repo: #{linear_repository_summary(config)} · required labels: #{label_summary}#{activity_reporting_summary}"
+      manual_mentions = config["manual_mentions"] ? " · manual mentions: enabled" : ""
+      "issues: #{config["issue"].tr("_", " ")} · repo: #{linear_repository_summary(config)} · required labels: #{label_summary}#{manual_mentions}#{activity_reporting_summary}"
     end
   end
 
@@ -179,6 +181,7 @@ class AutomationPolicy < ApplicationRecord
       "feedback" => "bot_owned",
       "checks" => "observe",
       "conflicts" => "observe",
+      "manual_mentions" => false,
       "auto_merge" => false,
       "base_branches" => [],
       "required_labels" => [],
@@ -197,6 +200,7 @@ class AutomationPolicy < ApplicationRecord
       "repository_routes" => [],
       "reviewer_logins" => [],
       "reviewer_team_slugs" => [],
+      "manual_mentions" => false,
       "move_to_in_progress" => true
     }
   end
@@ -296,9 +300,11 @@ class AutomationPolicy < ApplicationRecord
       %w[feedback checks conflicts].each do |key|
         errors.add(:settings, "has an invalid #{key} mode") unless GITHUB_REPAIR_MODES.include?(config[key])
       end
+      errors.add(:settings, "manual mentions must be true or false") unless boolean?(config["manual_mentions"])
     elsif linear?
       config = linear_settings
       errors.add(:settings, "has an invalid issue mode") unless LINEAR_ISSUE_MODES.include?(config["issue"])
+      errors.add(:settings, "manual mentions must be true or false") unless boolean?(config["manual_mentions"])
       validate_linear_repository_routes(config)
     end
     validate_activity_reporting
@@ -370,6 +376,7 @@ class AutomationPolicy < ApplicationRecord
     actions = case event["event_type"]
     when "pull_request"
       actions = []
+      actions << "respond_to_mention" if github_manual_mention_enabled?(event)
       actions << "review" if github_review_enabled?(event)
       actions << "resolve_conflict" if github_repair_enabled?("conflicts", event) &&
                                        GITHUB_CONFLICT_ACTIONS.include?(event["event_action"])
@@ -403,11 +410,15 @@ class AutomationPolicy < ApplicationRecord
     return ignored("event is outside this Linear team") unless event["linear_team_id"] == linear_team_id
     return ignored("event is outside this Linear project") if linear_project_id.present? &&
                                                               event["linear_project_id"] != linear_project_id
-    return ignored("not an issue create or update") unless event["event_type"] == "Issue" &&
-                                                           %w[create update].include?(event["event_action"])
+    return ignored("not an issue create, update, or manual mention") unless event["event_type"] == "Issue" &&
+                                                                        %w[create update manual_mention].include?(event["event_action"])
 
     config = linear_settings
     return ignored("ready issue automation is disabled") unless config["issue"] == "ready_issues"
+    if event["event_action"] == "manual_mention"
+      return ignored("manual mentions are disabled") unless config["manual_mentions"] == true
+      return ignored("event is not a verified bot mention") unless event["mentioned_bot"] == true
+    end
 
     ready, reason = linear_issue_ready?(event, config)
     return ignored(reason) unless ready
@@ -415,7 +426,8 @@ class AutomationPolicy < ApplicationRecord
     route, route_reason = linear_repository_route_for(event, config)
     return ignored(route_reason) unless route
 
-    routed([ "implement_issue" ], linear_route: route)
+    actions = event["event_action"] == "manual_mention" ? [ "respond_to_mention" ] : [ "implement_issue" ]
+    routed(actions, linear_route: route)
   end
 
   def github_eligible?(event)
@@ -454,6 +466,17 @@ class AutomationPolicy < ApplicationRecord
     else
       false
     end
+  end
+
+  # A direct GitHub comment is not an autonomous lifecycle trigger. Githubbot
+  # first verifies the commenter and then supplies this fact only after it has
+  # fetched the PR through the GitHub App. Keeping the opt-in separate from
+  # review mode means a repository can receive automatic reviews without
+  # allowing a comment to start a write-capable agent turn.
+  def github_manual_mention_enabled?(event)
+    github_settings["manual_mentions"] == true &&
+      event["event_action"] == "manual_mention" &&
+      event["mentioned_bot"] == true
   end
 
   def github_repair_enabled?(setting, event)
@@ -511,6 +534,10 @@ class AutomationPolicy < ApplicationRecord
     return [ nil, "multiple configured repository routes match issue labels" ] if matches.many?
 
     [ matches.first, nil ]
+  end
+
+  def boolean?(value)
+    value == true || value == false
   end
 
   def legacy_linear_repository_route(config)
