@@ -74,6 +74,9 @@ A GitHub policy scopes to one `owner/repository`. It can independently enable:
 - response to submitted review feedback;
 - failing-check repair after all checks for a commit settle;
 - merge-conflict resolution; and
+- an explicitly enabled, verified manual mention. A manual mention can start a
+  scoped turn on a draft PR, but it still must meet the configured repository,
+  base-branch, required-label, and excluded-label gates; and
 - deterministic auto-merge, explicitly opt-in and still constrained by branch
   protection, draft state, and the hold label.
 

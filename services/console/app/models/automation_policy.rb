@@ -431,9 +431,21 @@ class AutomationPolicy < ApplicationRecord
   end
 
   def github_eligible?(event)
-    return [ false, "draft pull requests are excluded" ] if event["draft"] == true
-
+    # A draft remains a hard stop for unattended lifecycle automation. A
+    # verified, explicitly enabled manual mention is different: it is a
+    # collaborator's deliberate request to start the scoped workstream, while
+    # still passing the normal repository, branch, and label gates below.
+    manual_mention = event["event_action"] == "manual_mention"
     config = github_settings
+    if manual_mention
+      return [ false, "manual mentions are disabled" ] unless config["manual_mentions"] == true
+      return [ false, "event is not a verified bot mention" ] unless event["mentioned_bot"] == true
+    end
+
+    if event["draft"] == true && !manual_mention
+      return [ false, "draft pull requests are excluded" ]
+    end
+
     base_branches = Array(config["base_branches"]).map(&:downcase)
     base_branch = event["base_branch"].to_s.downcase
     if base_branches.any? && !base_branches.any? { |pattern| File.fnmatch?(pattern, base_branch) }
@@ -452,7 +464,8 @@ class AutomationPolicy < ApplicationRecord
   # Githubbot, not an untrusted webhook payload, establishes these two flags
   # after signature verification and (for a review request) bot/team identity
   # matching. A policy may use them only after the ordinary repository, branch,
-  # label, and draft gates above have passed.
+  # and label gates above have passed; the draft gate continues to apply to
+  # unattended lifecycle events.
   #
   # `continuation_authorized` is derived by AutomationEventIngestor from the
   # same durable PR workstream that holds the selected execution role. It is

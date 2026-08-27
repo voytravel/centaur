@@ -310,7 +310,7 @@ class AutomationEventIngestorTest < ActiveSupport::TestCase
       "labels" => []
     ).call
     assert_equal "ignored", denied["decision"]
-    assert_equal "no automatic action is enabled for this event", denied["reason"]
+    assert_equal "manual mentions are disabled", denied["reason"]
     assert_equal "active", workstream.reload.state
   end
 

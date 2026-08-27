@@ -115,13 +115,14 @@ class AutomationPolicyTest < ActiveSupport::TestCase
     assert_equal [ "resolve_conflict" ], conflict["actions"]
   end
 
-  test "requires an explicit verified-manual-mention opt-in for GitHub comments" do
+  test "requires an explicit verified-manual-mention opt-in and permits it on drafts" do
     policy = github_policy(
       mode: "act",
       settings: {
         "github" => {
           "manual_mentions" => true,
           "base_branches" => [ "main" ],
+          "required_labels" => [ "agent-ok" ],
           "excluded_labels" => [ "no-agent" ]
         }
       }
@@ -134,23 +135,58 @@ class AutomationPolicyTest < ActiveSupport::TestCase
       "mentioned_bot" => true,
       "base_branch" => "main",
       "draft" => false,
-      "labels" => []
+      "labels" => [ "agent-ok" ]
     )
     assert_equal "act", allowed["decision"]
     assert_equal [ "respond_to_mention" ], allowed["actions"]
     assert_includes policy.automation_summary, "manual mentions: enabled"
 
-    unverified = policy.evaluate(
+    draft_allowed = policy.evaluate(
+      "repository" => "acme/widgets",
+      "event_type" => "pull_request",
+      "event_action" => "manual_mention",
+      "mentioned_bot" => true,
+      "base_branch" => "main",
+      "draft" => true,
+      "labels" => [ "agent-ok" ]
+    )
+    assert_equal "act", draft_allowed["decision"]
+    assert_equal [ "respond_to_mention" ], draft_allowed["actions"]
+
+    unattended_draft = policy.evaluate(
+      "repository" => "acme/widgets",
+      "event_type" => "pull_request",
+      "event_action" => "opened",
+      "base_branch" => "main",
+      "draft" => true,
+      "labels" => []
+    )
+    assert_equal "ignored", unattended_draft["decision"]
+    assert_equal "draft pull requests are excluded", unattended_draft["reason"]
+
+    spoofed = policy.evaluate(
       "repository" => "acme/widgets",
       "event_type" => "pull_request",
       "event_action" => "manual_mention",
       "mentioned_bot" => false,
       "base_branch" => "main",
-      "draft" => false,
+      "draft" => true,
+      "labels" => [ "agent-ok" ]
+    )
+    assert_equal "ignored", spoofed["decision"]
+    assert_equal "event is not a verified bot mention", spoofed["reason"]
+
+    missing_required = policy.evaluate(
+      "repository" => "acme/widgets",
+      "event_type" => "pull_request",
+      "event_action" => "manual_mention",
+      "mentioned_bot" => true,
+      "base_branch" => "main",
+      "draft" => true,
       "labels" => []
     )
-    assert_equal "ignored", unverified["decision"]
-    assert_equal "no automatic action is enabled for this event", unverified["reason"]
+    assert_equal "ignored", missing_required["decision"]
+    assert_equal "required label is missing", missing_required["reason"]
 
     excluded = policy.evaluate(
       "repository" => "acme/widgets",
@@ -158,8 +194,8 @@ class AutomationPolicyTest < ActiveSupport::TestCase
       "event_action" => "manual_mention",
       "mentioned_bot" => true,
       "base_branch" => "main",
-      "draft" => false,
-      "labels" => [ "no-agent" ]
+      "draft" => true,
+      "labels" => [ "agent-ok", "no-agent" ]
     )
     assert_equal "ignored", excluded["decision"]
     assert_equal "an excluded label is present", excluded["reason"]
