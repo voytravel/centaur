@@ -6,10 +6,11 @@ import {
 import type { GitHubAdapter } from "@chat-adapter/github";
 import type { Thread } from "chat";
 import {
-  buildCommentReplyBody,
   buildFailedReplyBody,
+  buildPublicCommentReply,
   buildWorkingReplyBody,
   CommentReplyCollector,
+  type GithubPublicReply,
 } from "./comment-bot";
 import { runExclusive } from "./context";
 import { resolveStickyProvider } from "./overrides";
@@ -55,11 +56,30 @@ export type ReviewCommentContext = {
 
 /** Accumulated result of one streamed agent turn. */
 export type TurnResult = {
-  answer: string;
-  errorText: string;
   failed: boolean;
   fallbackText: string;
 };
+
+/**
+ * Builds the only public reply path shared by comment and body-mention turns.
+ * Keep the summary-availability event here so both entry points provide the
+ * same operational signal without logging any agent text.
+ */
+export function buildTurnPublicReply(
+  options: GithubbotOptions,
+  trace: GithubbotTrace,
+  result: TurnResult,
+): GithubPublicReply {
+  const publicReply = result.failed
+    ? { body: buildFailedReplyBody(), summaryAvailable: false }
+    : buildPublicCommentReply({ fallback: result.fallbackText });
+  if (!result.failed && !publicReply.summaryAvailable) {
+    traceLog(options, "githubbot_public_summary_unavailable", trace, {
+      terminal_result_available: Boolean(result.fallbackText),
+    });
+  }
+  return publicReply;
+}
 
 const THREAD_KEY_PATTERN =
   /^github:([^/:]+)\/([^:]+):(?:issue:(\d+)|(\d+)(?::rc:(\d+))?)$/;
@@ -167,7 +187,7 @@ export function githubTurnPreamble(preamble?: string): string {
   const publicReplyContract = [
     "Public GitHub response contract:",
     "- An acknowledgement is already visible. Work silently; do not narrate intermediate reasoning, plans, commands, raw logs, or tool output in GitHub.",
-    "- Keep detailed execution evidence in Console. Your terminal text must be exactly one concise block in this form (use short factual phrases, not process narration):\nGITHUB_SUMMARY:\nOutcome: ...\nChanges: ...\nVerification: ...\nCI: ...\nNext: ...",
+    "- Keep detailed execution evidence in Console. Your terminal text must be exactly one concise block in this form (use short factual phrases, not process narration; use `None.` for a field with no relevant value):\nGITHUB_SUMMARY:\nOutcome: ...\nChanges: ...\nVerification: ...\nCI: ...\nNext: ...",
     "- If you change code, inspect the repository CI workflow and run the closest local equivalent before pushing. Do not call CI green based only on a narrow test subset when a broader local equivalent is available.",
     "- When relevant and feasible, start the local app or preview needed to validate the change. After pushing, monitor checks for the new head; if a check fails because of your change, diagnose, fix, and verify it before finalizing. If you cannot run a check, name it and explain why.",
   ].join("\n");
@@ -232,8 +252,6 @@ async function runTurnStreamInner(
         collector.update(chunk);
       }
       return {
-        answer: collector.answer,
-        errorText: collector.errorText,
         failed: collector.failed,
         fallbackText: fallback.text(),
       };
@@ -252,16 +270,12 @@ async function runTurnStreamInner(
         error: errorMessage(error),
       });
       return {
-        answer: "",
-        errorText: errorMessage(error),
         failed: true,
         fallbackText: "",
       };
     }
   }
   return {
-    answer: "",
-    errorText: "exhausted retries",
     failed: true,
     fallbackText: "",
   };
@@ -349,12 +363,8 @@ export async function runSessionTurn(input: {
     historyForwarded: true,
     lastEventId,
   });
-  const body = result.failed
-    ? buildFailedReplyBody()
-    : buildCommentReplyBody({
-        answer: result.answer,
-        fallback: result.fallbackText,
-      });
+  const publicReply = buildTurnPublicReply(options, trace, result);
+  const body = publicReply.body;
   try {
     await thread.post(body);
   } catch (error) {
@@ -374,6 +384,8 @@ export async function runSessionTurn(input: {
   traceLog(options, "githubbot_thread_turn_complete", trace, {
     chars: body.length,
     failed: result.failed,
+    public_summary_available: publicReply.summaryAvailable,
+    terminal_result_available: Boolean(result.fallbackText),
   });
 }
 

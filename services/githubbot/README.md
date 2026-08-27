@@ -23,6 +23,9 @@ collaborator.
   PR itself. A 👀 reaction acks the triggering comment while the bot works, settling to 🚀 / 😕. The
   reply begins with a concise acknowledgement, followed by a concise verified outcome. Execution
   reasoning, task commands, and raw tool output stay in Console rather than appearing in GitHub.
+  The terminal reply is accepted only from the structured execution result behind a compact
+  `GITHUB_SUMMARY:` block; a missing or unsafe summary falls back to a safe status note and emits
+  `githubbot_public_summary_unavailable` for operational rate monitoring.
   Mention detection is the adapter's (matches the bot account's `@username`). Only authors
   whose GitHub `author_association` is allowed (default `OWNER` / `MEMBER` / `COLLABORATOR`) can drive
   a turn — the agent runs in a write-capable sandbox and posts a concise result back, so untrusted

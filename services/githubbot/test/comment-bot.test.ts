@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
-  buildCommentReplyBody,
+  buildPublicCommentReply,
   buildWorkingReplyBody,
   CommentReplyCollector,
 } from "../src/comment-bot";
@@ -17,42 +17,55 @@ describe("GitHub public reply rendering", () => {
       details: "git push origin branch",
     });
 
-    expect(collector.answer).toBe("");
     expect(
-      buildCommentReplyBody({ answer: collector.answer }),
+      buildPublicCommentReply({}).body,
     ).toContain("concise verified summary was unavailable");
   });
 
   test("renders only an explicitly marked concise terminal outcome", () => {
     expect(
-      buildCommentReplyBody({
-        answer: "Let me inspect this first.",
+      buildPublicCommentReply({
         fallback:
           "GITHUB_SUMMARY:\nOutcome: Fixed the conflict.\nChanges: Pushed one commit.\nVerification: Full local suite passed.\nCI: Running.\nNext: Monitor checks.",
       }),
-    ).toBe(
-      "Outcome: Fixed the conflict.\nChanges: Pushed one commit.\nVerification: Full local suite passed.\nCI: Running.\nNext: Monitor checks.",
-    );
+    ).toMatchObject({
+      body:
+        "Outcome: Fixed the conflict.\nChanges: Pushed one commit.\nVerification: Full local suite passed.\nCI: Running.\nNext: Monitor checks.",
+    });
   });
 
   test("fails closed rather than publishing an unmarked execution transcript", () => {
     expect(
-      buildCommentReplyBody({
-        answer:
-          "Let me inspect this first.\nCommand execution: gh pr checks 426\nNow I will fix it.",
+      buildPublicCommentReply({
         fallback: "The log shows an error. Let me grep the run log.",
-      }),
+      }).body,
     ).toContain("concise verified summary was unavailable");
   });
 
   test("rejects a marked block that still contains process narration", () => {
     expect(
-      buildCommentReplyBody({
-        answer: "",
+      buildPublicCommentReply({
         fallback:
           "GITHUB_SUMMARY:\nOutcome: Fixed it.\nLet me now explain every command I ran.",
-      }),
+      }).body,
     ).toContain("concise verified summary was unavailable");
+  });
+
+  test("retains the observed Plan's clear transcript backstop", () => {
+    expect(
+      buildPublicCommentReply({
+        fallback: "GITHUB_SUMMARY:\nPlan's clear, let me start the work.",
+      }).body,
+    ).toContain("concise verified summary was unavailable");
+  });
+
+  test("reports missing structured summaries for operational rate monitoring", () => {
+    expect(buildPublicCommentReply({}).summaryAvailable).toBe(false);
+    expect(
+      buildPublicCommentReply({
+        fallback: "GITHUB_SUMMARY:\nOutcome: Completed.",
+      }),
+    ).toMatchObject({ summaryAvailable: true });
   });
 
   test("acknowledges the verification contract without exposing execution detail", () => {
