@@ -237,11 +237,15 @@ async function loadState(
   owner: string,
   repo: string,
   n: number,
-): Promise<PrState> {
+): Promise<PrState | undefined> {
   try {
     return (await ctx.state.get<PrState>(prKey(ctx, owner, repo, n))) ?? {};
-  } catch {
-    return {};
+  } catch (error) {
+    logger(ctx).warn("githubbot_pr_state_load_failed", {
+      error: errorMessage(error),
+      pr: `${owner}/${repo}#${n}`,
+    });
+    return undefined;
   }
 }
 
@@ -251,13 +255,16 @@ async function saveState(
   repo: string,
   n: number,
   value: PrState,
-): Promise<void> {
+): Promise<boolean> {
   try {
     await ctx.state.set(prKey(ctx, owner, repo, n), value, STATE_TTL_MS);
+    return true;
   } catch (error) {
-    logger(ctx).debug("githubbot_pr_state_save_failed", {
+    logger(ctx).warn("githubbot_pr_state_save_failed", {
       error: errorMessage(error),
+      pr: `${owner}/${repo}#${n}`,
     });
+    return false;
   }
 }
 
@@ -788,7 +795,10 @@ async function handleAutomaticReviewLocked(
     return;
   }
 
-  let state = await loadState(ctx, repo.owner, repo.repo, number);
+  const state = await loadState(ctx, repo.owner, repo.repo, number);
+  if (!state) {
+    return;
+  }
   const previous = state.reviewEpoch;
   // An automatic redelivery for an already-recorded head is older than or equal
   // to the stored decision. Human review requests are the intentional exception.
@@ -1022,7 +1032,7 @@ async function handleAutomaticReviewLocked(
     });
     return;
   }
-  state = {
+  const nextState = {
     ...state,
     ...(resetFeedbackBudget
       ? {
@@ -1032,7 +1042,10 @@ async function handleAutomaticReviewLocked(
       : {}),
     reviewEpoch: nextEpoch,
   };
-  await saveState(ctx, repo.owner, repo.repo, number, state);
+  if (!(await saveState(ctx, repo.owner, repo.repo, number, nextState))) {
+    await release(ctx, reviewClaim);
+    return;
+  }
   await release(ctx, automaticReviewCapKey(ctx, repo.owner, repo.repo, number));
   if (resetFeedbackBudget) {
     await release(ctx, automatedFeedbackCapKey(ctx, repo.owner, repo.repo, number));
@@ -1086,6 +1099,7 @@ export async function handleReviewEvent(
     stringValue(reviewerNode?.type)?.toLowerCase() === "bot" ||
     reviewer?.toLowerCase().endsWith("[bot]") === true;
   const reviewState = stringValue(reviewNode.state)?.toLowerCase();
+  const reviewHandledClaimKey = `${ctx.options.stateKeyPrefix ?? "centaur-githubbot"}:review-handled:${repo.owner}/${repo.repo}#${number}:${reviewId}`;
 
   // A review is tied to review.commit_id. The PR head can advance before this
   // webhook is handled, so a live PR lookup would correlate the review to the
@@ -1118,7 +1132,7 @@ export async function handleReviewEvent(
   if (
     !(await claim(
       ctx,
-      `${ctx.options.stateKeyPrefix ?? "centaur-githubbot"}:review-handled:${repo.owner}/${repo.repo}#${number}:${reviewId}`,
+      reviewHandledClaimKey,
     ))
   ) {
     return;
@@ -1143,6 +1157,10 @@ export async function handleReviewEvent(
         number,
         async () => {
           const state = await loadState(ctx, repo.owner, repo.repo, number);
+          if (!state) {
+            await release(ctx, reviewHandledClaimKey);
+            return undefined;
+          }
           const reviewerKey = (reviewer ?? "unknown-automated-reviewer").toLowerCase();
           const maxReviewerRounds =
             ctx.options.reviewMaxBotFeedbackRoundsPerReviewer ??
@@ -1183,7 +1201,7 @@ export async function handleReviewEvent(
             total: epochRounds + 1,
             totalMax: maxEpochRounds,
           };
-          await saveState(ctx, repo.owner, repo.repo, number, {
+          const saved = await saveState(ctx, repo.owner, repo.repo, number, {
             ...state,
             automatedFeedbackRounds: nextRound.total,
             automatedFeedbackRoundsByReviewer: {
@@ -1191,6 +1209,10 @@ export async function handleReviewEvent(
               [reviewerKey]: nextRound.current,
             },
           });
+          if (!saved) {
+            await release(ctx, reviewHandledClaimKey);
+            return undefined;
+          }
           return nextRound;
         },
       );
@@ -1272,7 +1294,7 @@ async function processCi(
   if (!evaluation.failed) {
     // Green: reset the fix counter and consider merging.
     const state = await loadState(ctx, owner, repo, number);
-    if (state.consecutiveCiFixes) {
+    if (state?.consecutiveCiFixes) {
       await saveState(ctx, owner, repo, number, { ...state, consecutiveCiFixes: 0 });
     }
     traceLog(ctx.options, "githubbot_ci_green", trace, { pr: `${owner}/${repo}#${number}` });
@@ -1301,6 +1323,7 @@ async function processCi(
 
   const maxAttempts = ctx.options.ciFixMaxAttempts ?? DEFAULT_CI_FIX_MAX_ATTEMPTS;
   const state = await loadState(ctx, owner, repo, number);
+  if (!state) return;
   const attempts = state.consecutiveCiFixes ?? 0;
   if (attempts >= maxAttempts) {
     await escalate(ctx, owner, repo, number, evaluation.failingNames, maxAttempts);

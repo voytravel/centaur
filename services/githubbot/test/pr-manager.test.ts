@@ -34,7 +34,7 @@ function makeState() {
     async get(key: string) {
       return values.get(key);
     },
-    async set(key: string, value: unknown) {
+    async set(key: string, value: unknown, _ttlMs?: number) {
       values.set(key, value);
     },
     async setIfNotExists(key: string, value: unknown) {
@@ -551,6 +551,56 @@ describe("automated review loop budgets", () => {
       },
       sender,
     });
+
+  test("does not start an automatic review when state cannot be read", async () => {
+    const state = makeState();
+    const prStateKey = "centaur-githubbot:pr:base/repo#7";
+    const originalGet = state.get.bind(state);
+    let failPrStateGet = true;
+    state.get = async (key: string) => {
+      if (failPrStateGet && key === prStateKey) {
+        failPrStateGet = false;
+        throw new Error("state unavailable");
+      }
+      return originalGet(key);
+    };
+    const managementStarts: string[] = [];
+    const ctx = boundedReviewCtx({
+      comments: [],
+      headSha: () => "head-1",
+      managementStarts,
+      state,
+    });
+
+    await handleAutomaticReview(ctx, pullRequestEvent("opened"), "delivery-state-read-failed");
+
+    expect(await state.get(prStateKey)).toBeUndefined();
+    expect(managementStarts).toHaveLength(0);
+    await drainBackgroundWork(5_000);
+  });
+
+  test("does not start an automatic review when state cannot be saved", async () => {
+    const state = makeState();
+    const prStateKey = "centaur-githubbot:pr:base/repo#7";
+    const originalSet = state.set.bind(state);
+    state.set = async (key: string, value: unknown) => {
+      if (key === prStateKey) throw new Error("state unavailable");
+      return originalSet(key, value);
+    };
+    const managementStarts: string[] = [];
+    const ctx = boundedReviewCtx({
+      comments: [],
+      headSha: () => "head-1",
+      managementStarts,
+      state,
+    });
+
+    await handleAutomaticReview(ctx, pullRequestEvent("opened"), "delivery-state-save-failed");
+
+    expect(await state.get(prStateKey)).toBeUndefined();
+    expect(managementStarts).toHaveLength(0);
+    await drainBackgroundWork(5_000);
+  });
 
   test("serializes overlapping heads and preserves the newest review state", async () => {
     let prFetches = 0;
@@ -1090,6 +1140,79 @@ describe("automated review loop budgets", () => {
         user: { login, type },
       },
     });
+
+  test("does not start a feedback turn when state cannot be read", async () => {
+    const state = makeState();
+    const prStateKey = "centaur-githubbot:pr:base/repo#7";
+    await state.set(prStateKey, {
+      automatedFeedbackRounds: 1,
+      automatedFeedbackRoundsByReviewer: { "codex[bot]": 1 },
+    });
+    const originalGet = state.get.bind(state);
+    const existingState = {
+      automatedFeedbackRounds: 1,
+      automatedFeedbackRoundsByReviewer: { "codex[bot]": 1 },
+    };
+    let failPrStateGet = true;
+    state.get = async (key: string) => {
+      if (failPrStateGet && key === prStateKey) {
+        failPrStateGet = false;
+        throw new Error("state unavailable");
+      }
+      return originalGet(key);
+    };
+    const managementStarts: string[] = [];
+    const ctx = boundedReviewCtx({
+      comments: [],
+      headSha: () => "abc123",
+      managementStarts,
+      state,
+    });
+
+    await handleReviewEvent(ctx, submittedFeedback(2, "codex[bot]", "Bot"), {
+      feedback: true,
+    });
+
+    expect(await state.get(prStateKey)).toEqual(existingState);
+    expect(
+      await state.setIfNotExists(
+        "centaur-githubbot:review-handled:base/repo#7:2",
+        "1",
+      ),
+    ).toBe(true);
+    expect(managementStarts).toHaveLength(0);
+    await drainBackgroundWork(5_000);
+  });
+
+  test("does not start a feedback turn when state cannot be saved", async () => {
+    const state = makeState();
+    const prStateKey = "centaur-githubbot:pr:base/repo#7";
+    const existingState = {
+      automatedFeedbackRounds: 1,
+      automatedFeedbackRoundsByReviewer: { "codex[bot]": 1 },
+    };
+    await state.set(prStateKey, existingState);
+    const originalSet = state.set.bind(state);
+    state.set = async (key: string, value: unknown) => {
+      if (key === prStateKey) throw new Error("state unavailable");
+      return originalSet(key, value);
+    };
+    const managementStarts: string[] = [];
+    const ctx = boundedReviewCtx({
+      comments: [],
+      headSha: () => "abc123",
+      managementStarts,
+      state,
+    });
+
+    await handleReviewEvent(ctx, submittedFeedback(2, "codex[bot]", "Bot"), {
+      feedback: true,
+    });
+
+    expect(await state.get(prStateKey)).toEqual(existingState);
+    expect(managementStarts).toHaveLength(0);
+    await drainBackgroundWork(5_000);
+  });
 
   test("bounds each reviewer bot and the aggregate while honoring human reviews", async () => {
     const comments: string[] = [];
