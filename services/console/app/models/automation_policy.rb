@@ -6,6 +6,7 @@ class AutomationPolicy < ApplicationRecord
   GITHUB_REVIEW_MODES = %w[off assigned_or_mentioned all_eligible].freeze
   GITHUB_REPAIR_MODES = %w[off observe bot_owned explicit eligible].freeze
   LINEAR_ISSUE_MODES = %w[off ready_issues].freeze
+  LINEAR_QA_MODES = %w[off status_transition].freeze
   ACTIVITY_REPORT_KINDS = %w[accepted pr_created].freeze
   LINEAR_REPOSITORY_ROUTE_KEYS = %w[
     repository
@@ -18,6 +19,7 @@ class AutomationPolicy < ApplicationRecord
   MANAGED_SOURCE_FIELDS = %w[kind repository path revision content_sha256].freeze
   GITHUB_REPOSITORY_PATTERN = /\A[A-Za-z0-9][A-Za-z0-9_.-]*\/[A-Za-z0-9][A-Za-z0-9_.-]*\z/.freeze
   SLACK_CHANNEL_ID_PATTERN = /\A[CG][A-Z0-9]{8,}\z/.freeze
+  QA_ID_PATTERN = /\A[a-z][a-z0-9_-]{0,63}\z/.freeze
 
   GITHUB_REVIEW_ACTIONS = %w[opened reopened ready_for_review synchronize].freeze
   GITHUB_CONFLICT_ACTIONS = %w[synchronize edited ready_for_review].freeze
@@ -38,7 +40,7 @@ class AutomationPolicy < ApplicationRecord
   validates :name, presence: true, length: { maximum: 120 }
   validates :provider, inclusion: { in: PROVIDERS }
   validates :mode, inclusion: { in: MODES }
-  validates :execution_role, presence: true, if: :act?
+  validates :execution_role, presence: true, if: :requires_execution_role?
   validates :repository, format: {
     with: %r{\A[^/\s]+/[^/\s]+\z},
     message: "must be an owner/repository name"
@@ -65,6 +67,17 @@ class AutomationPolicy < ApplicationRecord
 
   def act?
     mode == "act"
+  end
+
+  # GitHub and Linear coding actions create agent sandboxes and therefore need
+  # a policy-owned execution role. A QA-only Linear policy starts an isolated
+  # workflow principal instead; granting the issue principal a coding role
+  # would be unnecessary ambient authority.
+  def requires_execution_role?
+    return false unless act?
+    return true if github?
+
+    linear_settings["issue"] == "ready_issues"
   end
 
   def github_settings
@@ -110,7 +123,8 @@ class AutomationPolicy < ApplicationRecord
       required_labels = Array(config["required_labels"])
       label_summary = required_labels.any? ? required_labels.join(", ") : "none"
       manual_mentions = config["manual_mentions"] ? " · manual mentions: enabled" : ""
-      "issues: #{config["issue"].tr("_", " ")} · repo: #{linear_repository_summary(config)} · required labels: #{label_summary}#{manual_mentions}#{activity_reporting_summary}"
+      qa_summary = config["qa"] == "status_transition" ? " · QA: #{Array(config["qa_statuses"]).join(", ")}" : ""
+      "issues: #{config["issue"].tr("_", " ")}#{qa_summary} · repo: #{linear_repository_summary(config)} · required labels: #{label_summary}#{manual_mentions}#{activity_reporting_summary}"
     end
   end
 
@@ -192,6 +206,10 @@ class AutomationPolicy < ApplicationRecord
   def linear_defaults
     {
       "issue" => "off",
+      "qa" => "off",
+      "qa_target" => "auto",
+      "qa_statuses" => [],
+      "qa_profiles" => [],
       "ready_statuses" => [],
       "required_fields" => [ "description" ],
       "required_labels" => [],
@@ -304,7 +322,24 @@ class AutomationPolicy < ApplicationRecord
     elsif linear?
       config = linear_settings
       errors.add(:settings, "has an invalid issue mode") unless LINEAR_ISSUE_MODES.include?(config["issue"])
+      errors.add(:settings, "has an invalid QA mode") unless LINEAR_QA_MODES.include?(config["qa"])
       errors.add(:settings, "manual mentions must be true or false") unless boolean?(config["manual_mentions"])
+      if config["qa"] == "status_transition" && Array(config["qa_statuses"]).empty?
+        errors.add(:settings, "needs at least one QA status when QA automation is enabled")
+      end
+      qa_statuses = config["qa_statuses"]
+      unless qa_statuses.is_a?(Array) && qa_statuses.length <= 20 &&
+          qa_statuses.all? { |status| status.is_a?(String) && status.present? && status.length <= 100 }
+        errors.add(:settings, "has invalid QA statuses")
+      end
+      qa_profiles = config["qa_profiles"]
+      unless qa_profiles.is_a?(Array) && qa_profiles.length <= 20 &&
+          qa_profiles.all? { |profile| profile.is_a?(String) && QA_ID_PATTERN.match?(profile) }
+        errors.add(:settings, "has invalid QA profiles")
+      end
+      if config["qa"] == "status_transition" && !QA_ID_PATTERN.match?(config["qa_target"].to_s)
+        errors.add(:settings, "has an invalid QA target")
+      end
       validate_linear_repository_routes(config)
     end
     validate_activity_reporting
@@ -414,20 +449,37 @@ class AutomationPolicy < ApplicationRecord
                                                                         %w[create update manual_mention].include?(event["event_action"])
 
     config = linear_settings
-    return ignored("ready issue automation is disabled") unless config["issue"] == "ready_issues"
     if event["event_action"] == "manual_mention"
+      return ignored("ready issue automation is disabled") unless config["issue"] == "ready_issues"
       return ignored("manual mentions are disabled") unless config["manual_mentions"] == true
       return ignored("event is not a verified bot mention") unless event["mentioned_bot"] == true
     end
 
-    ready, reason = linear_issue_ready?(event, config)
+    qa_transition = linear_qa_transition?(event, config)
+    ready, reason = linear_issue_ready?(event, config, enforce_ready_status: !qa_transition)
     return ignored(reason) unless ready
 
     route, route_reason = linear_repository_route_for(event, config)
     return ignored(route_reason) unless route
 
+    if qa_transition
+      return routed([ "run_qa" ], linear_route: route)
+    end
+
+    return ignored("ready issue automation is disabled") unless config["issue"] == "ready_issues"
+
     actions = event["event_action"] == "manual_mention" ? [ "respond_to_mention" ] : [ "implement_issue" ]
     routed(actions, linear_route: route)
+  end
+
+  def linear_qa_transition?(event, config)
+    return false unless config["qa"] == "status_transition"
+
+    qa_statuses = Array(config["qa_statuses"]).map(&:downcase)
+    return false unless qa_statuses.include?(event["status"].to_s.downcase)
+    return true if event["event_action"] == "create"
+
+    event["event_action"] == "update" && Array(event["updated_fields"]).include?("stateId")
   end
 
   def github_eligible?(event)
@@ -505,7 +557,7 @@ class AutomationPolicy < ApplicationRecord
     end
   end
 
-  def linear_issue_ready?(event, config)
+  def linear_issue_ready?(event, config, enforce_ready_status: true)
     return [ false, "issue is blocked" ] if event["blocked"] == true
     return [ false, "issue title is missing" ] if event["title"].to_s.strip.empty?
 
@@ -520,7 +572,7 @@ class AutomationPolicy < ApplicationRecord
     end
 
     ready_statuses = Array(config["ready_statuses"]).map(&:downcase)
-    if ready_statuses.any? && !ready_statuses.include?(event["status"].to_s.downcase)
+    if enforce_ready_status && ready_statuses.any? && !ready_statuses.include?(event["status"].to_s.downcase)
       return [ false, "issue status is not ready" ]
     end
 
@@ -579,6 +631,8 @@ class AutomationPolicy < ApplicationRecord
       "github_repository" => route["repository"],
       "move_to_in_progress" => linear["move_to_in_progress"] != false,
       "preview_label" => route["preview_label"],
+      "qa_profiles" => Array(linear["qa_profiles"]),
+      "qa_target" => linear["qa_target"],
       "reviewer_logins" => reviewer_logins,
       "reviewer_team_slugs" => reviewer_team_slugs
     }
@@ -596,8 +650,9 @@ class AutomationPolicy < ApplicationRecord
       errors.add(:settings, "must use either a GitHub repository or repository routes, not both")
     end
 
-    if config["issue"] == "ready_issues" && routes.empty? && !legacy_repository.match?(%r{\A[^/\s]+/[^/\s]+\z})
-      errors.add(:settings, "needs a GitHub repository or repository routes for ready issue automation")
+    if (config["issue"] == "ready_issues" || config["qa"] == "status_transition") &&
+       routes.empty? && !legacy_repository.match?(%r{\A[^/\s]+/[^/\s]+\z})
+      errors.add(:settings, "needs a GitHub repository or repository routes for Linear automation")
     end
 
     routes.each_with_index do |route, index|
