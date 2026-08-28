@@ -579,7 +579,14 @@ export async function dispatchSlackBlockAction(
 
 export async function openSessionEventStream(
   options: SlackbotV2Options,
-  input: Pick<ForwardSessionInput, 'afterEventId' | 'executionId' | 'onEventId' | 'threadId' | 'trace'>
+  input: Pick<ForwardSessionInput, 'afterEventId' | 'executionId' | 'onEventId' | 'threadId' | 'trace'> & {
+    /**
+     * Skip harness output and wait for the control plane's bounded terminal
+     * event. Startup delivery recovery only needs the durable final result;
+     * replaying every historical harness delta can require unbounded memory.
+     */
+    terminalOnly?: boolean
+  }
 ): Promise<AsyncIterable<SlackbotV2RendererSource>> {
   const streamStartedAtMs = nowMs()
   const stream = await recordSessionApiOperation('open_event_stream', () =>
@@ -588,7 +595,8 @@ export async function openSessionEventStream(
       input.threadId,
       input.afterEventId,
       input.executionId,
-      input.onEventId
+      input.onEventId,
+      input.terminalOnly === true
     ),
     sessionApiTimeoutMs(options),
     'stream events'
@@ -1438,7 +1446,8 @@ async function streamSessionNotifications(
   threadId: string,
   afterEventId: number,
   executionId: string | undefined,
-  onEventId: (eventId: number) => void
+  onEventId: (eventId: number) => void,
+  terminalOnly = false
 ): Promise<AsyncIterable<SlackbotV2RendererSource>> {
   const fetchFn = options.fetch ?? fetch
   const url = new URL(apiSessionUrl(options.apiUrl, threadId, 'events'))
@@ -1456,7 +1465,7 @@ async function streamSessionNotifications(
   )
   await ensureApiOk(response, 'stream events')
   if (!response.body) return toAsyncIterable([])
-  return parseSessionEventStream(response.body, onEventId)
+  return parseSessionEventStream(response.body, onEventId, terminalOnly)
 }
 
 function apiSessionUrl(
@@ -1955,11 +1964,13 @@ type ParsedSessionEvent = {
 
 async function* parseSessionEventStream(
   stream: ReadableStream<Uint8Array>,
-  onEventId: (eventId: number) => void
+  onEventId: (eventId: number) => void,
+  terminalOnly = false
 ): AsyncIterable<SlackbotV2RendererSource> {
   for await (const event of parseSseEvents(stream)) {
     if (typeof event.id === 'number') onEventId(event.id)
     if (event.event === 'session.output.line') {
+      if (terminalOnly) continue
       yield {
         data: event.data,
         event: event.event,
@@ -1970,6 +1981,7 @@ async function* parseSessionEventStream(
       continue
     }
     if (event.event === 'session.activity_summary') {
+      if (terminalOnly) continue
       yield {
         data: sessionEventData(event),
         event: event.event,

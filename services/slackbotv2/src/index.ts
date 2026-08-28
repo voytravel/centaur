@@ -1804,7 +1804,12 @@ const FALLBACK_OPEN_MAX_ATTEMPTS = 4
 async function renderFallbackFinalAnswer(
   thread: Thread,
   options: SlackbotV2Options,
-  source: { afterEventId: number; executionId?: string; threadId: string },
+  source: {
+    afterEventId: number
+    executionId?: string
+    terminalOnly?: boolean
+    threadId: string
+  },
   trace?: SlackbotV2Trace,
   replacement?: { replaceMessageId: string }
 ): Promise<{ lastEventId: number } | null> {
@@ -1821,6 +1826,7 @@ async function renderFallbackFinalAnswer(
           onEventId: eventId => {
             lastEventId = Math.max(lastEventId, eventId)
           },
+          terminalOnly: source.terminalOnly,
           threadId: source.threadId,
           trace
         })
@@ -2144,9 +2150,11 @@ async function recoverRenderObligation(
   }
   const thread = chat.thread(threadId)
   // Replay from the obligation's starting position, not the thread's
-  // lastEventId: the failed render may have consumed events (including the
-  // terminal result) past which a resumed stream would never see the final
-  // answer again. Session events are durable, so a full replay is safe.
+  // lastEventId: the failed render may have consumed the terminal result past
+  // which a resumed stream would never see the final answer again. Recovery
+  // deliberately skips historical harness output and waits for api-rs's
+  // bounded terminal event; rebuilding a long progress stream can require
+  // memory proportional to the complete execution history.
   let lastEventId = obligation.afterEventId
   const input: ForwardSessionInput = {
     afterEventId: obligation.afterEventId,
@@ -2164,7 +2172,10 @@ async function recoverRenderObligation(
 
   let openedStream: AsyncIterable<SlackbotV2RendererSource>
   try {
-    openedStream = await openSessionEventStream(options, input)
+    openedStream = await openSessionEventStream(options, {
+      ...input,
+      terminalOnly: true
+    })
   } catch (error) {
     const retryable = isRetryableSessionApiError(error)
     traceLog(options, 'slackbotv2_render_recovery_deferred', trace, {
@@ -2214,6 +2225,7 @@ async function recoverRenderObligation(
         {
           afterEventId: obligation.afterEventId,
           executionId: obligation.executionId,
+          terminalOnly: true,
           threadId
         },
         trace,
@@ -2276,6 +2288,7 @@ async function recoverRenderObligation(
         {
           afterEventId: obligation.afterEventId,
           executionId: obligation.executionId,
+          terminalOnly: true,
           threadId
         },
         trace,
