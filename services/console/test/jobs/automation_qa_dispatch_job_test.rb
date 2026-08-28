@@ -97,5 +97,4 @@ class AutomationQaDispatchJobTest < ActiveJob::TestCase
       received_at: Time.current
     )
   end
-
 end
