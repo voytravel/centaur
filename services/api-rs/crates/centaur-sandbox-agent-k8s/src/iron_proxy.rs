@@ -87,6 +87,11 @@ pub struct IronProxyConfig {
     pub env_from_secret_names: Vec<String>,
     pub extra_env: BTreeMap<String, String>,
     pub upstream_deny_cidrs: Vec<String>,
+    /// Optional public Console endpoint for sandbox entitlement calls.  The
+    /// proxy still syncs against the private iron-control URL, but sandboxes
+    /// must not be sent to a cluster Service address when private CIDRs are
+    /// deliberately denied at the egress boundary.
+    pub sandbox_console_url: Option<String>,
     pub op_connect_app_name: String,
     pub op_connect_port: u16,
     pub api_pod_labels: BTreeMap<String, String>,
@@ -110,6 +115,7 @@ impl IronProxyConfig {
             env_from_secret_names: Vec::new(),
             extra_env: BTreeMap::new(),
             upstream_deny_cidrs: Vec::new(),
+            sandbox_console_url: None,
             op_connect_app_name: "onepassword-connect".to_owned(),
             op_connect_port: 8080,
             api_pod_labels: BTreeMap::from([(
@@ -331,7 +337,21 @@ impl AgentSandboxBackend {
             proxy_host: iron_proxy_service_name(id),
             proxy_pod_name: new_iron_proxy_pod_name(id),
             proxy_port: PROXY_TUNNEL_PORT,
-            console_url: self.config.iron_control.control_url.clone(),
+            // The control plane itself remains on its private in-cluster URL.
+            // A sandbox call is intentionally different: it is forwarded
+            // through iron-proxy, whose SSRF guard rejects private Service and
+            // Pod CIDRs.  An explicitly configured public Console URL keeps
+            // the signed, path-scoped entitlement call working without
+            // weakening that private-CIDR deny list.
+            console_url: self
+                .config
+                .iron_proxy
+                .as_ref()
+                .and_then(|config| config.sandbox_console_url.as_deref())
+                .map(str::trim)
+                .filter(|url| !url.is_empty())
+                .map(ToOwned::to_owned)
+                .unwrap_or_else(|| self.config.iron_control.control_url.clone()),
             principal_id,
             requester_principal_id,
             labels,

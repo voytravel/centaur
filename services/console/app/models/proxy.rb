@@ -56,7 +56,15 @@ class Proxy < ApplicationRecord
   end
 
   def self.sandbox_entitlements_hosts
-    [ Principal.host_from_url(ENV["CENTAUR_CONSOLE_URL"]) ]
+    # A sandbox's proxy intentionally denies Kubernetes Service and Pod CIDRs,
+    # so deployments may send the sandbox entitlement client through the
+    # Console's public origin while the proxy itself continues to sync against
+    # the private control-plane URL.  Issue the same tightly path-scoped token
+    # for both configured origins; the token is never a general Console bearer.
+    [
+      Principal.host_from_url(ConsoleEnv["URL"]),
+      Principal.host_from_url(ConsoleEnv["PUBLIC_URL"])
+    ].compact.uniq
   end
 
   private
