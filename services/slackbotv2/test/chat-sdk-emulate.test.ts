@@ -3679,6 +3679,12 @@ describe('slackbotv2', () => {
     })
     await sharedState.appendToList('slackbotv2:render:index', key)
     codexApi.emitOutputLines(key, sampleCodexOutputLines('Recovered consumed answer.'))
+    codexApi.emitSessionEvent(
+      key,
+      'session.execution_completed',
+      { result_text: 'Recovered consumed answer.' },
+      'exe-recovery-consumed'
+    )
 
     bot = createTestBot({ state: sharedState })
 
@@ -4673,6 +4679,12 @@ describe('slackbotv2', () => {
     })
     await sharedState.appendToList('slackbotv2:render:index', key)
     codexApi.emitOutputLines(key, sampleCodexOutputLines('Recovered request.'))
+    codexApi.emitSessionEvent(
+      key,
+      'session.execution_completed',
+      { result_text: 'Recovered request.' },
+      'exe-recovery'
+    )
 
     bot = createTestBot({ state: sharedState })
 
@@ -4685,10 +4697,19 @@ describe('slackbotv2', () => {
     expect(codexApi.eventRequests).toEqual([
       { afterEventId: 0, executionId: 'exe-recovery', threadKey: key }
     ])
-    expectSlackPlanStreamShape(slackApi.calls, {
-      answers: ['Recovered request.'],
-      parentTs: parent.ts
-    })
+    const recoveredTranscripts = slackStreamTranscripts(slackApi.calls)
+    expect(recoveredTranscripts).toHaveLength(1)
+    expect(recoveredTranscripts[0]!.start.body).toEqual(
+      expect.objectContaining({
+        channel: CHANNEL_ID,
+        thread_ts: parent.ts,
+        recipient_user_id: USER_ID,
+        recipient_team_id: TEAM_ID
+      })
+    )
+    expect(recoveredTranscripts[0]!.chunks).toEqual([
+      { type: 'markdown_text', text: 'Recovered request.' }
+    ])
     expect(await threadText(parent.ts)).toContain('Recovered request.')
     // Recovery clears the obligation after the Slack stream stops; wait for
     // the state write instead of racing it.
@@ -4822,6 +4843,12 @@ describe('slackbotv2', () => {
     })
     await sharedState.appendToList('slackbotv2:render:index', key)
     codexApi.emitOutputLines(key, sampleCodexOutputLines('Recovered behind the zombie.'))
+    codexApi.emitSessionEvent(
+      key,
+      'session.execution_completed',
+      { result_text: 'Recovered behind the zombie.' },
+      'exe-behind-zombie'
+    )
 
     bot = createTestBot({ state: sharedState, renderRecoveryThreadTimeoutMs: 200 })
 
@@ -4952,6 +4979,12 @@ describe('slackbotv2', () => {
     })
     await sharedState.appendToList('slackbotv2:render:index', corruptKey)
     codexApi.emitOutputLines(corruptKey, sampleCodexOutputLines('Unreachable answer.'))
+    codexApi.emitSessionEvent(
+      corruptKey,
+      'session.execution_completed',
+      { result_text: 'Unreachable answer.' },
+      'exe-corrupt-thread'
+    )
 
     bot = createTestBot({ state: sharedState })
 
@@ -5017,6 +5050,12 @@ describe('slackbotv2', () => {
     )
 
     codexApi.emitOutputLines(key, sampleCodexOutputLines('Recovered after stream retry.'))
+    codexApi.emitSessionEvent(
+      key,
+      'session.execution_completed',
+      { result_text: 'Recovered after stream retry.' },
+      'exe-1'
+    )
     await waitFor(() => codexApi.eventRequests.length >= 2, 3000)
     await waitFor(() => slackApi.calls.some(call => call.method === 'chat.stopStream'), 3000)
     await Promise.all(waits)
