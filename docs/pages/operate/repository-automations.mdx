@@ -80,6 +80,36 @@ A GitHub policy scopes to one `owner/repository`. It can independently enable:
 - deterministic auto-merge, explicitly opt-in and still constrained by branch
   protection, draft state, and the hold label.
 
+Automatic review is organized into review epochs. By default, each epoch gets
+one broad/new-risk review and two repair-validation rounds
+(`githubbot.reviewMaxRoundsPerEpoch: 3`). Validation rounds inspect only
+accepted fixes, newly changed risk surfaces, and regressions. Hidden finding
+fingerprints in GitHub comments preserve accepted/rejected/fixed decisions
+across line movement.
+
+A new production file, dependency manifest, auth/data/API/infra boundary, or
+`githubbot.reviewEpochMinChangedLines` non-generated changed lines (default 50)
+starts an epoch. Test/docs/generated-only changes do not. A material
+bot-authored expansion pauses for human approval; it cannot reset its own
+budget. After `githubbot.reviewMaxEpochs` automatic epochs (default 3), split the
+PR or explicitly request Githubbot as reviewer to continue. A changed
+authorization/security surface may still trigger a narrowly scoped P0/security
+inspection after the normal cap. Human-submitted reviews are not budgeted, but
+responses to bot-authored feedback are. The bundled reviewer requires
+exact-line evidence, a reachable failure path, material impact, and high
+confidence before it posts a finding.
+
+Epoch classification is deterministic; no model decides whether it earned more
+review budget. Githubbot compares the last reviewed head with the new head and
+the cumulative production-only PR diff. Pure rebases, detected whitespace-only
+changes, and test/docs/generated-only deltas stay in the current epoch. PRs over
+the bounded 250-production-file inventory pause for an explicit human review
+request instead of silently classifying a partial file set. All bot-authored
+reviewers have independent response budgets, plus one aggregate PR/epoch cap so
+one bot cannot starve every other bot and adding bots cannot create an unbounded
+loop. The audit trace
+records changed-line counts and the exact classifier reasons for every review.
+
 Use allowed base-branch patterns such as `main` or `release/*`, required labels,
 and excluded labels to define eligibility. Existing assigned-review and
 bot-owned PR behavior remains available; the policy only extends automation to

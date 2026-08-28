@@ -657,6 +657,18 @@ githubbot:
   # / draft status.
   autoMerge: true
   mergeMethod: squash
+  # One broad review plus two repair-validation passes per review epoch.
+  reviewMaxRoundsPerEpoch: 3
+  # Each automated reviewer gets a bounded response budget, while this aggregate
+  # ceiling prevents adding reviewers from creating an unbounded repair loop.
+  reviewMaxBotFeedbackRoundsPerReviewer: 3
+  reviewMaxBotFeedbackRoundsPerEpoch: 6
+  # Materially changed risk surfaces can start this many epochs automatically.
+  # Later epochs require an explicit human review request or a split PR.
+  reviewMaxEpochs: 3
+  # Non-generated diff growth that starts a new epoch. New production files and
+  # dependency/auth/data/API/infra surfaces can start one below this threshold.
+  reviewEpochMinChangedLines: 50
   # Emit CI and review workflow events to api-rs.
   workflowEvents: false
   # Fallback @handle (no leading @) the bot tags when it gives up; empty = none.

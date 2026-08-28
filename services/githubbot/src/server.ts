@@ -161,6 +161,19 @@ const options: GithubbotOptions = {
   maxDurationMs: optionalNumberEnv("SESSION_MAX_DURATION_MS"),
   postgresUrl,
   reviewPrompt,
+  reviewEpochMinChangedLines: optionalNumberEnv(
+    "GITHUBBOT_REVIEW_EPOCH_MIN_CHANGED_LINES",
+  ),
+  reviewMaxEpochs: optionalNumberEnv("GITHUBBOT_REVIEW_MAX_EPOCHS"),
+  reviewMaxRoundsPerEpoch: optionalNumberEnv(
+    "GITHUBBOT_REVIEW_MAX_ROUNDS_PER_EPOCH",
+  ),
+  reviewMaxBotFeedbackRoundsPerReviewer: optionalNumberEnv(
+    "GITHUBBOT_REVIEW_MAX_BOT_FEEDBACK_ROUNDS_PER_REVIEWER",
+  ),
+  reviewMaxBotFeedbackRoundsPerEpoch: optionalNumberEnv(
+    "GITHUBBOT_REVIEW_MAX_BOT_FEEDBACK_ROUNDS_PER_EPOCH",
+  ),
   issuePrompt,
   managementPrompt,
   stateKeyPrefix: optionalEnv("GITHUBBOT_STATE_KEY_PREFIX"),
