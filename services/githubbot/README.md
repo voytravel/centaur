@@ -86,9 +86,9 @@ to have it take over, and unassign to hand it back. Bot-owned work runs on a ded
 - **Address review.** A submitted review (`changes_requested` / `commented`) triggers one holistic
   turn that independently validates the feedback, makes only supported changes in a single coherent
   commit, replies on each thread, resolves what it addressed, and re-requests review. Human reviews
-  remain authoritative. Responses to bot-authored feedback are bounded by
-  `GITHUBBOT_REVIEW_MAX_ROUNDS_PER_EPOCH`; at the cap, Githubbot comments that human validation is
-  required instead of continuing a reviewer/fix loop.
+  remain authoritative. Each reviewer bot gets its own bounded response budget, and an aggregate
+  epoch cap prevents adding bots from multiplying the loop. At either cap, Githubbot comments that
+  human validation is required instead of continuing automatically.
 - **Merge when ready.** Deterministic — no agent. When GitHub reports the PR `mergeable_state == clean`
   the bot merges it (`GITHUBBOT_MERGE_METHOD`, default squash) and deletes the branch. `dirty` →
   conflict-resolution turn; `behind` → branch update; anything else → wait. Enabled by default for
@@ -135,9 +135,15 @@ evidence, a reachable failure path, material impact, and high confidence; it
 omits speculative hardening, style nits, and unsupported states.
 
 The epoch classifier is deterministic rather than model-decided. It combines
-GitHub's head comparison with cumulative PR diff growth, treats pure rebases
-and detected whitespace-only changes as validation-round work, and records its
-changed-line counts and exact reasons in the trace for operator inspection.
+GitHub's head comparison with cumulative production-only PR diff growth, treats
+pure rebases and detected whitespace-only changes as validation-round work, and
+records its changed-line counts and exact paths as structured trace data. If a
+PR exceeds the bounded 250-production-file inventory, automatic classification
+pauses explicitly instead of silently forgetting part of the reviewed surface.
+Codex, Cursor, Greptile, and other reviewer bots each get an independent bounded
+response budget. A second PR/epoch-wide aggregate cap prevents adding reviewers
+from multiplying the repair loop without starving the first follow-up from a
+different reviewer.
 
 No policy request is trusted without both a verified GitHub signature and the
 single-purpose Console ingress credential. An unavailable or rejecting Console
@@ -216,7 +222,9 @@ requests**, **Pull request reviews**, **Check runs**, **Check suites**, and **Wo
 | `GITHUBBOT_MERGE_METHOD` | — | `merge` / `squash` / `rebase`. Default `squash`. |
 | `GITHUBBOT_HOLD_LABEL` | — | Label that pauses auto-merge. Default `do-not-merge`. |
 | `GITHUBBOT_CI_FIX_MAX_ATTEMPTS` | — | Consecutive CI-fix attempts before escalating. Default 3. |
-| `GITHUBBOT_REVIEW_MAX_ROUNDS_PER_EPOCH` | — | Broad/new-risk review plus repair-validation rounds per epoch; also bounds bot-feedback responses. Default 3. |
+| `GITHUBBOT_REVIEW_MAX_ROUNDS_PER_EPOCH` | — | Broad/new-risk review plus repair-validation rounds per epoch. Default 3. |
+| `GITHUBBOT_REVIEW_MAX_BOT_FEEDBACK_ROUNDS_PER_REVIEWER` | — | Repair responses allowed for each reviewer bot in an epoch. Default 3. |
+| `GITHUBBOT_REVIEW_MAX_BOT_FEEDBACK_ROUNDS_PER_EPOCH` | — | Aggregate repair responses across all reviewer bots in an epoch. Default 6. |
 | `GITHUBBOT_REVIEW_MAX_EPOCHS` | — | Material risk-surface epochs created automatically before split/explicit-continuation is required. Default 3. |
 | `GITHUBBOT_REVIEW_EPOCH_MIN_CHANGED_LINES` | — | Non-generated diff growth that starts an epoch. New production files and boundary/dependency changes can start one below it. Default 50. |
 | `GITHUBBOT_WORKFLOW_EVENTS` | — | Emit settled CI and submitted-review events to durable workflows. Default `false`. |

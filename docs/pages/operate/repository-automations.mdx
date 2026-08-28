@@ -101,8 +101,13 @@ confidence before it posts a finding.
 
 Epoch classification is deterministic; no model decides whether it earned more
 review budget. Githubbot compares the last reviewed head with the new head and
-the cumulative PR diff. Pure rebases, detected whitespace-only changes, and
-test/docs/generated-only deltas stay in the current epoch. The audit trace
+the cumulative production-only PR diff. Pure rebases, detected whitespace-only
+changes, and test/docs/generated-only deltas stay in the current epoch. PRs over
+the bounded 250-production-file inventory pause for an explicit human review
+request instead of silently classifying a partial file set. All bot-authored
+reviewers have independent response budgets, plus one aggregate PR/epoch cap so
+one bot cannot starve every other bot and adding bots cannot create an unbounded
+loop. The audit trace
 records changed-line counts and the exact classifier reasons for every review.
 
 Use allowed base-branch patterns such as `main` or `release/*`, required labels,

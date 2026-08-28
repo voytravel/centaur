@@ -168,6 +168,12 @@ const options: GithubbotOptions = {
   reviewMaxRoundsPerEpoch: optionalNumberEnv(
     "GITHUBBOT_REVIEW_MAX_ROUNDS_PER_EPOCH",
   ),
+  reviewMaxBotFeedbackRoundsPerReviewer: optionalNumberEnv(
+    "GITHUBBOT_REVIEW_MAX_BOT_FEEDBACK_ROUNDS_PER_REVIEWER",
+  ),
+  reviewMaxBotFeedbackRoundsPerEpoch: optionalNumberEnv(
+    "GITHUBBOT_REVIEW_MAX_BOT_FEEDBACK_ROUNDS_PER_EPOCH",
+  ),
   issuePrompt,
   managementPrompt,
   stateKeyPrefix: optionalEnv("GITHUBBOT_STATE_KEY_PREFIX"),

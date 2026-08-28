@@ -659,6 +659,10 @@ githubbot:
   mergeMethod: squash
   # One broad review plus two repair-validation passes per review epoch.
   reviewMaxRoundsPerEpoch: 3
+  # Each automated reviewer gets a bounded response budget, while this aggregate
+  # ceiling prevents adding reviewers from creating an unbounded repair loop.
+  reviewMaxBotFeedbackRoundsPerReviewer: 3
+  reviewMaxBotFeedbackRoundsPerEpoch: 6
   # Materially changed risk surfaces can start this many epochs automatically.
   # Later epochs require an explicit human review request or a split PR.
   reviewMaxEpochs: 3

@@ -148,6 +148,10 @@ export type GithubbotOptions = {
   autoMerge?: boolean;
   /** Max broad/repair-validation review rounds in one review epoch. Default 3. */
   reviewMaxRoundsPerEpoch?: number;
+  /** Max repair responses to one reviewer bot in an epoch. Default 3. */
+  reviewMaxBotFeedbackRoundsPerReviewer?: number;
+  /** Max repair responses to all reviewer bots combined in an epoch. Default 6. */
+  reviewMaxBotFeedbackRoundsPerEpoch?: number;
   /** Max automatically created review epochs per PR. Default 3. */
   reviewMaxEpochs?: number;
   /**

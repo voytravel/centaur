@@ -136,6 +136,10 @@ spec:
               value: {{ .Values.githubbot.mergeMethod | quote }}
             - name: GITHUBBOT_REVIEW_MAX_ROUNDS_PER_EPOCH
               value: {{ .Values.githubbot.reviewMaxRoundsPerEpoch | quote }}
+            - name: GITHUBBOT_REVIEW_MAX_BOT_FEEDBACK_ROUNDS_PER_REVIEWER
+              value: {{ .Values.githubbot.reviewMaxBotFeedbackRoundsPerReviewer | quote }}
+            - name: GITHUBBOT_REVIEW_MAX_BOT_FEEDBACK_ROUNDS_PER_EPOCH
+              value: {{ .Values.githubbot.reviewMaxBotFeedbackRoundsPerEpoch | quote }}
             - name: GITHUBBOT_REVIEW_MAX_EPOCHS
               value: {{ .Values.githubbot.reviewMaxEpochs | quote }}
             - name: GITHUBBOT_REVIEW_EPOCH_MIN_CHANGED_LINES
