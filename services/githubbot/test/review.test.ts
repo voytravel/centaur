@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { DEFAULT_REVIEW_PROMPT } from "../src/review-prompt";
 import { handleReviewRequest, isReviewRequestedForBot } from "../src/review";
 import type { GithubbotOptions } from "../src/types";
 
@@ -36,6 +37,16 @@ const input = {
   options,
   state: stubState(),
 };
+
+describe("DEFAULT_REVIEW_PROMPT", () => {
+  test("requires evidence-backed, fingerprinted, bounded findings", () => {
+    expect(DEFAULT_REVIEW_PROMPT).toContain("Apply this evidence gate");
+    expect(DEFAULT_REVIEW_PROMPT).toContain("reachable case");
+    expect(DEFAULT_REVIEW_PROMPT).toContain("<!-- centaur-finding:");
+    expect(DEFAULT_REVIEW_PROMPT).toContain("Post at most five findings");
+    expect(DEFAULT_REVIEW_PROMPT).not.toContain("nits (optional)");
+  });
+});
 
 function reviewRequestedBody(reviewerLogin: string | null): string {
   return JSON.stringify({

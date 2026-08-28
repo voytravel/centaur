@@ -55,6 +55,10 @@ export type PolicyPrAutomation = {
 const STATE_TTL_MS = 90 * 24 * 60 * 60 * 1000;
 const CLAIM_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const DEFAULT_CI_FIX_MAX_ATTEMPTS = 3;
+const DEFAULT_REVIEW_MAX_ROUNDS_PER_EPOCH = 3;
+const DEFAULT_REVIEW_MAX_EPOCHS = 3;
+const DEFAULT_REVIEW_EPOCH_MIN_CHANGED_LINES = 50;
+const MAX_REVIEWED_FILES = 250;
 
 // ---------------------------------------------------------------------------
 // Pure decision helpers (unit-tested without GitHub).
@@ -114,12 +118,49 @@ export function decideMerge(input: {
 // Per-PR state (stored as a JSON blob in the shared KV).
 // ---------------------------------------------------------------------------
 
+type ReviewRiskSurface =
+  | "api"
+  | "authorization"
+  | "data"
+  | "dependency"
+  | "infrastructure"
+  | "security";
+
+type ReviewEpochState = {
+  epoch: number;
+  lastReviewedHeadSha: string;
+  reviewedChangedLines?: number;
+  reviewedFiles: string[];
+  reviewedRiskSurfaces: ReviewRiskSurface[];
+  round: number;
+};
+
 type PrState = {
+  automatedFeedbackRounds?: number;
   consecutiveCiFixes?: number;
+  reviewEpoch?: ReviewEpochState;
 };
 
 function prKey(ctx: PrManagerContext, owner: string, repo: string, n: number): string {
   return `${ctx.options.stateKeyPrefix ?? "centaur-githubbot"}:pr:${owner}/${repo}#${n}`;
+}
+
+function automaticReviewCapKey(
+  ctx: PrManagerContext,
+  owner: string,
+  repo: string,
+  n: number,
+): string {
+  return `${ctx.options.stateKeyPrefix ?? "centaur-githubbot"}:automatic-review-cap:${owner}/${repo}#${n}`;
+}
+
+function automatedFeedbackCapKey(
+  ctx: PrManagerContext,
+  owner: string,
+  repo: string,
+  n: number,
+): string {
+  return `${ctx.options.stateKeyPrefix ?? "centaur-githubbot"}:automated-feedback-cap:${owner}/${repo}#${n}`;
 }
 
 export function managementThreadKey(
@@ -186,11 +227,243 @@ function logger(ctx: PrManagerContext) {
   return ctx.options.logger ?? noopLogger;
 }
 
+type ReviewDelta = {
+  changedFiles: string[];
+  changedLines: number;
+  critical: boolean;
+  diffGrowth: number;
+  material: boolean;
+  reasons: string[];
+  riskSurfaces: ReviewRiskSurface[];
+};
+
+const MINOR_REVIEW_PATH =
+  /(^|\/)(docs?|examples?|fixtures?|snapshots?|tests?|__tests__|specs?|dist|build|coverage|vendor)\/|\.(md|mdx|txt|snap|map|min\.(js|css))$/i;
+const GENERATED_REVIEW_PATH = /(^|\/)(generated|gen)\//i;
+const DEPENDENCY_MANIFEST_PATH =
+  /(^|\/)(package\.json|pnpm-lock\.yaml|package-lock\.json|yarn\.lock|bun\.lockb?|pyproject\.toml|requirements[^/]*\.txt|uv\.lock|poetry\.lock|Cargo\.toml|Cargo\.lock|go\.mod|go\.sum|Gemfile|Gemfile\.lock|composer\.json|pom\.xml|build\.gradle(?:\.kts)?)$/i;
+
+function riskSurfacesForPath(path: string): ReviewRiskSurface[] {
+  const normalized = path.toLowerCase();
+  const surfaces = new Set<ReviewRiskSurface>();
+  if (
+    /(^|\/)(api|routes?|controllers?|graphql|openapi|proto|webhooks?)(\/|\.|$)/.test(
+      normalized,
+    )
+  ) {
+    surfaces.add("api");
+  }
+  if (
+    /(^|\/)(auth|authn|authz|iam|rbac|acl|permissions?|policies|sessions?|identity)(\/|\.|$)/.test(
+      normalized,
+    )
+  ) {
+    surfaces.add("authorization");
+  }
+  if (/(^|\/)(migrations?|schema|database|db|persistence)(\/|\.|$)/.test(normalized)) {
+    surfaces.add("data");
+  }
+  if (DEPENDENCY_MANIFEST_PATH.test(path)) surfaces.add("dependency");
+  if (
+    /(^|\/)(\.github\/workflows|deploy|infra|terraform|helm|k8s|kubernetes)(\/|\.|$)|(^|\/)Dockerfile$/i.test(
+      path,
+    )
+  ) {
+    surfaces.add("infrastructure");
+  }
+  if (/(^|\/)(security|crypto|secrets?|credentials?|tokens?)(\/|\.|$)/.test(normalized)) {
+    surfaces.add("security");
+  }
+  return [...surfaces];
+}
+
+function uniqueLimited(values: Iterable<string>): string[] {
+  return [...new Set(values)].sort().slice(0, MAX_REVIEWED_FILES);
+}
+
+function reviewPathLabel(path: string): string {
+  return JSON.stringify(path.slice(0, 160));
+}
+
+function isWhitespaceOnlyPatch(patch: unknown): boolean {
+  if (typeof patch !== "string") return false;
+  const changed = patch.split("\n").filter((line) =>
+    (line.startsWith("+") && !line.startsWith("+++")) ||
+    (line.startsWith("-") && !line.startsWith("---"))
+  );
+  const additions = changed
+    .filter((line) => line.startsWith("+"))
+    .map((line) => line.slice(1).trim())
+    .sort();
+  const deletions = changed
+    .filter((line) => line.startsWith("-"))
+    .map((line) => line.slice(1).trim())
+    .sort();
+  return (
+    additions.length > 0 &&
+    additions.length === deletions.length &&
+    additions.every((line, index) => line === deletions[index])
+  );
+}
+
+function isHumanSender(
+  payload: Record<string, unknown>,
+  botUserName: string,
+): boolean {
+  const sender = isRecord(payload.sender) ? payload.sender : undefined;
+  const login = stringValue(sender?.login)?.toLowerCase();
+  const type = stringValue(sender?.type)?.toLowerCase();
+  return (
+    type === "user" && login !== undefined && login !== botUserName.toLowerCase()
+  );
+}
+
+async function classifyReviewDelta(
+  ctx: PrManagerContext,
+  owner: string,
+  repo: string,
+  previous: ReviewEpochState,
+  currentHeadSha: string,
+  currentChangedLines: number,
+): Promise<ReviewDelta | undefined> {
+  if (previous.lastReviewedHeadSha === currentHeadSha) {
+    return {
+      changedFiles: [],
+      changedLines: 0,
+      critical: false,
+      diffGrowth: 0,
+      material: false,
+      reasons: [],
+      riskSurfaces: [],
+    };
+  }
+  try {
+    const { data } = await ctx.octokit.rest.repos.compareCommitsWithBasehead({
+      owner,
+      repo,
+      basehead: `${previous.lastReviewedHeadSha}...${currentHeadSha}`,
+    });
+    const files = data.files ?? [];
+    const productionFiles = files.filter((file) => {
+      const filename = stringValue(file.filename);
+      return (
+        filename &&
+        !MINOR_REVIEW_PATH.test(filename) &&
+        !GENERATED_REVIEW_PATH.test(filename) &&
+        !isWhitespaceOnlyPatch(file.patch)
+      );
+    });
+    const changedFiles = uniqueLimited(
+      files.flatMap((file) =>
+        stringValue(file.filename) ? [String(file.filename)] : []
+      ),
+    );
+    const changedLines = productionFiles.reduce((total, file) => {
+      const changes = numberValue(file.changes);
+      if (changes !== undefined) return total + changes;
+      return (
+        total +
+        (numberValue(file.additions) ?? 0) +
+        (numberValue(file.deletions) ?? 0)
+      );
+    }, 0);
+    const riskSurfaces = [
+      ...new Set(
+        productionFiles.flatMap((file) =>
+          stringValue(file.filename)
+            ? riskSurfacesForPath(String(file.filename))
+            : []
+        ),
+      ),
+    ].sort() as ReviewRiskSurface[];
+    const previousFiles = new Set(previous.reviewedFiles);
+    const newProductionFiles = productionFiles.flatMap((file) => {
+      const filename = stringValue(file.filename);
+      return filename && !previousFiles.has(filename) ? [filename] : [];
+    });
+    const previousSurfaces = new Set(previous.reviewedRiskSurfaces);
+    const newSurfaces = riskSurfaces.filter((surface) => !previousSurfaces.has(surface));
+    const manifestChanged = productionFiles.some((file) => {
+      const filename = stringValue(file.filename);
+      return filename ? DEPENDENCY_MANIFEST_PATH.test(filename) : false;
+    });
+    const threshold =
+      ctx.options.reviewEpochMinChangedLines ?? DEFAULT_REVIEW_EPOCH_MIN_CHANGED_LINES;
+    const diffGrowth = Math.max(
+      0,
+      currentChangedLines - (previous.reviewedChangedLines ?? 0),
+    );
+    const reasons: string[] = [];
+    if (newProductionFiles.length > 0) {
+      reasons.push(
+        `new production file(s): ${newProductionFiles
+          .slice(0, 3)
+          .map(reviewPathLabel)
+          .join(", ")}`,
+      );
+    }
+    if (newSurfaces.length > 0) {
+      reasons.push(`new risk surface(s): ${newSurfaces.join(", ")}`);
+    }
+    if (manifestChanged) reasons.push("dependency manifest changed");
+    if (productionFiles.length > 0 && diffGrowth >= threshold) {
+      reasons.push(`${diffGrowth} lines of PR diff growth (threshold ${threshold})`);
+    }
+    return {
+      changedFiles,
+      changedLines,
+      critical: riskSurfaces.some((surface) =>
+        surface === "authorization" || surface === "security"
+      ),
+      diffGrowth,
+      material: reasons.length > 0,
+      reasons,
+      riskSurfaces,
+    };
+  } catch (error) {
+    logger(ctx).debug("githubbot_review_delta_compare_failed", {
+      error: errorMessage(error),
+      pr: `${owner}/${repo}`,
+    });
+    return undefined;
+  }
+}
+
+async function fetchPrFilePaths(
+  ctx: PrManagerContext,
+  owner: string,
+  repo: string,
+  number: number,
+): Promise<string[]> {
+  try {
+    const paths: string[] = [];
+    for (let page = 1; page <= 3; page += 1) {
+      const { data } = await ctx.octokit.rest.pulls.listFiles({
+        owner,
+        repo,
+        pull_number: number,
+        page,
+        per_page: 100,
+      });
+      paths.push(...data.flatMap((file) => file.filename ? [file.filename] : []));
+      if (data.length < 100) break;
+    }
+    return uniqueLimited(paths);
+  } catch (error) {
+    logger(ctx).debug("githubbot_review_files_fetch_failed", {
+      error: errorMessage(error),
+      pr: `${owner}/${repo}#${number}`,
+    });
+    return [];
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Webhook handlers.
 // ---------------------------------------------------------------------------
 
 type PullRequestSummary = {
+  changedLines: number;
   assignees: string[];
   baseBranch: string;
   draft: boolean;
@@ -213,8 +486,10 @@ function assigneeLogins(
 }
 
 function summarizePr(pr: {
+  additions?: number;
   base?: { ref?: string } | null;
   draft?: boolean | null;
+  deletions?: number;
   head: { ref: string; repo?: { full_name?: string | null } | null; sha: string };
   labels: { name?: string }[];
   mergeable_state?: string;
@@ -225,6 +500,7 @@ function summarizePr(pr: {
   assignees?: ({ login?: string } | null)[] | null;
 }): PullRequestSummary {
   return {
+    changedLines: (pr.additions ?? 0) + (pr.deletions ?? 0),
     assignees: assigneeLogins(pr.assignees),
     baseBranch: pr.base?.ref ?? "",
     draft: pr.draft === true,
@@ -374,6 +650,9 @@ export async function handleAutomaticReview(
 ): Promise<void> {
   const payload = parseJson(rawBody);
   if (!payload) return;
+  const action = stringValue(payload.action);
+  const explicitlyRequested = action === "review_requested";
+  const humanContinuation = explicitlyRequested && isHumanSender(payload, ctx.userName);
   const repo = repoFromPayload(payload);
   const prNode = payload.pull_request;
   if (!repo || !isRecord(prNode)) return;
@@ -384,14 +663,192 @@ export async function handleAutomaticReview(
   if (owns(ctx, pr)) return;
 
   const reviewClaim = (ctx.options.stateKeyPrefix ?? "centaur-githubbot") +
-    ":automatic-review:" + repo.owner + "/" + repo.repo + "#" + number + ":" + pr.headSha;
+    (humanContinuation
+      ? ":requested-review:" + deliveryId
+      : `:automatic-review:${repo.owner}/${repo.repo}#${number}:${pr.headSha}`);
   if (!(await claim(ctx, reviewClaim))) return;
+
+  let state = await loadState(ctx, repo.owner, repo.repo, number);
+  const previous = state.reviewEpoch;
+  const maxRounds =
+    ctx.options.reviewMaxRoundsPerEpoch ?? DEFAULT_REVIEW_MAX_ROUNDS_PER_EPOCH;
+  const maxEpochs = ctx.options.reviewMaxEpochs ?? DEFAULT_REVIEW_MAX_EPOCHS;
+  const delta = previous
+    ? await classifyReviewDelta(
+        ctx,
+        repo.owner,
+        repo.repo,
+        previous,
+        pr.headSha,
+        pr.changedLines,
+      )
+    : undefined;
+  let nextEpoch: ReviewEpochState;
+  let scopeGuidance: string;
+  let resetFeedbackBudget = false;
+
+  if (humanContinuation) {
+    // An explicit review request is the human override for an exhausted epoch
+    // or PR-wide epoch cap. It also bypasses the per-head automatic claim, so a
+    // second look at an unchanged revision still works.
+    nextEpoch = {
+      epoch: (previous?.epoch ?? 0) + 1,
+      lastReviewedHeadSha: pr.headSha,
+      reviewedChangedLines: pr.changedLines,
+      reviewedFiles: previous?.reviewedFiles ?? [],
+      reviewedRiskSurfaces: previous?.reviewedRiskSurfaces ?? [],
+      round: 1,
+    };
+    resetFeedbackBudget = true;
+    scopeGuidance = previous
+      ? `A human explicitly continued review epoch ${nextEpoch.epoch}. Preserve earlier ` +
+        "finding fingerprints and decisions. Review the requested revision without " +
+        "rediscovering unchanged, resolved, or rejected findings."
+      : "This is the initial broad review of the whole pull request.";
+  } else if (!previous) {
+    nextEpoch = {
+      epoch: 1,
+      lastReviewedHeadSha: pr.headSha,
+      reviewedChangedLines: pr.changedLines,
+      reviewedFiles: [],
+      reviewedRiskSurfaces: [],
+      round: 1,
+    };
+    resetFeedbackBudget = true;
+    scopeGuidance = "This is epoch 1, round 1: perform one broad review of the whole pull request.";
+  } else if (!delta) {
+    await postAutomationPauseComment(
+      ctx,
+      repo.owner,
+      repo.repo,
+      number,
+      automaticReviewCapKey(ctx, repo.owner, repo.repo, number),
+      "githubbot_automatic_review_paused",
+      "Automatic review paused because GitHub did not return the revision comparison needed " +
+        "to classify the changed risk surface safely. Request another review after the " +
+        "comparison is available.",
+    );
+    return;
+  } else if (delta.material) {
+    const reasonText = delta.reasons.join("; ");
+    if (!isHumanSender(payload, ctx.userName)) {
+      await postAutomationPauseComment(
+        ctx,
+        repo.owner,
+        repo.repo,
+        number,
+        automaticReviewCapKey(ctx, repo.owner, repo.repo, number),
+        "githubbot_automatic_review_paused",
+        "Automatic review paused because a bot-authored or unverified revision expanded " +
+          "the reviewed risk " +
+          `surface (${reasonText}). I did not grant myself a new review epoch for head ` +
+          `\`${pr.headSha.slice(0, 12)}\`. A human must request another review to approve the expansion.`,
+      );
+      return;
+    }
+    if (previous.epoch >= maxEpochs) {
+      if (!delta.critical) {
+        await postAutomationPauseComment(
+          ctx,
+          repo.owner,
+          repo.repo,
+          number,
+          automaticReviewCapKey(ctx, repo.owner, repo.repo, number),
+          "githubbot_automatic_review_paused",
+          `Automatic review paused after ${maxEpochs} review epochs. The new revision ` +
+            `changes the reviewed risk surface (${reasonText}). Split the PR or explicitly ` +
+            "request another review to continue.",
+        );
+        return;
+      }
+      nextEpoch = {
+        ...previous,
+        lastReviewedHeadSha: pr.headSha,
+        reviewedChangedLines: pr.changedLines,
+      };
+      scopeGuidance =
+        "The normal review budget is exhausted, but this delta touches an authorization or " +
+        "security boundary. Inspect only the changed boundary for an evidence-backed P0 or " +
+        "exploitable security regression. Post no style, maintainability, or ordinary " +
+        "correctness findings.";
+    } else {
+      nextEpoch = {
+        epoch: previous.epoch + 1,
+        lastReviewedHeadSha: pr.headSha,
+        reviewedChangedLines: pr.changedLines,
+        reviewedFiles: previous.reviewedFiles,
+        reviewedRiskSurfaces: previous.reviewedRiskSurfaces,
+        round: 1,
+      };
+      resetFeedbackBudget = true;
+      scopeGuidance =
+        `This is epoch ${nextEpoch.epoch}, round 1. Review only the changed risk surface ` +
+        `between ${previous.lastReviewedHeadSha} and ${pr.headSha} (${reasonText}), plus its ` +
+        "interactions with earlier PR changes. Preserve earlier finding fingerprints and do " +
+        "not re-review unchanged code.";
+    }
+  } else {
+    if (previous.round >= maxRounds) {
+      const comparisonNote = delta
+        ? `${delta.changedLines} non-generated changed lines across ` +
+          `${delta.changedFiles.length} files stayed in the existing risk surface.`
+        : "The revision comparison was unavailable, so no new risk surface was proven.";
+      await postAutomationPauseComment(
+        ctx,
+        repo.owner,
+        repo.repo,
+        number,
+        automaticReviewCapKey(ctx, repo.owner, repo.repo, number),
+        "githubbot_automatic_review_paused",
+        `Automatic review paused after ${maxRounds} rounds in epoch ${previous.epoch}. ` +
+          `${comparisonNote} Request another review to continue; repeated repair validation ` +
+          "will not restart a broad review automatically.",
+      );
+      return;
+    }
+    nextEpoch = {
+      ...previous,
+      lastReviewedHeadSha: pr.headSha,
+      reviewedChangedLines: pr.changedLines,
+      round: previous.round + 1,
+    };
+    scopeGuidance =
+      `This is repair-validation round ${nextEpoch.round} of ${maxRounds} in epoch ` +
+      `${nextEpoch.epoch}. Review only the delta from ${previous.lastReviewedHeadSha} to ` +
+      `${pr.headSha}: validate accepted fixes, newly changed risk surfaces, and regressions. ` +
+      "Do not scan the whole PR again or repeat an earlier finding.";
+  }
+
+  const currentFiles = await fetchPrFilePaths(ctx, repo.owner, repo.repo, number);
+  const reviewedFiles = uniqueLimited([
+    ...nextEpoch.reviewedFiles,
+    ...(currentFiles.length > 0 ? currentFiles : delta?.changedFiles ?? []),
+  ]);
+  const reviewedRiskSurfaces = [
+    ...new Set([
+      ...nextEpoch.reviewedRiskSurfaces,
+      ...reviewedFiles.flatMap(riskSurfacesForPath),
+      ...(delta?.riskSurfaces ?? []),
+    ]),
+  ].sort() as ReviewRiskSurface[];
+  nextEpoch = { ...nextEpoch, reviewedFiles, reviewedRiskSurfaces };
+  state = {
+    ...state,
+    ...(resetFeedbackBudget ? { automatedFeedbackRounds: 0 } : {}),
+    reviewEpoch: nextEpoch,
+  };
+  await saveState(ctx, repo.owner, repo.repo, number, state);
+  await release(ctx, automaticReviewCapKey(ctx, repo.owner, repo.repo, number));
+  if (resetFeedbackBudget) {
+    await release(ctx, automatedFeedbackCapKey(ctx, repo.owner, repo.repo, number));
+  }
 
   const preamble = DEFAULT_REVIEW_PROMPT + "\n\n" +
     "This review was started under an authorized repository automation policy. " +
     "Review the current pull request " + repo.owner + "/" + repo.repo +
     "#" + number + " at commit " + pr.headSha +
-    ". Post your review with the gh CLI. Do not modify the PR branch while reviewing.";
+    `. Review epoch ${nextEpoch.epoch}, round ${nextEpoch.round}. ${scopeGuidance} ` +
+    " Post your review with the gh CLI. Do not modify the PR branch while reviewing.";
   fireManagementTurn(ctx, repo.owner, repo.repo, pr, preamble, {
     id: "automatic-review-" + repo.owner + "/" + repo.repo + "#" + number + "-" + pr.headSha,
     label: "automatic-review",
@@ -401,7 +858,13 @@ export async function handleAutomaticReview(
     managementThreadKey(repo.owner, repo.repo, number),
     "automatic-review-" + deliveryId
   ), {
+    changed_files: delta?.changedFiles.length,
+    changed_lines: delta?.changedLines,
+    diff_growth: delta?.diffGrowth,
+    epoch: nextEpoch.epoch,
     pr: repo.owner + "/" + repo.repo + "#" + number,
+    round: nextEpoch.round,
+    scope_reasons: delta?.reasons ?? [],
   });
 }
 
@@ -421,7 +884,11 @@ export async function handleReviewEvent(
   const number = numberValue(prNode.number);
   const reviewId = numberValue(reviewNode.id);
   if (number === undefined || reviewId === undefined) return;
-  const reviewer = stringValue(isRecord(reviewNode.user) ? reviewNode.user.login : undefined);
+  const reviewerNode = isRecord(reviewNode.user) ? reviewNode.user : undefined;
+  const reviewer = stringValue(reviewerNode?.login);
+  const automatedReviewer =
+    stringValue(reviewerNode?.type)?.toLowerCase() === "bot" ||
+    reviewer?.toLowerCase().endsWith("[bot]") === true;
   const reviewState = stringValue(reviewNode.state)?.toLowerCase();
 
   // A review is tied to review.commit_id. The PR head can advance before this
@@ -466,7 +933,36 @@ export async function handleReviewEvent(
     return;
   }
   if (reviewState === "changes_requested" || reviewState === "commented") {
+    let automatedRound: { current: number; max: number } | undefined;
+    if (automatedReviewer) {
+      const state = await loadState(ctx, repo.owner, repo.repo, number);
+      const maxRounds =
+        ctx.options.reviewMaxRoundsPerEpoch ?? DEFAULT_REVIEW_MAX_ROUNDS_PER_EPOCH;
+      const rounds = state.automatedFeedbackRounds ?? 0;
+      if (rounds >= maxRounds) {
+        const reviewerDescription = reviewer ? `@${reviewer}` : "an automated reviewer";
+        await postAutomationPauseComment(
+          ctx,
+          repo.owner,
+          repo.repo,
+          number,
+          automatedFeedbackCapKey(ctx, repo.owner, repo.repo, number),
+          "githubbot_automated_feedback_paused",
+          `Automatic responses to bot-authored review feedback are paused after ${maxRounds} ` +
+            `rounds to avoid an unbounded reviewer/fix loop. The latest review from ` +
+            `${reviewerDescription} needs human validation. ` +
+            "Request me as a reviewer to start a fresh bounded review cycle.",
+        );
+        return;
+      }
+      automatedRound = { current: rounds + 1, max: maxRounds };
+      await saveState(ctx, repo.owner, repo.repo, number, {
+        ...state,
+        automatedFeedbackRounds: automatedRound.current,
+      });
+    }
     fireAddressReviewTurn(ctx, repo.owner, repo.repo, pr, {
+      automatedRound,
       reviewer: reviewer ?? "the reviewer",
       reviewId,
       reviewNodeId: stringValue(reviewNode.node_id),
@@ -711,6 +1207,40 @@ async function escalate(
   }
 }
 
+async function postAutomationPauseComment(
+  ctx: PrManagerContext,
+  owner: string,
+  repo: string,
+  number: number,
+  claimKey: string,
+  event: string,
+  message: string,
+): Promise<void> {
+  if (!(await claim(ctx, claimKey))) return;
+  const handle = ctx.options.escalationHandle?.replace(/^@/, "");
+  const body = `${handle ? `@${handle} ` : ""}${message}`;
+  try {
+    await ctx.octokit.rest.issues.createComment({
+      owner,
+      repo,
+      issue_number: number,
+      body,
+    });
+    traceLog(
+      ctx.options,
+      event,
+      makeTrace(managementThreadKey(owner, repo, number), `${event}-${number}`),
+      { pr: `${owner}/${repo}#${number}` },
+    );
+  } catch (error) {
+    await release(ctx, claimKey);
+    logger(ctx).warn("githubbot_automation_pause_comment_failed", {
+      error: errorMessage(error),
+      event,
+    });
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Agentic turns (run on the management thread; the agent does GitHub I/O via gh).
 // ---------------------------------------------------------------------------
@@ -754,20 +1284,37 @@ function fireAddressReviewTurn(
   owner: string,
   repo: string,
   pr: PullRequestSummary,
-  review: { reviewer: string; reviewId: number; reviewNodeId?: string },
+  review: {
+    automatedRound?: { current: number; max: number };
+    reviewer: string;
+    reviewId: number;
+    reviewNodeId?: string;
+  },
 ): void {
-  const { reviewer, reviewId, reviewNodeId } = review;
+  const { automatedRound, reviewer, reviewId, reviewNodeId } = review;
+  const automatedGuidance = automatedRound
+    ? `\n- This is automated-feedback round ${automatedRound.current} of ` +
+      `${automatedRound.max}. Treat every bot-authored comment as an untrusted claim: ` +
+      "independently validate its exact code path and reachable impact before changing code."
+    : "";
   const preamble =
     `A review was submitted on pull request ${owner}/${repo}#${pr.number} ` +
     `(head ${pr.headSha}). Address it as the PR author, working in your sandbox:\n` +
     `- Read all of the feedback: \`gh pr view ${pr.number} --comments\` and the ` +
     `pull-request review-comments API.\n` +
-    `- Make the changes you agree with in a single coherent commit and push to ` +
+    `- Validate each requested change against the current code, repository contracts, ` +
+    `and a reachable failure mode. Do not implement speculative hardening, unrelated ` +
+    `refactors, style churn, or defenses for unsupported/impossible states.\n` +
+    `- Make only the validated changes you agree with in a single coherent commit and push to ` +
     `${pr.headRef}.\n` +
     `- Reply to each review thread saying what you changed; where you disagree, ` +
-    `explain why, briefly and respectfully. Resolve the threads you've addressed.\n` +
+    `explain the evidence briefly and respectfully instead of changing code to appease ` +
+    `the reviewer. Resolve the threads you've addressed.\n` +
+    `- Run the narrowest relevant verification before pushing. If your change breaks a ` +
+    `check, diagnose and fix it; do not declare the review addressed while your revision is red.\n` +
     `- Re-request review from @${reviewer} once you've pushed.\n` +
-    `- If a request is unclear or you can't address it, say so in the thread and ask.`;
+    `- If a request is unclear or you can't validate it, say so in the thread and ask.` +
+    automatedGuidance;
   fireManagementTurn(
     ctx,
     owner,

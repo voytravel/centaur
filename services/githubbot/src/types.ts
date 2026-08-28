@@ -146,6 +146,16 @@ export type GithubbotOptions = {
    * mergeable (branch protection is the source of truth). Defaults to true.
    */
   autoMerge?: boolean;
+  /** Max broad/repair-validation review rounds in one review epoch. Default 3. */
+  reviewMaxRoundsPerEpoch?: number;
+  /** Max automatically created review epochs per PR. Default 3. */
+  reviewMaxEpochs?: number;
+  /**
+   * Non-generated changed lines that constitute a new risk surface and start a
+   * review epoch. Boundary/dependency/new-production-file rules can trigger an
+   * epoch below this threshold. Default 50.
+   */
+  reviewEpochMinChangedLines?: number;
   /** Max consecutive CI-fix attempts on an owned PR before escalating. Default 3. */
   ciFixMaxAttempts?: number;
   /** Delay before confirming a settled-green rollup. Default 15000ms. */

@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { drainBackgroundWork } from "../src/context";
 import {
   decideMerge,
+  handleAutomaticReview,
   handleCiEvent,
   handleReviewEvent,
   isOwnedPr,
@@ -36,14 +37,17 @@ function makeState() {
 
 function prPayload(input: {
   assignees?: { login: string }[];
+  changedLines?: number;
   headRepoFullName: string;
   headSha?: string;
   mergeableState?: string;
   number?: number;
 }) {
   return {
+    additions: input.changedLines ?? 0,
     assignees: input.assignees ?? [{ login: "centaur-bot" }],
     draft: false,
+    deletions: 0,
     head: {
       ref: "feature",
       repo: { full_name: input.headRepoFullName },
@@ -418,6 +422,520 @@ describe("CI fix counter and escalation", () => {
     expect(await state.get("centaur-githubbot:pr:base/repo#7")).toMatchObject({
       consecutiveCiFixes: 3,
     });
+  });
+});
+
+describe("automated review loop budgets", () => {
+  function boundedReviewCtx(input: {
+    comments: string[];
+    compareFails?: boolean;
+    compareFiles?: () => {
+      additions?: number;
+      changes?: number;
+      deletions?: number;
+      filename: string;
+      patch?: string;
+      status?: string;
+    }[];
+    headSha: () => string;
+    managementStarts?: string[];
+    prChangedLines?: () => number;
+    prFiles?: () => string[];
+    state: ReturnType<typeof makeState>;
+  }): PrManagerContext {
+    return {
+      octokit: {
+        rest: {
+          repos: {
+            compareCommitsWithBasehead: async () => {
+              if (input.compareFails) throw new Error("compare unavailable");
+              return { data: { files: input.compareFiles?.() ?? [] } };
+            },
+          },
+          pulls: {
+            get: async () => ({
+              data: prPayload({
+                assignees: [],
+                changedLines: input.prChangedLines?.() ?? 0,
+                headRepoFullName: "base/repo",
+                headSha: input.headSha(),
+              }),
+            }),
+            listFiles: async () => ({
+              data: (input.prFiles?.() ?? ["src/service.ts"]).map((filename) => ({
+                filename,
+              })),
+            }),
+          },
+          issues: {
+            createComment: async ({ body }: { body: string }) => {
+              input.comments.push(body);
+              return { data: {} };
+            },
+          },
+        },
+      },
+      options: {
+        apiUrl: "http://localhost",
+        fetch: () => Promise.resolve(new Response("no", { status: 400 })),
+        logger: {
+          debug() {},
+          info(message: string) {
+            if (message === "githubbot_management_turn_started") {
+              input.managementStarts?.push(message);
+            }
+          },
+          warn() {},
+          error() {},
+        },
+        reviewEpochMinChangedLines: 50,
+        reviewMaxEpochs: 3,
+        reviewMaxRoundsPerEpoch: 3,
+      },
+      state: input.state,
+      userName: "centaur-bot",
+    } as unknown as PrManagerContext;
+  }
+
+  const pullRequestEvent = (
+    action: string,
+    sender: { login: string; type: string } = { login: "human-author", type: "User" },
+  ) =>
+    JSON.stringify({
+      action,
+      repository: { full_name: "base/repo" },
+      pull_request: { number: 7 },
+      sender,
+    });
+
+  test("runs one broad review and two repair-validation rounds per epoch", async () => {
+    let headSha = "head-1";
+    const comments: string[] = [];
+    const managementStarts: string[] = [];
+    const state = makeState();
+    const ctx = boundedReviewCtx({
+      comments,
+      compareFiles: () => [{ changes: 4, filename: "src/service.ts" }],
+      headSha: () => headSha,
+      managementStarts,
+      state,
+    });
+
+    await handleAutomaticReview(ctx, pullRequestEvent("opened"), "delivery-1");
+    headSha = "head-2";
+    await handleAutomaticReview(ctx, pullRequestEvent("synchronize"), "delivery-2");
+    headSha = "head-3";
+    await handleAutomaticReview(ctx, pullRequestEvent("synchronize"), "delivery-3");
+    headSha = "head-4";
+    await handleAutomaticReview(ctx, pullRequestEvent("synchronize"), "delivery-4");
+
+    expect(await state.get("centaur-githubbot:pr:base/repo#7")).toMatchObject({
+      reviewEpoch: {
+        epoch: 1,
+        lastReviewedHeadSha: "head-3",
+        round: 3,
+      },
+    });
+    expect(managementStarts).toHaveLength(3);
+    expect(comments).toHaveLength(1);
+    expect(comments[0]).toContain("paused after 3 rounds in epoch 1");
+    await drainBackgroundWork(5_000);
+  });
+
+  test("a materially changed risk surface starts a new epoch", async () => {
+    const state = makeState();
+    await state.set("centaur-githubbot:pr:base/repo#7", {
+      automatedFeedbackRounds: 2,
+      reviewEpoch: {
+        epoch: 1,
+        lastReviewedHeadSha: "head-1",
+        reviewedFiles: ["src/service.ts"],
+        reviewedRiskSurfaces: [],
+        round: 3,
+      },
+    });
+    const managementStarts: string[] = [];
+    const ctx = boundedReviewCtx({
+      comments: [],
+      compareFiles: () => [
+        { changes: 12, filename: "src/api/routes.ts", status: "added" },
+      ],
+      headSha: () => "head-2",
+      managementStarts,
+      prFiles: () => ["src/service.ts", "src/api/routes.ts"],
+      state,
+    });
+
+    await handleAutomaticReview(
+      ctx,
+      pullRequestEvent("synchronize"),
+      "delivery-new-risk-surface",
+    );
+
+    expect(await state.get("centaur-githubbot:pr:base/repo#7")).toMatchObject({
+      automatedFeedbackRounds: 0,
+      reviewEpoch: {
+        epoch: 2,
+        lastReviewedHeadSha: "head-2",
+        reviewedRiskSurfaces: ["api"],
+        round: 1,
+      },
+    });
+    expect(managementStarts).toHaveLength(1);
+    await drainBackgroundWork(5_000);
+  });
+
+  test("large generated and test-only changes remain in the current epoch", async () => {
+    const state = makeState();
+    await state.set("centaur-githubbot:pr:base/repo#7", {
+      reviewEpoch: {
+        epoch: 1,
+        lastReviewedHeadSha: "head-1",
+        reviewedFiles: ["src/service.ts"],
+        reviewedRiskSurfaces: [],
+        round: 1,
+      },
+    });
+    const ctx = boundedReviewCtx({
+      comments: [],
+      compareFiles: () => [
+        { changes: 1_000, filename: "tests/service.test.ts" },
+        { changes: 2_000, filename: "src/generated/client.ts" },
+      ],
+      headSha: () => "head-2",
+      state,
+    });
+
+    await handleAutomaticReview(ctx, pullRequestEvent("synchronize"), "delivery-minor");
+
+    expect(await state.get("centaur-githubbot:pr:base/repo#7")).toMatchObject({
+      reviewEpoch: { epoch: 1, round: 2 },
+    });
+    await drainBackgroundWork(5_000);
+  });
+
+  test("a rebase without PR diff growth remains in the current epoch", async () => {
+    const state = makeState();
+    await state.set("centaur-githubbot:pr:base/repo#7", {
+      reviewEpoch: {
+        epoch: 1,
+        lastReviewedHeadSha: "head-1",
+        reviewedChangedLines: 100,
+        reviewedFiles: ["src/service.ts"],
+        reviewedRiskSurfaces: [],
+        round: 1,
+      },
+    });
+    const ctx = boundedReviewCtx({
+      comments: [],
+      compareFiles: () => [{ changes: 1_000, filename: "src/service.ts" }],
+      headSha: () => "head-2",
+      prChangedLines: () => 100,
+      state,
+    });
+
+    await handleAutomaticReview(ctx, pullRequestEvent("synchronize"), "delivery-rebase");
+
+    expect(await state.get("centaur-githubbot:pr:base/repo#7")).toMatchObject({
+      reviewEpoch: { epoch: 1, reviewedChangedLines: 100, round: 2 },
+    });
+    await drainBackgroundWork(5_000);
+  });
+
+  test("a whitespace-only revision remains in the current epoch", async () => {
+    const state = makeState();
+    await state.set("centaur-githubbot:pr:base/repo#7", {
+      reviewEpoch: {
+        epoch: 1,
+        lastReviewedHeadSha: "head-1",
+        reviewedChangedLines: 0,
+        reviewedFiles: ["src/service.ts"],
+        reviewedRiskSurfaces: [],
+        round: 1,
+      },
+    });
+    const ctx = boundedReviewCtx({
+      comments: [],
+      compareFiles: () => [{
+        changes: 100,
+        filename: "src/service.ts",
+        patch: "@@ -1 +1 @@\n-  const value = 1;\n+const value = 1;",
+      }],
+      headSha: () => "head-2",
+      prChangedLines: () => 100,
+      state,
+    });
+
+    await handleAutomaticReview(ctx, pullRequestEvent("synchronize"), "delivery-formatting");
+
+    expect(await state.get("centaur-githubbot:pr:base/repo#7")).toMatchObject({
+      reviewEpoch: { epoch: 1, reviewedChangedLines: 100, round: 2 },
+    });
+    await drainBackgroundWork(5_000);
+  });
+
+  test("pauses when the changed risk surface cannot be classified", async () => {
+    const comments: string[] = [];
+    const state = makeState();
+    await state.set("centaur-githubbot:pr:base/repo#7", {
+      reviewEpoch: {
+        epoch: 1,
+        lastReviewedHeadSha: "head-1",
+        reviewedFiles: ["src/service.ts"],
+        reviewedRiskSurfaces: [],
+        round: 1,
+      },
+    });
+    const ctx = boundedReviewCtx({
+      comments,
+      compareFails: true,
+      headSha: () => "head-2",
+      state,
+    });
+
+    await handleAutomaticReview(ctx, pullRequestEvent("synchronize"), "delivery-no-compare");
+
+    expect(comments).toHaveLength(1);
+    expect(comments[0]).toContain("did not return the revision comparison");
+    expect(await state.get("centaur-githubbot:pr:base/repo#7")).toMatchObject({
+      reviewEpoch: { lastReviewedHeadSha: "head-1", round: 1 },
+    });
+  });
+
+  test("substantial non-generated diff growth starts a new epoch", async () => {
+    const state = makeState();
+    await state.set("centaur-githubbot:pr:base/repo#7", {
+      reviewEpoch: {
+        epoch: 1,
+        lastReviewedHeadSha: "head-1",
+        reviewedFiles: ["src/service.ts"],
+        reviewedRiskSurfaces: [],
+        round: 2,
+      },
+    });
+    const ctx = boundedReviewCtx({
+      comments: [],
+      compareFiles: () => [{ changes: 75, filename: "src/service.ts" }],
+      headSha: () => "head-2",
+      prChangedLines: () => 75,
+      state,
+    });
+
+    await handleAutomaticReview(
+      ctx,
+      pullRequestEvent("synchronize"),
+      "delivery-substantial-growth",
+    );
+
+    expect(await state.get("centaur-githubbot:pr:base/repo#7")).toMatchObject({
+      reviewEpoch: { epoch: 2, round: 1 },
+    });
+    await drainBackgroundWork(5_000);
+  });
+
+  test("a bot-authored material expansion pauses for human approval", async () => {
+    const comments: string[] = [];
+    const state = makeState();
+    await state.set("centaur-githubbot:pr:base/repo#7", {
+      reviewEpoch: {
+        epoch: 1,
+        lastReviewedHeadSha: "head-1",
+        reviewedFiles: ["src/service.ts"],
+        reviewedRiskSurfaces: [],
+        round: 2,
+      },
+    });
+    const ctx = boundedReviewCtx({
+      comments,
+      compareFiles: () => [{ changes: 75, filename: "src/service.ts" }],
+      headSha: () => "head-2",
+      prChangedLines: () => 75,
+      state,
+    });
+
+    await handleAutomaticReview(
+      ctx,
+      pullRequestEvent("synchronize", { login: "another-agent[bot]", type: "Bot" }),
+      "delivery-automated-change",
+    );
+
+    expect(await state.get("centaur-githubbot:pr:base/repo#7")).toMatchObject({
+      reviewEpoch: { epoch: 1, lastReviewedHeadSha: "head-1", round: 2 },
+    });
+    expect(comments).toHaveLength(1);
+    expect(comments[0]).toContain("bot-authored or unverified revision expanded");
+    await drainBackgroundWork(5_000);
+  });
+
+  test("the PR-wide epoch cap requires a split or explicit continuation", async () => {
+    const comments: string[] = [];
+    const state = makeState();
+    await state.set("centaur-githubbot:pr:base/repo#7", {
+      reviewEpoch: {
+        epoch: 3,
+        lastReviewedHeadSha: "head-1",
+        reviewedFiles: ["src/service.ts"],
+        reviewedRiskSurfaces: [],
+        round: 3,
+      },
+    });
+    const ctx = boundedReviewCtx({
+      comments,
+      compareFiles: () => [{ changes: 10, filename: "src/feature.ts", status: "added" }],
+      headSha: () => "head-2",
+      state,
+    });
+
+    await handleAutomaticReview(ctx, pullRequestEvent("synchronize"), "delivery-epoch-cap");
+
+    expect(comments).toHaveLength(1);
+    expect(comments[0]).toContain("paused after 3 review epochs");
+    expect(comments[0]).toContain("Split the PR or explicitly request another review");
+  });
+
+  test("a critical human risk-surface change can interrupt the epoch cap", async () => {
+    const state = makeState();
+    await state.set("centaur-githubbot:pr:base/repo#7", {
+      reviewEpoch: {
+        epoch: 3,
+        lastReviewedHeadSha: "head-1",
+        reviewedFiles: ["src/service.ts"],
+        reviewedRiskSurfaces: [],
+        round: 3,
+      },
+    });
+    const comments: string[] = [];
+    const managementStarts: string[] = [];
+    const ctx = boundedReviewCtx({
+      comments,
+      compareFiles: () => [
+        { changes: 10, filename: "src/auth/policy.ts", status: "added" },
+      ],
+      headSha: () => "head-2",
+      managementStarts,
+      prFiles: () => ["src/service.ts", "src/auth/policy.ts"],
+      state,
+    });
+
+    await handleAutomaticReview(ctx, pullRequestEvent("synchronize"), "delivery-security");
+
+    expect(managementStarts).toHaveLength(1);
+    expect(comments).toHaveLength(0);
+    expect(await state.get("centaur-githubbot:pr:base/repo#7")).toMatchObject({
+      reviewEpoch: {
+        epoch: 3,
+        lastReviewedHeadSha: "head-2",
+        reviewedRiskSurfaces: ["authorization"],
+        round: 3,
+      },
+    });
+    await drainBackgroundWork(5_000);
+  });
+
+  test("an explicit review request can continue beyond the epoch cap", async () => {
+    const state = makeState();
+    await state.set("centaur-githubbot:pr:base/repo#7", {
+      automatedFeedbackRounds: 3,
+      reviewEpoch: {
+        epoch: 3,
+        lastReviewedHeadSha: "head-1",
+        reviewedFiles: ["src/service.ts"],
+        reviewedRiskSurfaces: [],
+        round: 3,
+      },
+    });
+    const ctx = boundedReviewCtx({ comments: [], headSha: () => "head-2", state });
+
+    await handleAutomaticReview(
+      ctx,
+      pullRequestEvent("review_requested"),
+      "delivery-explicit-continuation",
+    );
+
+    expect(await state.get("centaur-githubbot:pr:base/repo#7")).toMatchObject({
+      automatedFeedbackRounds: 0,
+      reviewEpoch: { epoch: 4, lastReviewedHeadSha: "head-2", round: 1 },
+    });
+    await drainBackgroundWork(5_000);
+  });
+
+  test("a bot-authored review request cannot override the epoch cap", async () => {
+    const comments: string[] = [];
+    const state = makeState();
+    await state.set("centaur-githubbot:pr:base/repo#7", {
+      reviewEpoch: {
+        epoch: 3,
+        lastReviewedHeadSha: "head-2",
+        reviewedFiles: ["src/service.ts"],
+        reviewedRiskSurfaces: [],
+        round: 3,
+      },
+    });
+    const ctx = boundedReviewCtx({ comments, headSha: () => "head-2", state });
+
+    await handleAutomaticReview(
+      ctx,
+      pullRequestEvent("review_requested", {
+        login: "another-agent[bot]",
+        type: "Bot",
+      }),
+      "delivery-bot-review-request",
+    );
+
+    expect(comments).toHaveLength(1);
+    expect(await state.get("centaur-githubbot:pr:base/repo#7")).toMatchObject({
+      reviewEpoch: { epoch: 3, round: 3 },
+    });
+  });
+
+  const submittedFeedback = (id: number, login: string, type: string) =>
+    JSON.stringify({
+      action: "submitted",
+      repository: { full_name: "base/repo" },
+      pull_request: { number: 7 },
+      review: {
+        id,
+        state: "commented",
+        user: { login, type },
+      },
+    });
+
+  test("bounds bot feedback but continues to honor human reviews", async () => {
+    const comments: string[] = [];
+    const managementStarts: string[] = [];
+    const state = makeState();
+    const ctx = boundedReviewCtx({
+      comments,
+      headSha: () => "abc123",
+      managementStarts,
+      state,
+    });
+
+    await handleReviewEvent(ctx, submittedFeedback(1, "reviewer[bot]", "Bot"), {
+      feedback: true,
+    });
+    await handleReviewEvent(ctx, submittedFeedback(2, "reviewer[bot]", "Bot"), {
+      feedback: true,
+    });
+    await handleReviewEvent(ctx, submittedFeedback(3, "reviewer[bot]", "Bot"), {
+      feedback: true,
+    });
+    await handleReviewEvent(ctx, submittedFeedback(4, "reviewer[bot]", "Bot"), {
+      feedback: true,
+    });
+
+    expect(managementStarts).toHaveLength(3);
+    expect(comments).toHaveLength(1);
+    expect(comments[0]).toContain("bot-authored review feedback are paused");
+    expect(await state.get("centaur-githubbot:pr:base/repo#7")).toMatchObject({
+      automatedFeedbackRounds: 3,
+    });
+
+    await handleReviewEvent(ctx, submittedFeedback(5, "human-reviewer", "User"), {
+      feedback: true,
+    });
+    expect(managementStarts).toHaveLength(4);
+    await drainBackgroundWork(5_000);
   });
 });
 
