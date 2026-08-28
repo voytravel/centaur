@@ -43,6 +43,24 @@ describe("parseLinearIssueAutomationWebhook", () => {
       ),
     ).toBeNull();
   });
+
+  test("carries Linear's verified update delta for transition policies", () => {
+    expect(
+      parseLinearIssueAutomationWebhook(
+        JSON.stringify({
+          action: "update",
+          data: { id: "issue-1", updatedAt: "2026-08-23T00:00:00Z" },
+          type: "Issue",
+          updatedFrom: { stateId: "old-state", title: "Old title" },
+        }),
+      ),
+    ).toEqual({
+      action: "update",
+      issueId: "issue-1",
+      trigger: "2026-08-23T00:00:00Z",
+      updatedFields: [ "stateId", "title" ],
+    });
+  });
 });
 
 describe("evaluateLinearAutomation", () => {

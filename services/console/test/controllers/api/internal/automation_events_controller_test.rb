@@ -57,6 +57,7 @@ class Api::Internal::AutomationEventsControllerTest < ActionDispatch::Integratio
                linear_team_id: "team-1",
                title: "Implement it",
                description: "Acceptance Criteria\n- Works",
+               updated_fields: [ "stateId", "title" ],
                labels: []
              }
            },
@@ -68,6 +69,7 @@ class Api::Internal::AutomationEventsControllerTest < ActionDispatch::Integratio
     workstream = AutomationWorkstream.sole
     assert_equal "ENG-42", workstream.metadata["linear_issue_identifier"]
     assert_equal "https://linear.app/voytravel/issue/ENG-42/implement-it", workstream.metadata["linear_issue_url"]
+    assert_equal [ "stateId", "title" ], AutomationEvent.sole.metadata["updated_fields"]
   end
 
   test "permits the verified-manual-mention fact without accepting raw comment content" do

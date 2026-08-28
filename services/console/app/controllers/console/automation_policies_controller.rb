@@ -100,6 +100,10 @@ class Console::AutomationPoliciesController < ApplicationController
         {
           "linear" => {
             "issue" => values[:linear_issue_mode],
+            "qa" => values[:linear_qa_mode].presence || "off",
+            "qa_target" => values[:linear_qa_target].presence || "auto",
+            "qa_statuses" => comma_list(values[:linear_qa_statuses]),
+            "qa_profiles" => comma_list(values[:linear_qa_profiles]),
             "ready_statuses" => comma_list(values[:linear_ready_statuses]),
             "required_fields" => comma_list(values[:linear_required_fields]),
             "required_labels" => comma_list(values[:linear_required_labels]),
@@ -142,6 +146,10 @@ class Console::AutomationPoliciesController < ApplicationController
       :activity_reporting_accepted,
       :activity_reporting_pr_created,
       :linear_issue_mode,
+      :linear_qa_mode,
+      :linear_qa_target,
+      :linear_qa_statuses,
+      :linear_qa_profiles,
       :linear_ready_statuses,
       :linear_required_fields,
       :linear_required_labels,

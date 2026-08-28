@@ -373,6 +373,54 @@ class AutomationEventIngestorTest < ActiveSupport::TestCase
     assert_equal "https://linear.app/voytravel/issue/ENG-42/implement-it", workstream.metadata["linear_issue_url"]
   end
 
+  test "queues one QA workflow for a verified Linear status transition" do
+    AutomationPolicy.create!(
+      name: "Linear QA orchestration",
+      provider: "linear",
+      linear_team_id: "team-1",
+      enabled: true,
+      mode: "act",
+      created_by: users(:acme_admin),
+      settings: {
+        "linear" => {
+          "issue" => "off",
+          "qa" => "status_transition",
+          "qa_statuses" => [ "QA" ],
+          "qa_profiles" => [ "ios_smoke" ],
+          "github_repository" => "acme/widgets"
+        }
+      }
+    )
+    input = {
+      "provider" => "linear",
+      "deduplication_key" => "issue-qa-transition",
+      "event_type" => "Issue",
+      "event_action" => "update",
+      "linear_issue_id" => "issue-qa",
+      "linear_issue_identifier" => "ENG-42",
+      "linear_issue_url" => "https://linear.app/voytravel/issue/ENG-42/verify-it",
+      "linear_team_id" => "team-1",
+      "title" => "Verify it",
+      "description" => "Ready for QA",
+      "status" => "QA",
+      "updated_fields" => [ "stateId" ],
+      "labels" => []
+    }
+    queued_event_ids = []
+
+    AutomationQaDispatchJob.stub(:perform_later, ->(event_id) { queued_event_ids << event_id }) do
+      result = AutomationEventIngestor.new(input).call
+      assert_equal "act", result["decision"]
+      assert_equal [ "run_qa" ], result["actions"]
+      assert_equal [ "ios_smoke" ], result["qa_profiles"]
+      assert_equal "act", AutomationEventIngestor.new(input).call["decision"]
+    end
+
+    event = AutomationEvent.find_by!(deduplication_key: "issue-qa-transition")
+    assert_equal [ event.id ], queued_event_ids
+    assert_equal [ "stateId" ], event.metadata["updated_fields"]
+  end
+
   test "returns the explicitly selected Linear repository route and preview label" do
     AutomationPolicy.create!(
       name: "Routed Linear",

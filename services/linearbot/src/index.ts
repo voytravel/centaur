@@ -867,6 +867,7 @@ function handleIssueAutomation(
       provider: "linear",
       status: issueContext.status,
       title: issueContext.title,
+      updated_fields: event.updatedFields,
     });
     if (
       !decision ||

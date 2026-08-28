@@ -62,6 +62,7 @@ class AutomationEventIngestor
     end
     AutomationPrincipalAuthorizer.reconcile_workstream(workstream)
     enqueue_activity_report(record) if activity_report
+    enqueue_qa_dispatch(record) if outcome["decision"] == "act" && outcome.fetch("actions").include?("run_qa")
 
     response_for(record, workstream, nil, policy)
   rescue ActiveRecord::RecordNotUnique
@@ -180,6 +181,8 @@ class AutomationEventIngestor
         "github_repository" => outcome["github_repository"],
         "move_to_in_progress" => outcome["move_to_in_progress"] != false,
         "preview_label" => outcome["preview_label"],
+        "qa_profiles" => Array(outcome["qa_profiles"]),
+        "qa_target" => outcome["qa_target"],
         "reason" => outcome.fetch("reason"),
         "reviewer_logins" => Array(outcome["reviewer_logins"]),
         "reviewer_team_slugs" => Array(outcome["reviewer_team_slugs"])
@@ -192,6 +195,10 @@ class AutomationEventIngestor
       "title_present" => @event["title"].to_s.strip.present?,
       "description_present" => @event["description"].to_s.strip.present?
     }.compact.tap do |metadata|
+      updated_fields = Array(@event["updated_fields"])
+        .filter_map { |field| field.to_s.match?(/\A[A-Za-z][A-Za-z0-9_]{0,99}\z/) ? field.to_s : nil }
+        .first(50)
+      metadata["updated_fields"] = updated_fields if updated_fields.any?
       metadata["created_by_bot"] = true if @event["created_by_bot"] == true
       metadata["mentioned_bot"] = true if @event["mentioned_bot"] == true
       metadata["activity_report"] = activity_report if activity_report
@@ -238,6 +245,16 @@ class AutomationEventIngestor
     # Console and operators get a concise infrastructure log to investigate.
     Rails.logger.warn(
       "automation_activity_report_enqueue_failed event_id=#{record.id} error=#{e.class}: #{e.message}"
+    )
+  end
+
+  def enqueue_qa_dispatch(record)
+    AutomationQaDispatchJob.perform_later(record.id)
+  rescue StandardError => e
+    # The normalized event remains durable and the job uses a stable
+    # idempotency key, so operators can retry without dispatching twice.
+    Rails.logger.warn(
+      "automation_qa_dispatch_enqueue_failed event_id=#{record.id} error=#{e.class}: #{e.message}"
     )
   end
 
@@ -289,6 +306,8 @@ class AutomationEventIngestor
       "github_repository" => result["github_repository"],
       "move_to_in_progress" => result["move_to_in_progress"] != false,
       "preview_label" => result["preview_label"],
+      "qa_profiles" => Array(result["qa_profiles"]),
+      "qa_target" => result["qa_target"],
       "policy_id" => resolved_policy&.oid,
       "reviewer_logins" => Array(result["reviewer_logins"]),
       "reviewer_team_slugs" => Array(result["reviewer_team_slugs"])
@@ -316,6 +335,8 @@ class AutomationEventIngestor
       "github_repository" => nil,
       "move_to_in_progress" => true,
       "preview_label" => nil,
+      "qa_profiles" => [],
+      "qa_target" => nil,
       "policy_id" => nil,
       "reviewer_logins" => [],
       "reviewer_team_slugs" => []

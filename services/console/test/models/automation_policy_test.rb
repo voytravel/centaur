@@ -348,7 +348,114 @@ class AutomationPolicyTest < ActiveSupport::TestCase
     )
 
     assert_not policy.valid?
-    assert_includes policy.errors[:settings], "needs a GitHub repository or repository routes for ready issue automation"
+    assert_includes policy.errors[:settings], "needs a GitHub repository or repository routes for Linear automation"
+  end
+
+  test "dispatches QA only on a verified transition into a configured status" do
+    policy = AutomationPolicy.create!(
+      name: "Linear QA",
+      provider: "linear",
+      linear_team_id: "team-1",
+      enabled: true,
+      mode: "act",
+      execution_role: automation_role,
+      created_by: users(:acme_admin),
+      settings: {
+        "linear" => {
+          "issue" => "ready_issues",
+          "qa" => "status_transition",
+          "qa_statuses" => [ "QA" ],
+          "qa_profiles" => [ "ios_smoke" ],
+          "ready_statuses" => [ "Ready" ],
+          "github_repository" => "acme/widgets"
+        }
+      }
+    )
+    event = {
+      "event_type" => "Issue",
+      "event_action" => "update",
+      "linear_team_id" => "team-1",
+      "title" => "Verify the widget",
+      "description" => "Ready for QA",
+      "status" => "QA",
+      "labels" => []
+    }
+
+    unrelated_update = policy.evaluate(event.merge("updated_fields" => [ "title" ]))
+    assert_equal "ignored", unrelated_update["decision"]
+    assert_equal "issue status is not ready", unrelated_update["reason"]
+
+    transition = policy.evaluate(event.merge("updated_fields" => [ "stateId" ]))
+    assert_equal "act", transition["decision"]
+    assert_equal [ "run_qa" ], transition["actions"]
+    assert_equal [ "ios_smoke" ], transition["qa_profiles"]
+    assert_equal "acme/widgets", transition["github_repository"]
+
+    created_in_qa = policy.evaluate(event.merge("event_action" => "create"))
+    assert_equal [ "run_qa" ], created_in_qa["actions"]
+  end
+
+  test "QA automation requires an explicit destination status" do
+    policy = AutomationPolicy.new(
+      name: "Broken QA",
+      provider: "linear",
+      linear_team_id: "team-1",
+      created_by: users(:acme_admin),
+      settings: {
+        "linear" => {
+          "qa" => "status_transition",
+          "github_repository" => "acme/widgets"
+        }
+      }
+    )
+
+    assert_not policy.valid?
+    assert_includes policy.errors[:settings], "needs at least one QA status when QA automation is enabled"
+  end
+
+  test "QA automation rejects unbounded executor inputs" do
+    policy = AutomationPolicy.new(
+      name: "Unsafe QA inputs",
+      provider: "linear",
+      linear_team_id: "team-1",
+      created_by: users(:acme_admin),
+      settings: {
+        "linear" => {
+          "qa" => "status_transition",
+          "qa_target" => "../../runner",
+          "qa_statuses" => [ "QA" ],
+          "qa_profiles" => [ "../../shell" ],
+          "github_repository" => "acme/widgets"
+        }
+      }
+    )
+
+    assert_not policy.valid?
+    assert_includes policy.errors[:settings], "has an invalid QA target"
+    assert_includes policy.errors[:settings], "has invalid QA profiles"
+  end
+
+  test "QA-only policy uses its workflow principal instead of an issue coding role" do
+    policy = AutomationPolicy.new(
+      name: "Workflow-only QA",
+      provider: "linear",
+      linear_team_id: "team-1",
+      enabled: true,
+      mode: "act",
+      created_by: users(:acme_admin),
+      settings: {
+        "linear" => {
+          "issue" => "off",
+          "qa" => "status_transition",
+          "qa_target" => "auto",
+          "qa_statuses" => [ "QA" ],
+          "github_repository" => "acme/widgets"
+        }
+      }
+    )
+
+    assert_predicate policy, :valid?
+    assert_not policy.requires_execution_role?
   end
 
   test "routes ready Linear issues to one explicitly label-matched repository" do

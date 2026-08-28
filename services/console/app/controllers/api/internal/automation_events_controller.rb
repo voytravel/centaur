@@ -50,7 +50,8 @@ module Api
           :description,
           :status,
           :blocked,
-          labels: []
+          labels: [],
+          updated_fields: []
         )
       end
     end

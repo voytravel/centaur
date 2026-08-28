@@ -70,6 +70,10 @@ class Console::AutomationPoliciesControllerTest < ActionDispatch::IntegrationTes
           mode: "observe",
           enabled: "1",
           linear_issue_mode: "ready_issues",
+          linear_qa_mode: "status_transition",
+          linear_qa_target: "auto",
+          linear_qa_statuses: "QA, In QA",
+          linear_qa_profiles: "ios_smoke, web_smoke",
           linear_ready_statuses: "Ready",
           linear_required_fields: "description, acceptance_criteria",
           linear_required_labels: "agent:ready",
@@ -84,6 +88,9 @@ class Console::AutomationPoliciesControllerTest < ActionDispatch::IntegrationTes
 
     policy = AutomationPolicy.order(:id).last
     assert_equal [ "agent:ready" ], policy.linear_settings["required_labels"]
+    assert_equal "status_transition", policy.linear_settings["qa"]
+    assert_equal [ "QA", "In QA" ], policy.linear_settings["qa_statuses"]
+    assert_equal [ "ios_smoke", "web_smoke" ], policy.linear_settings["qa_profiles"]
   end
 
   test "creates a Linear policy with explicit repository routes" do
