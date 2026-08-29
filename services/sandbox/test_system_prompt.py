@@ -73,5 +73,13 @@ class SystemPromptTest(unittest.TestCase):
         self.assertIn("personal `provider_email`", prompt)
         self.assertIn("Centaur can use their personal connected account", prompt)
 
+    def test_action_scope_and_evidence_guidance_is_present(self) -> None:
+        prompt = SYSTEM_PROMPT.read_text()
+
+        self.assertIn("[Action scope and evidence]", prompt)
+        self.assertIn("Treat requests to investigate, diagnose, assess, review, explain, or answer as read-only", prompt)
+        self.assertIn("A code path that could explain an observation is a hypothesis", prompt)
+        self.assertIn("Keep chat-surface progress terse", prompt)
+
 if __name__ == "__main__":
     unittest.main()

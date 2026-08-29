@@ -273,4 +273,27 @@ describe('buildSlackResponseContextBlock', () => {
 
     expect(block?.elements[0]?.text).toBe('GPT-5.6-SOL · Codex · Low · Fast')
   })
+
+  test('includes the stop-and-mute escape hatch when requested', () => {
+    const block = buildSlackResponseContextBlock({
+      consoleBaseUrl: 'https://console.centaur.dev',
+      threadKey: 'slack:C1:1',
+      stopHintEnabled: true
+    })
+
+    expect(block?.elements[0]?.text).toBe(
+      '<https://console.centaur.dev/console/threads?thread=slack%3AC1%3A1|Open chat in Console> · Reply `@Centaur stop` to cancel and mute'
+    )
+  })
+
+  test('keeps the stop-and-mute escape hatch without a Console URL or metadata', () => {
+    const block = buildSlackResponseContextBlock({
+      consoleBaseUrl: undefined,
+      threadKey: 'slack:C1:1',
+      metadataEnabled: false,
+      stopHintEnabled: true
+    })
+
+    expect(block?.elements[0]?.text).toBe('Reply `@Centaur stop` to cancel and mute')
+  })
 })

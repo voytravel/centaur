@@ -1,5 +1,6 @@
 import { createSlackbotV2, type SlackbotV2Options } from './index'
 import { parseChannelDefaults } from './channel-defaults'
+import { normalizeHarnessOverrides } from './overrides'
 import { resolveSlackHomeTeamId } from './session-api'
 import { resolveSlackBotUserId } from './slack-user'
 import {
@@ -44,6 +45,8 @@ const consoleLogger = {
   child: () => consoleLogger
 }
 
+const visionHarnessType = visionHarnessTypeEnv('SLACKBOTV2_VISION_HARNESS')
+
 const options: SlackbotV2Options = {
   apiUrl,
   apiKey: optionalEnv('SLACKBOT_API_KEY'),
@@ -53,6 +56,7 @@ const options: SlackbotV2Options = {
   botToken,
   botUserId,
   continueThreadReplies: booleanEnv('SLACKBOTV2_CONTINUE_THREAD_REPLIES', false),
+  threadReplyMode: threadReplyModeEnv('SLACKBOTV2_THREAD_REPLY_MODE'),
   channelDefaults: parseChannelDefaults(optionalEnv('SLACKBOTV2_CHANNEL_DEFAULTS'), reason =>
     consoleLogger.warn('slackbotv2 SLACKBOTV2_CHANNEL_DEFAULTS', { reason })
   ),
@@ -94,7 +98,10 @@ const options: SlackbotV2Options = {
   slackApiUrl,
   slackApiTimeoutMs,
   stateKeyPrefix: optionalEnv('SLACKBOTV2_STATE_KEY_PREFIX'),
+  streamTaskDisplayMode: streamTaskDisplayModeEnv('SLACKBOTV2_STREAM_TASK_DISPLAY_MODE'),
   userName: stringEnv('SLACKBOTV2_USER_NAME', 'centaur'),
+  visionHarnessType,
+  visionModel: optionalEnv('SLACKBOTV2_VISION_MODEL'),
   logger: consoleLogger
 }
 options.slackHomeTeamId = await resolveSlackHomeTeamId(options)
@@ -114,11 +121,15 @@ console.log(
     activity_summary_status_enabled: options.activitySummaryStatusEnabled,
     auto_join_created_channels_enabled: options.autoJoinCreatedChannels,
     continue_thread_replies_enabled: options.continueThreadReplies,
+    thread_reply_mode: options.threadReplyMode,
     message_overrides_strategy: messageOverridesStrategyMode,
     message_overrides_strategy_enabled:
       messageOverridesStrategyMode !== 'llm' || Boolean(messageOverridesStrategyApiKey),
     response_metadata_mode: options.responseMetadataMode,
     response_service_tier_enabled: options.responseServiceTierEnabled,
+    stream_task_display_mode: options.streamTaskDisplayMode,
+    vision_harness_configured: Boolean(options.visionHarnessType),
+    vision_model_configured: Boolean(options.visionModel),
     port: server.port,
     api_url: apiUrl
   })
@@ -127,6 +138,15 @@ console.log(
 function optionalEnv(name: string): string | undefined {
   const value = process.env[name]?.trim()
   return value ? value : undefined
+}
+
+function visionHarnessTypeEnv(name: string): string | undefined {
+  const value = optionalEnv(name)
+  if (!value) return undefined
+  const normalized = normalizeHarnessOverrides({ harness: value }).harnessType
+  if (normalized) return normalized
+  consoleLogger.warn('slackbotv2 invalid vision harness', { name, value })
+  return undefined
 }
 
 function requiredEnv(name: string): string {
@@ -165,6 +185,20 @@ function responseMetadataModeEnv(name: string): 'first' | 'always' | 'never' {
   if (!value) return 'first'
   if (value === 'first' || value === 'always' || value === 'never') return value
   throw new Error(`${name} must be "first", "always", or "never"`)
+}
+
+function threadReplyModeEnv(name: string): 'mentions_only' | 'actionable' | 'all' | undefined {
+  const value = optionalEnv(name)?.toLowerCase()
+  if (!value) return undefined
+  if (value === 'mentions_only' || value === 'actionable' || value === 'all') return value
+  throw new Error(`${name} must be "mentions_only", "actionable", or "all"`)
+}
+
+function streamTaskDisplayModeEnv(name: string): 'none' | 'plan' | 'timeline' | undefined {
+  const value = optionalEnv(name)?.toLowerCase()
+  if (!value) return undefined
+  if (value === 'none' || value === 'plan' || value === 'timeline') return value
+  throw new Error(`${name} must be "none", "plan", or "timeline"`)
 }
 
 function percentEnv(name: string, fallback: number): number {

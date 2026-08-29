@@ -229,12 +229,17 @@ export function buildSlackResponseContextBlock(params: {
   model?: string | null
   reasoning?: string | null
   serviceTier?: string | null
+  /** Render an obvious escape hatch on the first response in a thread. */
+  stopHintEnabled?: boolean
 }): SlackContextBlock | undefined {
   const url = consoleSessionUrl(params.consoleBaseUrl, params.threadKey)
   const includeMetadata = params.metadataEnabled === true
-  if (!url && !includeMetadata) return undefined
+  if (!url && !includeMetadata && params.stopHintEnabled !== true) return undefined
   const segments: string[] = []
   if (url) segments.push(`<${url}|Open chat in Console>`)
+  if (params.stopHintEnabled === true) {
+    segments.push('Reply `@Centaur stop` to cancel and mute')
+  }
   if (includeMetadata) {
     const model = params.model?.trim()
     if (model) segments.push(escapeSlackMrkdwn(model.toUpperCase()))

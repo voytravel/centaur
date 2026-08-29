@@ -530,6 +530,7 @@ export async function forwardToSessionApi(
       input.model,
       input.executeContextMessages,
       input.contextPreamble,
+      input.instructionPreamble,
       input.reasoning,
       input.provider,
       input.metadataModel,
@@ -1341,6 +1342,7 @@ async function executeSession(
   model?: string,
   contextMessages?: SlackbotV2ApiMessage[],
   contextPreamble?: string,
+  instructionPreamble?: string,
   reasoning?: string,
   provider?: string,
   metadataModel?: string,
@@ -1348,7 +1350,13 @@ async function executeSession(
   harnessAssignment?: SlackbotV2HarnessAssignment
 ): Promise<SlackbotV2ExecuteSessionResponse> {
   const fetchFn = options.fetch ?? fetch
-  const requesterIdentity = await resolveRequesterIdentity(options, message)
+  // Only an explicit mention/allowlisted DM may resolve an identity into the
+  // prompt. An actionable unmentioned continuation can start a narrowly
+  // scoped execution, but must not acquire requester credential context.
+  const requesterIdentity =
+    message.isMention && !message.author.isMe
+      ? await resolveRequesterIdentity(options, message)
+      : undefined
   const idleTimeoutMs = sessionIdleTimeoutMs(options)
   const recordedModel = metadataModel ?? model
   const body: SlackbotV2ExecuteSessionRequest = {
@@ -1378,6 +1386,7 @@ async function executeSession(
       requesterIdentity,
       contextMessages,
       contextPreamble,
+      instructionPreamble,
       reasoning,
       provider
     ),
@@ -1587,6 +1596,7 @@ function toCodexInputLines(
   requesterIdentity?: RequesterIdentity,
   contextMessages?: SlackbotV2ApiMessage[],
   contextPreamble?: string,
+  instructionPreamble?: string,
   reasoning?: string,
   provider?: string
 ): string[] {
@@ -1603,6 +1613,7 @@ function toCodexInputLines(
       requesterIdentity,
       contextMessages,
       contextPreamble,
+      instructionPreamble,
       reasoning,
       provider
     )
@@ -1626,6 +1637,7 @@ function toCodexInputLines(
       requesterIdentity,
       contextMessages,
       contextPreamble,
+      instructionPreamble,
       reasoning,
       provider
     )
@@ -1655,6 +1667,7 @@ function toCodexInputLineWithStaged(
   requesterIdentity?: RequesterIdentity,
   contextMessages?: SlackbotV2ApiMessage[],
   contextPreamble?: string,
+  instructionPreamble?: string,
   reasoning?: string,
   provider?: string
 ): string {
@@ -1672,7 +1685,8 @@ function toCodexInputLineWithStaged(
         staged,
         requesterIdentity,
         contextMessages,
-        contextPreamble
+        contextPreamble,
+        instructionPreamble
       )
     }
   })
@@ -1773,7 +1787,8 @@ function codexInputContent(
   staged: Map<SlackbotV2ApiAttachment, string> = new Map(),
   requesterIdentity?: RequesterIdentity,
   contextMessages?: SlackbotV2ApiMessage[],
-  contextPreamble?: string
+  contextPreamble?: string,
+  instructionPreamble?: string
 ): JsonValue[] {
   const content: JsonValue[] = []
   const slackSessionContext = slackUploadSessionContext(message.threadId)
@@ -1783,6 +1798,9 @@ function codexInputContent(
   const requesterContext = requesterIdentityContext(requesterIdentity)
   if (requesterContext) {
     content.push({ type: 'text', text: requesterContext })
+  }
+  if (instructionPreamble?.trim()) {
+    content.push({ type: 'text', text: instructionPreamble })
   }
   if (contextPreamble?.trim()) {
     content.push({ type: 'text', text: contextPreamble })
