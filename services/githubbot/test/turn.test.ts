@@ -140,6 +140,7 @@ describe("GithubRenderFallback", () => {
 describe("classifyTurnFailure", () => {
   test("permits fallback only for provider or capability failures", () => {
     expect(classifyTurnFailure("HTTP 503 Service Unavailable")).toBe("provider_unavailable");
+    expect(classifyTurnFailure("TypeError: fetch failed")).toBe("provider_unavailable");
     expect(classifyTurnFailure("glm-5.3 is not a multimodal model")).toBe("unsupported_capability");
   });
 

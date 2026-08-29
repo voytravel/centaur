@@ -500,8 +500,8 @@ export function classifyTurnFailure(value: string | undefined): TurnFailureKind 
     return "unsupported_capability";
   }
   if (
-    /\b(?:429|500|502|503|504)\b/.test(text) ||
-    /(?:timeout|timed out|overloaded|rate limit|temporarily unavailable|service unavailable|connection (?:reset|refused)|network error)/.test(text)
+    /\b(?:408|425|429|500|502|503|504)\b/.test(text) ||
+    /(?:timeout|timed out|overloaded|rate limit|temporarily unavailable|service unavailable|connection (?:reset|refused)|network error|fetch failed|econn(?:reset|refused)|dns|socket hang up)/.test(text)
   ) {
     return "provider_unavailable";
   }
