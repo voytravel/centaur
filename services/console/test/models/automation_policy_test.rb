@@ -799,7 +799,7 @@ class AutomationPolicyTest < ActiveSupport::TestCase
           "reasoning" => "high",
           "focus" => [ "correctness", "tests" ],
           "max_runs_per_epoch" => 3,
-          "fallbacks" => [ { "harness" => "codex", "model" => "glm-5.1-fp8", "reasoning" => "high" }]
+          "fallbacks" => [ { "harness" => "codex", "model" => "glm-5.1-fp8", "reasoning" => "high" } ]
         },
         {
           "id" => "independent",
