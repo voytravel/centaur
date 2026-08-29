@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  classifyTurnFailure,
   buildTurnPublicReply,
   GithubRenderFallback,
   githubContextPreamble,
@@ -133,6 +134,20 @@ describe("GithubRenderFallback", () => {
 
     expect(forwarded).toHaveLength(1);
     expect(fallback.text()).toBe("Pushed the fix; CI is running.");
+  });
+});
+
+describe("classifyTurnFailure", () => {
+  test("permits fallback only for provider or capability failures", () => {
+    expect(classifyTurnFailure("HTTP 503 Service Unavailable")).toBe("provider_unavailable");
+    expect(classifyTurnFailure("TypeError: fetch failed")).toBe("provider_unavailable");
+    expect(classifyTurnFailure("glm-5.3 is not a multimodal model")).toBe("unsupported_capability");
+  });
+
+  test("keeps credential, cancellation, and ambiguous failures fail-closed", () => {
+    expect(classifyTurnFailure("401 Unauthorized: invalid API key")).toBe("credential");
+    expect(classifyTurnFailure("execution cancelled by caller")).toBe("cancelled");
+    expect(classifyTurnFailure("unexpected result")).toBe("unknown");
   });
 });
 

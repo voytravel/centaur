@@ -262,6 +262,12 @@ export type ForwardSessionInput = {
    * harness still sees the PR/issue + comment history.
    */
   contextPreamble?: string;
+  /**
+   * Non-secret execution labels owned by Githubbot. They are persisted with the
+   * durable execution so Console can distinguish independent review passes
+   * from the eventual public synthesis.
+   */
+  executionMetadata?: JsonObject;
   executionId?: string;
   executeMessage?: GithubbotApiMessage;
   /** Harness override parsed from message flags (--claude/--codex). */
@@ -269,6 +275,8 @@ export type ForwardSessionInput = {
   messages: GithubbotApiMessage[];
   /** Per-turn model override parsed from message flags (--model/--opus/...). */
   model?: string;
+  /** Optional Codex reasoning effort for a per-turn workflow/review override. */
+  reasoning?: string;
   /** Legacy model provider persisted by older sessions; new selection is disabled. */
   provider?: string;
   onEventId(eventId: number): void;

@@ -40,6 +40,7 @@ import {
   type PolicyPrAutomation,
   type PrManagerContext,
 } from "./pr-manager";
+import { parseCrossModelReviewOrchestration } from "./review-orchestration";
 import { handleReviewRequest, isReviewRequestedForBot } from "./review";
 import {
   forwardToSessionApi,
@@ -804,11 +805,21 @@ function routePolicyLifecycleEvent(
     conflicts: actions.has("resolve_conflict"),
     feedback: actions.has("address_feedback"),
   };
+  const reviewDecision = active.find((decision) => decision.actions.includes("review"));
+  const reviewOrchestration = parseCrossModelReviewOrchestration(
+    reviewDecision?.reviewOrchestration,
+  );
+  if (reviewOrchestration) automation.reviewOrchestration = reviewOrchestration;
 
   if (eventType === "pull_request") {
     const work: Promise<void>[] = [];
     if (actions.has("review")) {
-      work.push(handleAutomaticReview(input.prManagerCtx, rawBody, input.deliveryId));
+      work.push(handleAutomaticReview(
+        input.prManagerCtx,
+        rawBody,
+        input.deliveryId,
+        automation,
+      ));
     }
     if (automation.conflicts || automation.autoMerge) {
       work.push(handlePullRequestEvent(input.prManagerCtx, rawBody, automation));

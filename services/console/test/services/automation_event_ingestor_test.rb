@@ -30,6 +30,7 @@ class AutomationEventIngestorTest < ActiveSupport::TestCase
 
     assert_equal "act", first["decision"]
     assert_equal [ "review" ], first["actions"]
+    assert_equal({ "mode" => "single" }, first["review_orchestration"])
     assert_equal first, second
     assert_equal 1, AutomationEvent.count
     workstream = AutomationWorkstream.sole

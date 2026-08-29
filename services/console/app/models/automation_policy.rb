@@ -5,6 +5,12 @@ class AutomationPolicy < ApplicationRecord
   MODES = %w[observe act].freeze
   GITHUB_REVIEW_MODES = %w[off assigned_or_mentioned all_eligible].freeze
   GITHUB_REPAIR_MODES = %w[off observe bot_owned explicit eligible].freeze
+  GITHUB_REVIEW_ORCHESTRATION_MODES = %w[single cross_model].freeze
+  GITHUB_REVIEW_HARNESSES = %w[codex claudecode].freeze
+  GITHUB_REVIEW_REASONING = %w[none minimal low medium high xhigh max].freeze
+  GITHUB_REVIEW_FOCUS = %w[
+    correctness dependencies integration maintainability security tests
+  ].freeze
   LINEAR_ISSUE_MODES = %w[off ready_issues].freeze
   LINEAR_QA_MODES = %w[off status_transition].freeze
   ACTIVITY_REPORT_KINDS = %w[accepted pr_created].freeze
@@ -20,6 +26,8 @@ class AutomationPolicy < ApplicationRecord
   GITHUB_REPOSITORY_PATTERN = /\A[A-Za-z0-9][A-Za-z0-9_.-]*\/[A-Za-z0-9][A-Za-z0-9_.-]*\z/.freeze
   SLACK_CHANNEL_ID_PATTERN = /\A[CG][A-Z0-9]{8,}\z/.freeze
   QA_ID_PATTERN = /\A[a-z][a-z0-9_-]{0,63}\z/.freeze
+  GITHUB_REVIEW_PROFILE_ID_PATTERN = /\A[a-z][a-z0-9_-]{0,31}\z/.freeze
+  GITHUB_REVIEW_MODEL_PATTERN = /\A[A-Za-z0-9][A-Za-z0-9._\/-]{0,127}\z/.freeze
 
   GITHUB_REVIEW_ACTIONS = %w[opened reopened ready_for_review synchronize].freeze
   GITHUB_CONFLICT_ACTIONS = %w[synchronize edited ready_for_review].freeze
@@ -117,7 +125,9 @@ class AutomationPolicy < ApplicationRecord
     if github?
       config = github_settings
       manual_mentions = config["manual_mentions"] ? " · manual mentions: enabled" : ""
-      "review: #{config["review"].tr("_", " ")} · feedback: #{config["feedback"].tr("_", " ")} · checks: #{config["checks"].tr("_", " ")}#{manual_mentions}#{activity_reporting_summary}"
+      review_group = config.dig("review_orchestration", "mode") == "cross_model" ?
+        " · review group: cross model" : ""
+      "review: #{config["review"].tr("_", " ")} · feedback: #{config["feedback"].tr("_", " ")} · checks: #{config["checks"].tr("_", " ")}#{review_group}#{manual_mentions}#{activity_reporting_summary}"
     else
       config = linear_settings
       required_labels = Array(config["required_labels"])
@@ -199,7 +209,10 @@ class AutomationPolicy < ApplicationRecord
       "auto_merge" => false,
       "base_branches" => [],
       "required_labels" => [],
-      "excluded_labels" => []
+      "excluded_labels" => [],
+      # Kept opt-in: existing policies preserve their established single-review
+      # behavior until a reviewed source policy explicitly chooses a group.
+      "review_orchestration" => { "mode" => "single" }
     }
   end
 
@@ -319,6 +332,7 @@ class AutomationPolicy < ApplicationRecord
         errors.add(:settings, "has an invalid #{key} mode") unless GITHUB_REPAIR_MODES.include?(config[key])
       end
       errors.add(:settings, "manual mentions must be true or false") unless boolean?(config["manual_mentions"])
+      validate_github_review_orchestration(config)
     elsif linear?
       config = linear_settings
       errors.add(:settings, "has an invalid issue mode") unless LINEAR_ISSUE_MODES.include?(config["issue"])
@@ -343,6 +357,129 @@ class AutomationPolicy < ApplicationRecord
       validate_linear_repository_routes(config)
     end
     validate_activity_reporting
+  end
+
+  # Cross-model review is a compact source-managed policy surface, not arbitrary
+  # prompt/configuration JSON. The Githubbot validates it again at execution
+  # ingress; keeping the two independently bounded protects both stale workers
+  # and direct API callers.
+  def validate_github_review_orchestration(config)
+    raw = config["review_orchestration"]
+    unless raw.is_a?(Hash)
+      errors.add(:settings, "review orchestration must be an object")
+      return
+    end
+
+    orchestration = raw.deep_stringify_keys
+    unsupported = orchestration.keys - %w[mode reviewers synthesizer max_concurrency]
+    errors.add(:settings, "review orchestration has unsupported fields") if unsupported.any?
+    mode = orchestration["mode"]
+    unless GITHUB_REVIEW_ORCHESTRATION_MODES.include?(mode)
+      errors.add(:settings, "has an invalid review orchestration mode")
+      return
+    end
+    return if mode == "single"
+
+    reviewers = orchestration["reviewers"]
+    synthesizer = orchestration["synthesizer"]
+    max_concurrency = orchestration["max_concurrency"]
+    unless reviewers.is_a?(Array) && reviewers.length.between?(2, 3)
+      errors.add(:settings, "cross-model review needs two or three reviewers")
+      return
+    end
+    unless max_concurrency.is_a?(Integer) && max_concurrency.between?(1, 3)
+      errors.add(:settings, "cross-model review needs max concurrency from 1 to 3")
+    end
+
+    profiles = reviewers.each_with_index.filter_map do |profile, index|
+      validate_github_review_profile(profile, "reviewer #{index + 1}")
+    end
+    synthesis = validate_github_review_profile(synthesizer, "synthesizer")
+    return unless profiles.length == reviewers.length && synthesis
+
+    ids = profiles.map { |profile| profile.fetch("id") }
+    errors.add(:settings, "cross-model reviewer IDs must be unique") if ids.uniq.length != ids.length
+    primary_pairs = profiles.map { |profile| [ profile.fetch("harness"), profile.fetch("model") ] }
+    if primary_pairs.uniq.length < 2
+      errors.add(:settings, "cross-model review needs at least two distinct primary models")
+    end
+  end
+
+  def validate_github_review_profile(value, label)
+    unless value.is_a?(Hash)
+      errors.add(:settings, "cross-model #{label} must be an object")
+      return nil
+    end
+    profile = value.deep_stringify_keys
+    unsupported = profile.keys - %w[id harness model reasoning focus max_runs_per_epoch fallbacks]
+    valid = unsupported.empty?
+    errors.add(:settings, "cross-model #{label} has unsupported fields") unless valid
+
+    id = profile["id"]
+    harness = profile["harness"]
+    model = profile["model"]
+    reasoning = profile["reasoning"]
+    focus = profile["focus"]
+    max_runs = profile["max_runs_per_epoch"]
+    fallbacks = profile["fallbacks"]
+    unless id.is_a?(String) && GITHUB_REVIEW_PROFILE_ID_PATTERN.match?(id)
+      errors.add(:settings, "cross-model #{label} has an invalid ID")
+      valid = false
+    end
+    unless GITHUB_REVIEW_HARNESSES.include?(harness)
+      errors.add(:settings, "cross-model #{label} has an invalid harness")
+      valid = false
+    end
+    unless model.is_a?(String) && GITHUB_REVIEW_MODEL_PATTERN.match?(model)
+      errors.add(:settings, "cross-model #{label} has an invalid model")
+      valid = false
+    end
+    unless reasoning.nil? || (harness == "codex" && GITHUB_REVIEW_REASONING.include?(reasoning))
+      errors.add(:settings, "cross-model #{label} has invalid reasoning")
+      valid = false
+    end
+    unless focus.is_a?(Array) && focus.all? { |item| GITHUB_REVIEW_FOCUS.include?(item) }
+      errors.add(:settings, "cross-model #{label} has invalid focus")
+      valid = false
+    end
+    unless max_runs.is_a?(Integer) && max_runs.between?(1, 3)
+      errors.add(:settings, "cross-model #{label} has invalid per-epoch budget")
+      valid = false
+    end
+    unless fallbacks.is_a?(Array) && fallbacks.length <= 2
+      errors.add(:settings, "cross-model #{label} has invalid fallbacks")
+      return nil
+    end
+
+    attempts = [ { "harness" => harness, "model" => model }, *fallbacks ]
+    valid_fallbacks = fallbacks.all? do |fallback|
+      next false unless fallback.is_a?(Hash)
+
+      candidate = fallback.deep_stringify_keys
+      fallback_harness = candidate["harness"]
+      fallback_model = candidate["model"]
+      fallback_reasoning = candidate["reasoning"]
+      (candidate.keys - %w[harness model reasoning]).empty? &&
+        GITHUB_REVIEW_HARNESSES.include?(fallback_harness) &&
+        fallback_model.is_a?(String) &&
+        GITHUB_REVIEW_MODEL_PATTERN.match?(fallback_model) &&
+        (fallback_reasoning.nil? ||
+          (fallback_harness == "codex" && GITHUB_REVIEW_REASONING.include?(fallback_reasoning)))
+    end
+    unless valid_fallbacks
+      errors.add(:settings, "cross-model #{label} has an invalid fallback")
+      valid = false
+    end
+    normalized_attempts = attempts.filter_map do |attempt|
+      harness_value = attempt["harness"] || attempt[:harness]
+      model_value = attempt["model"] || attempt[:model]
+      [ harness_value, model_value ] if harness_value.is_a?(String) && model_value.is_a?(String)
+    end
+    if normalized_attempts.uniq.length != normalized_attempts.length
+      errors.add(:settings, "cross-model #{label} repeats a model attempt")
+      valid = false
+    end
+    valid ? profile : nil
   end
 
   def validate_activity_reporting
@@ -628,6 +765,7 @@ class AutomationPolicy < ApplicationRecord
       "reason" => mode == "act" ? "policy authorizes automation" : "policy is in observe mode",
       "actions" => actions,
       "auto_merge" => github? && github_settings["auto_merge"] == true,
+      "review_orchestration" => github? ? github_settings["review_orchestration"] : nil,
       "github_repository" => route["repository"],
       "move_to_in_progress" => linear["move_to_in_progress"] != false,
       "preview_label" => route["preview_label"],

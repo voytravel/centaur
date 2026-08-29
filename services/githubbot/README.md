@@ -145,6 +145,22 @@ response budget. A second PR/epoch-wide aggregate cap prevents adding reviewers
 from multiplying the repair loop without starving the first follow-up from a
 different reviewer.
 
+A policy can instead opt into a bounded `review_orchestration` with two or three
+independent internal reviewer profiles plus one synthesizer. Reviewers run in
+isolated `github-review:` sessions and produce Console-only structured reports;
+only the synthesizer may publish the one consolidated GitHub review for a PR
+head. The profiles and synthesis run counters are reserved in the durable PR
+epoch before work starts, so webhook redelivery cannot reset either budget.
+Githubbot accepts a fallback only for provider unavailability or an explicitly
+unsupported model capability. Authentication failures, cancellations, and
+ambiguous errors remain fail-closed and are visible to operators. Execution
+metadata records the requested/resolved harness and model, reviewer ID, epoch,
+round, and fallback category without exposing provider error text in GitHub.
+
+This orchestration controls Centaur-owned models only. Cursor, Greptile, and
+other external GitHub reviewers remain independent reviewer identities; their
+comments continue through the existing per-reviewer repair budgets.
+
 No policy request is trusted without both a verified GitHub signature and the
 single-purpose Console ingress credential. An unavailable or rejecting Console
 fails closed, leaving normal requested-review, assigned-issue, and comment

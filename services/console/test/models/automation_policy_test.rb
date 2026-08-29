@@ -787,6 +787,66 @@ class AutomationPolicyTest < ActiveSupport::TestCase
     assert_equal "all_eligible", policy.github_settings["review"]
   end
 
+  test "validates and routes a bounded cross-model GitHub review group" do
+    orchestration = {
+      "mode" => "cross_model",
+      "max_concurrency" => 2,
+      "reviewers" => [
+        {
+          "id" => "correctness",
+          "harness" => "codex",
+          "model" => "glm-5.2-fp8",
+          "reasoning" => "high",
+          "focus" => [ "correctness", "tests" ],
+          "max_runs_per_epoch" => 3,
+          "fallbacks" => [ { "harness" => "codex", "model" => "glm-5.1-fp8", "reasoning" => "high" } ]
+        },
+        {
+          "id" => "independent",
+          "harness" => "codex",
+          "model" => "glm-5.1-fp8",
+          "reasoning" => "high",
+          "focus" => [ "security" ],
+          "max_runs_per_epoch" => 3,
+          "fallbacks" => []
+        }
+      ],
+      "synthesizer" => {
+        "id" => "synthesis",
+        "harness" => "codex",
+        "model" => "glm-5.2-fp8",
+        "reasoning" => "high",
+        "focus" => [],
+        "max_runs_per_epoch" => 3,
+        "fallbacks" => []
+      }
+    }
+    policy = AutomationPolicy.new(
+      name: "Cross-model widgets",
+      provider: "github",
+      repository: "acme/cross-model-widgets",
+      enabled: true,
+      mode: "observe",
+      created_by: users(:acme_admin),
+      settings: { "github" => { "review" => "all_eligible", "review_orchestration" => orchestration } }
+    )
+
+    assert_predicate policy, :valid?
+    outcome = policy.evaluate(
+      "repository" => "acme/cross-model-widgets",
+      "event_type" => "pull_request",
+      "event_action" => "opened",
+      "base_branch" => "main",
+      "draft" => false,
+      "labels" => []
+    )
+    assert_equal orchestration, outcome["review_orchestration"]
+
+    policy.settings["github"]["review_orchestration"]["reviewers"][1]["model"] = "glm-5.2-fp8"
+    assert_not_predicate policy, :valid?
+    assert_includes policy.errors[:settings], "cross-model review needs at least two distinct primary models"
+  end
+
   test "does not create an external source URL from non-GitHub repository syntax" do
     policy = AutomationPolicy.new(
       name: "Opaque managed source",

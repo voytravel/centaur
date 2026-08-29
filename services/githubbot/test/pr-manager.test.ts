@@ -6,6 +6,7 @@ import {
   handleCiEvent,
   handleReviewEvent,
   isOwnedPr,
+  type PolicyPrAutomation,
   type PrManagerContext,
 } from "../src/pr-manager";
 import { emitWorkflowEvent } from "../src/session-api";
@@ -551,6 +552,75 @@ describe("automated review loop budgets", () => {
       },
       sender,
     });
+
+  const crossModelAutomation: PolicyPrAutomation = {
+    reviewOrchestration: {
+      maxConcurrency: 2,
+      mode: "cross_model",
+      reviewers: [
+        {
+          fallbacks: [],
+          focus: ["correctness", "tests"],
+          harnessType: "codex",
+          id: "correctness",
+          maxRunsPerEpoch: 3,
+          model: "glm-5.2-fp8",
+          reasoning: "high",
+        },
+        {
+          fallbacks: [],
+          focus: ["security"],
+          harnessType: "codex",
+          id: "independent",
+          maxRunsPerEpoch: 3,
+          model: "glm-5.1-fp8",
+          reasoning: "high",
+        },
+      ],
+      synthesizer: {
+        fallbacks: [],
+        focus: [],
+        harnessType: "codex",
+        id: "synthesis",
+        maxRunsPerEpoch: 3,
+        model: "glm-5.2-fp8",
+        reasoning: "high",
+      },
+    },
+  };
+
+  test("reserves independent reviewer budgets and does not start the legacy reviewer", async () => {
+    const comments: string[] = [];
+    const managementStarts: string[] = [];
+    const state = makeState();
+    const ctx = boundedReviewCtx({
+      comments,
+      headSha: () => "head-1",
+      managementStarts,
+      state,
+    });
+
+    await handleAutomaticReview(
+      ctx,
+      pullRequestEvent("opened"),
+      "delivery-cross-model",
+      crossModelAutomation,
+    );
+
+    expect(await state.get("centaur-githubbot:pr:base/repo#7")).toMatchObject({
+      reviewEpoch: {
+        epoch: 1,
+        reviewerRuns: {
+          __synthesizer: 1,
+          correctness: 1,
+          independent: 1,
+        },
+        round: 1,
+      },
+    });
+    expect(managementStarts).toHaveLength(0);
+    await drainBackgroundWork(5_000);
+  });
 
   test("serializes overlapping heads and preserves the newest review state", async () => {
     let prFetches = 0;

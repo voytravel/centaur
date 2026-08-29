@@ -178,6 +178,7 @@ class AutomationEventIngestor
       "result" => {
         "actions" => outcome.fetch("actions"),
         "auto_merge" => outcome["auto_merge"] == true,
+        "review_orchestration" => outcome["review_orchestration"],
         "github_repository" => outcome["github_repository"],
         "move_to_in_progress" => outcome["move_to_in_progress"] != false,
         "preview_label" => outcome["preview_label"],
@@ -303,6 +304,7 @@ class AutomationEventIngestor
       "reason" => result["reason"] || "previously recorded event",
       "actions" => Array(result["actions"]),
       "auto_merge" => result["auto_merge"] == true,
+      "review_orchestration" => result["review_orchestration"],
       "github_repository" => result["github_repository"],
       "move_to_in_progress" => result["move_to_in_progress"] != false,
       "preview_label" => result["preview_label"],
