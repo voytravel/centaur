@@ -57,6 +57,16 @@ describe("cross-model review orchestration", () => {
     expect(parseCrossModelReviewOrchestration(invalid)).toBeUndefined();
   });
 
+  test("fails closed on unrecognized profile fields or focus", () => {
+    const unknownField = structuredClone(valid);
+    (unknownField.reviewers[0] as Record<string, unknown>).unbounded_prompt = "do anything";
+    expect(parseCrossModelReviewOrchestration(unknownField)).toBeUndefined();
+
+    const invalidFocus = structuredClone(valid);
+    invalidFocus.reviewers[0]!.focus = ["invented" as never];
+    expect(parseCrossModelReviewOrchestration(invalidFocus)).toBeUndefined();
+  });
+
   test("reserves separate reviewer and synthesis budgets before execution", () => {
     const orchestration = parseCrossModelReviewOrchestration(valid)!;
     const first = planCrossModelReview(orchestration, undefined);

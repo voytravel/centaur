@@ -102,6 +102,9 @@ export function parseCrossModelReviewOrchestration(
   value: unknown,
 ): CrossModelReviewOrchestration | undefined {
   if (!isRecord(value) || value.mode !== "cross_model") return undefined;
+  if (!hasOnlyKeys(value, ["mode", "reviewers", "synthesizer", "max_concurrency"])) {
+    return undefined;
+  }
   const reviewersRaw = value.reviewers;
   const synthesizerRaw = value.synthesizer;
   if (!Array.isArray(reviewersRaw) || reviewersRaw.length < 2 || reviewersRaw.length > MAX_REVIEWERS) {
@@ -434,17 +437,33 @@ function traceFor(
 
 function parseProfile(value: unknown, forcedId?: string): ReviewModelProfile | undefined {
   if (!isRecord(value)) return undefined;
-  const id = forcedId ?? stringValue(value.id);
+  if (!hasOnlyKeys(value, [
+    "id",
+    "harness",
+    "model",
+    "reasoning",
+    "focus",
+    "max_runs_per_epoch",
+    "fallbacks",
+  ])) {
+    return undefined;
+  }
+  const configuredId = stringValue(value.id);
+  if (forcedId && configuredId !== forcedId) return undefined;
+  const id = forcedId ?? configuredId;
   const primary = parseAttempt(value);
-  const focus = Array.isArray(value.focus)
-    ? value.focus.filter((item): item is ReviewFocus => typeof item === "string" && VALID_FOCUS.has(item))
-    : [];
+  if (!Array.isArray(value.focus) || !value.focus.every(
+    (item) => typeof item === "string" && VALID_FOCUS.has(item),
+  )) {
+    return undefined;
+  }
+  const focus = value.focus as ReviewFocus[];
   const maxRunsPerEpoch = positiveInt(value.max_runs_per_epoch, 1, MAX_RUNS_PER_EPOCH);
   const fallbacksRaw = value.fallbacks ?? [];
   if (!id || !PROFILE_ID_PATTERN.test(id) || !primary || !maxRunsPerEpoch || !Array.isArray(fallbacksRaw) || fallbacksRaw.length > MAX_FALLBACKS) {
     return undefined;
   }
-  const fallbacks = fallbacksRaw.map((fallback) => parseAttempt(fallback));
+  const fallbacks = fallbacksRaw.map((fallback) => parseAttempt(fallback, true));
   if (fallbacks.some((fallback) => !fallback)) return undefined;
   const parsedFallbacks = fallbacks as ReviewModelAttempt[];
   const attempts = [primary, ...parsedFallbacks];
@@ -454,8 +473,12 @@ function parseProfile(value: unknown, forcedId?: string): ReviewModelProfile | u
   return { ...primary, fallbacks: parsedFallbacks, focus: [...new Set(focus)], id, maxRunsPerEpoch };
 }
 
-function parseAttempt(value: unknown): ReviewModelAttempt | undefined {
+function parseAttempt(
+  value: unknown,
+  fallback = false,
+): ReviewModelAttempt | undefined {
   if (!isRecord(value)) return undefined;
+  if (fallback && !hasOnlyKeys(value, ["harness", "model", "reasoning"])) return undefined;
   const harnessType = stringValue(value.harness);
   const model = stringValue(value.model);
   const reasoning = stringValue(value.reasoning);
@@ -512,6 +535,10 @@ function stringValue(value: unknown): string | undefined {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function hasOnlyKeys(value: Record<string, unknown>, keys: string[]): boolean {
+  return Object.keys(value).every((key) => keys.includes(key));
 }
 
 function truncate(value: string, maxChars: number): string {
