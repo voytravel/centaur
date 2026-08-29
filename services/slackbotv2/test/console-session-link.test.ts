@@ -285,4 +285,15 @@ describe('buildSlackResponseContextBlock', () => {
       '<https://console.centaur.dev/console/threads?thread=slack%3AC1%3A1|Open chat in Console> · Reply `@Centaur stop` to cancel and mute'
     )
   })
+
+  test('keeps the stop-and-mute escape hatch without a Console URL or metadata', () => {
+    const block = buildSlackResponseContextBlock({
+      consoleBaseUrl: undefined,
+      threadKey: 'slack:C1:1',
+      metadataEnabled: false,
+      stopHintEnabled: true
+    })
+
+    expect(block?.elements[0]?.text).toBe('Reply `@Centaur stop` to cancel and mute')
+  })
 })

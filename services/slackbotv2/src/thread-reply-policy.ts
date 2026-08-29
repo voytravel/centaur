@@ -16,71 +16,78 @@ export type SlackThreadReplyDecision =
   | { kind: 'act'; reason: 'explicit_action_request' }
   | { kind: 'continue'; reason: 'legacy_all_mode' }
 
-const ACTION_VERB_PATTERN =
-  /\b(?:fix|implement|change|update|create|open|merge|deploy|commit|push|retry|rerun|run|write|edit|delete|close|assign|post|send|test|validate|verify|build|make)\b/i
+const ACTION_VERB_SOURCE = [
+  'fix',
+  'implement',
+  'change',
+  'update',
+  'create',
+  'open',
+  'merge',
+  'deploy',
+  'commit',
+  'push',
+  'retry',
+  'rerun',
+  'run',
+  'write',
+  'edit',
+  'delete',
+  'close',
+  'assign',
+  'post',
+  'send',
+  'test',
+  'validate',
+  'verify',
+  'build',
+  'make'
+].join('|')
 
-const READ_ONLY_VERB_PATTERN =
-  /\b(?:investigate|look\s+into|check|debug|diagnos(?:e|is)|trace|analy[sz]e|assess|review|explain|inspect|confirm|compare|find|identify)\b/i
+const READ_ONLY_VERB_SOURCE = [
+  'investigate',
+  'look\\s+into',
+  'check',
+  'debug',
+  'diagnos(?:e|is)',
+  'trace',
+  'analy[sz]e',
+  'assess',
+  'review',
+  'explain',
+  'inspect',
+  'confirm',
+  'compare',
+  'find',
+  'identify'
+].join('|')
 
-const DIRECT_REQUEST_PATTERN = new RegExp(
-  [
-    // "Can you ...", "I need you to ...", and similar unambiguous requests.
-    String.raw`\b(?:can|could|would|will)\s+(?:you|centaur)\b`,
-    String.raw`\b(?:i\s+(?:need|want)\s+(?:you|centaur)\s+to)\b`,
-    // A polite direct request. Restrict this to a command verb so a casual
-    // "please see above" cannot start a sandbox.
-    String.raw`\b(?:please|pls|kindly)\s+(?:${actionOrReadOnlyVerbSource()})\b`,
-    // Imperative requests addressed to the beginning of the message. This
-    // intentionally does not match "I think we should fix it" discussion.
-    String.raw`^\s*(?:@(?:centaur|[A-Z0-9]+)[,:]?\s*)?(?:${actionOrReadOnlyVerbSource()})\b`
-  ].join('|'),
-  'i'
-)
+const ACTION_VERB_PATTERN = new RegExp(`^(?:${ACTION_VERB_SOURCE})$`, 'i')
+const READ_ONLY_VERB_PATTERN = new RegExp(`^(?:${READ_ONLY_VERB_SOURCE})$`, 'i')
+const DIRECTIVE_VERB_SOURCE = `(?:${ACTION_VERB_SOURCE}|${READ_ONLY_VERB_SOURCE})`
 
-function actionOrReadOnlyVerbSource(): string {
-  return [
-    'fix',
-    'implement',
-    'change',
-    'update',
-    'create',
-    'open',
-    'merge',
-    'deploy',
-    'commit',
-    'push',
-    'retry',
-    'rerun',
-    'run',
-    'write',
-    'edit',
-    'delete',
-    'close',
-    'assign',
-    'post',
-    'send',
-    'test',
-    'validate',
-    'verify',
-    'build',
-    'make',
-    'investigate',
-    'look\\s+into',
-    'check',
-    'debug',
-    'diagnos(?:e|is)',
-    'trace',
-    'analy[sz]e',
-    'assess',
-    'review',
-    'explain',
-    'inspect',
-    'confirm',
-    'compare',
-    'find',
-    'identify'
-  ].join('|')
-}
+// Each pattern captures only the directive verb. Classification must never
+// scan the rest of a request: "Please investigate why the failed run..." is
+// read-only even though its object happens to contain an action verb.
+const DIRECTIVE_PATTERNS = [
+  new RegExp(
+    String.raw`\b(?:can|could|would|will)\s+(?:you|centaur)\s+(?:please\s+)?(${DIRECTIVE_VERB_SOURCE})\b`,
+    'i'
+  ),
+  new RegExp(
+    String.raw`\b(?:i\s+(?:need|want)\s+(?:you|centaur)\s+to)\s+(?:please\s+)?(${DIRECTIVE_VERB_SOURCE})\b`,
+    'i'
+  ),
+  // A polite direct request. Restrict this to a command verb so a casual
+  // "please see above" cannot start a sandbox.
+  new RegExp(String.raw`\b(?:please|pls|kindly)\s+(${DIRECTIVE_VERB_SOURCE})\b`, 'i'),
+  // Imperative requests addressed to the beginning of the message. This
+  // intentionally does not match "I think we should fix it" discussion.
+  new RegExp(
+    String.raw`^\s*(?:@(?:centaur|[A-Z0-9]+)[,:]?\s*)?(${DIRECTIVE_VERB_SOURCE})\b`,
+    'i'
+  )
+]
 
 /**
  * Resolves the new explicit setting first. The boolean remains for existing
@@ -99,18 +106,27 @@ export function slackThreadReplyMode(options: SlackbotV2Options): SlackThreadRep
  */
 export function classifySlackThreadReply(text: string): SlackThreadReplyDecision {
   const normalized = text.replace(/\s+/g, ' ').trim()
-  if (!normalized || !DIRECT_REQUEST_PATTERN.test(normalized)) {
+  const directiveVerb = normalized ? matchedDirectiveVerb(normalized) : undefined
+  if (!directiveVerb) {
     return { kind: 'ignore', reason: 'not_explicitly_addressed' }
   }
-  if (ACTION_VERB_PATTERN.test(normalized)) {
+  if (ACTION_VERB_PATTERN.test(directiveVerb)) {
     return { kind: 'act', reason: 'explicit_action_request' }
   }
-  if (READ_ONLY_VERB_PATTERN.test(normalized)) {
+  if (READ_ONLY_VERB_PATTERN.test(directiveVerb)) {
     return { kind: 'investigate', reason: 'explicit_read_only_request' }
   }
   // The direct-request detector only permits known verbs, but retain a safe
   // read-only fallback if the patterns evolve independently.
   return { kind: 'investigate', reason: 'explicit_read_only_request' }
+}
+
+function matchedDirectiveVerb(text: string): string | undefined {
+  for (const pattern of DIRECTIVE_PATTERNS) {
+    const value = pattern.exec(text)?.[1]?.trim()
+    if (value) return value
+  }
+  return undefined
 }
 
 export function slackThreadReplyDecision(

@@ -27,6 +27,18 @@ describe('Slack thread reply policy', () => {
       kind: 'investigate',
       reason: 'explicit_read_only_request'
     })
+    expect(classifySlackThreadReply('Please check why the failed run produced X.')).toEqual({
+      kind: 'investigate',
+      reason: 'explicit_read_only_request'
+    })
+    expect(classifySlackThreadReply('Please investigate the crash; do not run anything.')).toEqual({
+      kind: 'investigate',
+      reason: 'explicit_read_only_request'
+    })
+    expect(classifySlackThreadReply('Can you analyze the failed build output?')).toEqual({
+      kind: 'investigate',
+      reason: 'explicit_read_only_request'
+    })
   })
 
   test('distinguishes explicit requested actions from investigations', () => {

@@ -234,7 +234,7 @@ export function buildSlackResponseContextBlock(params: {
 }): SlackContextBlock | undefined {
   const url = consoleSessionUrl(params.consoleBaseUrl, params.threadKey)
   const includeMetadata = params.metadataEnabled === true
-  if (!url && !includeMetadata) return undefined
+  if (!url && !includeMetadata && params.stopHintEnabled !== true) return undefined
   const segments: string[] = []
   if (url) segments.push(`<${url}|Open chat in Console>`)
   if (params.stopHintEnabled === true) {
