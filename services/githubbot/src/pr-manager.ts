@@ -1077,6 +1077,16 @@ async function handleAutomaticReviewLocked(
     const orchestration = automation!.reviewOrchestration!;
     const pauseClaim = (ctx.options.stateKeyPrefix ?? "centaur-githubbot") +
       `:cross-model-synthesis-pause:${repo.owner}/${repo.repo}#${number}:${pr.headSha}:e${nextEpoch.epoch}:r${nextEpoch.round}`;
+    const pauseForSynthesisFailure = () => postAutomationPauseComment(
+      ctx,
+      repo.owner,
+      repo.repo,
+      number,
+      pauseClaim,
+      "githubbot_cross_model_review_paused",
+      "Automatic cross-model review could not produce a synthesized result. " +
+        "No individual model report was published; inspect Centaur Console and request a human review.",
+    );
     backgroundWaitUntil(
       runCrossModelReview({
         currentHead: async () =>
@@ -1084,16 +1094,7 @@ async function handleAutomaticReviewLocked(
         epoch: nextEpoch.epoch,
         headSha: pr.headSha,
         number,
-        onSynthesisFailure: () => postAutomationPauseComment(
-          ctx,
-          repo.owner,
-          repo.repo,
-          number,
-          pauseClaim,
-          "githubbot_cross_model_review_paused",
-          "Automatic cross-model review could not produce a synthesized result. " +
-            "No individual model report was published; inspect Centaur Console and request a human review.",
-        ),
+        onSynthesisFailure: pauseForSynthesisFailure,
         options: ctx.options,
         orchestration,
         owner: repo.owner,
@@ -1102,11 +1103,12 @@ async function handleAutomaticReviewLocked(
         round: nextEpoch.round,
         synthesizer: crossModelPlan.synthesizer,
         title: pr.title,
-      }).catch((error) => {
+      }).catch(async (error) => {
         logger(ctx).warn("githubbot_cross_model_review_failed", {
           error: errorMessage(error),
           pr: `${repo.owner}/${repo.repo}#${number}`,
         });
+        await pauseForSynthesisFailure();
       }),
     );
     traceLog(ctx.options, "githubbot_cross_model_review_started", makeTrace(
