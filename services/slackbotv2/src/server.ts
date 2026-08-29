@@ -1,5 +1,6 @@
 import { createSlackbotV2, type SlackbotV2Options } from './index'
 import { parseChannelDefaults } from './channel-defaults'
+import { normalizeHarnessOverrides } from './overrides'
 import { resolveSlackHomeTeamId } from './session-api'
 import { resolveSlackBotUserId } from './slack-user'
 import {
@@ -43,6 +44,8 @@ const consoleLogger = {
   error: (message: string, data?: unknown) => log('error', message, data),
   child: () => consoleLogger
 }
+
+const visionHarnessType = visionHarnessTypeEnv('SLACKBOTV2_VISION_HARNESS')
 
 const options: SlackbotV2Options = {
   apiUrl,
@@ -97,6 +100,7 @@ const options: SlackbotV2Options = {
   stateKeyPrefix: optionalEnv('SLACKBOTV2_STATE_KEY_PREFIX'),
   streamTaskDisplayMode: streamTaskDisplayModeEnv('SLACKBOTV2_STREAM_TASK_DISPLAY_MODE'),
   userName: stringEnv('SLACKBOTV2_USER_NAME', 'centaur'),
+  visionHarnessType,
   visionModel: optionalEnv('SLACKBOTV2_VISION_MODEL'),
   logger: consoleLogger
 }
@@ -124,6 +128,7 @@ console.log(
     response_metadata_mode: options.responseMetadataMode,
     response_service_tier_enabled: options.responseServiceTierEnabled,
     stream_task_display_mode: options.streamTaskDisplayMode,
+    vision_harness_configured: Boolean(options.visionHarnessType),
     vision_model_configured: Boolean(options.visionModel),
     port: server.port,
     api_url: apiUrl
@@ -133,6 +138,15 @@ console.log(
 function optionalEnv(name: string): string | undefined {
   const value = process.env[name]?.trim()
   return value ? value : undefined
+}
+
+function visionHarnessTypeEnv(name: string): string | undefined {
+  const value = optionalEnv(name)
+  if (!value) return undefined
+  const normalized = normalizeHarnessOverrides({ harness: value }).harnessType
+  if (normalized) return normalized
+  consoleLogger.warn('slackbotv2 invalid vision harness', { name, value })
+  return undefined
 }
 
 function requiredEnv(name: string): string {

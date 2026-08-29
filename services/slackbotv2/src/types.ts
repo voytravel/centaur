@@ -229,6 +229,8 @@ export type SlackbotV2Options = {
   state?: StateAdapter
   stateKeyPrefix?: string
   streamTaskDisplayMode?: 'none' | 'plan' | 'timeline'
+  /** Harness used with visionModel for a new visual Slack thread. */
+  visionHarnessType?: string
   /** Model used for a new Slack execution with visual attachments. */
   visionModel?: string
   triggerBotAllowlist?: readonly string[]

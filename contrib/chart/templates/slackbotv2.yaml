@@ -96,6 +96,10 @@ spec:
             - name: SLACKBOTV2_VISION_MODEL
               value: {{ .Values.slackbotv2.visionModel | quote }}
 {{- end }}
+{{- if .Values.slackbotv2.visionHarness }}
+            - name: SLACKBOTV2_VISION_HARNESS
+              value: {{ .Values.slackbotv2.visionHarness | quote }}
+{{- end }}
             - name: SLACKBOTV2_RESPONSE_METADATA_MODE
               value: {{ .Values.slackbotv2.responseMetadataMode | quote }}
             - name: SLACKBOTV2_RESPONSE_SERVICE_TIER_ENABLED

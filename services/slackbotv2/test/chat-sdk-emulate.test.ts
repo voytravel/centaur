@@ -1914,6 +1914,99 @@ describe('slackbotv2', () => {
     expect(JSON.parse(codexApi.executes[0]!.body.input_lines.at(-1)!).model).toBe('gemini')
   })
 
+  it('routes a new visual thread to the configured Claude vision harness and model', async () => {
+    bot = createTestBot({
+      visionHarnessType: 'claudecode',
+      visionModel: 'claude-opus-4-8'
+    })
+    const parent = await postUserMessage('Visual request context.')
+    const mention = await postUserMessage(`<@${BOT_USER_ID}> inspect this screenshot`, parent.ts)
+    const waits: Promise<unknown>[] = []
+    const response = await bot.app.request(
+      '/api/webhooks/slack',
+      signedSlackEvent({
+        event_id: 'Ev-slackbotv2-vision-harness',
+        event: {
+          type: 'app_mention',
+          user: USER_ID,
+          channel: CHANNEL_ID,
+          team: TEAM_ID,
+          ts: mention.ts,
+          thread_ts: parent.ts,
+          text: `<@${BOT_USER_ID}> inspect this screenshot`,
+          files: [
+            {
+              id: 'F-vision-harness',
+              mimetype: 'image/png',
+              name: 'screenshot.png',
+              url_private: `${slackApi.url}/files/captured.png`
+            }
+          ]
+        }
+      }),
+      {},
+      waitUntilContext(waits)
+    )
+
+    expect(response.status).toBe(200)
+    await Promise.all(waits)
+    expect(codexApi.creates[0]!.body.harness_type).toBe('claudecode')
+    expect(codexApi.executes[0]!.body.metadata).toEqual(
+      expect.objectContaining({
+        harness_type: 'claudecode',
+        model: 'claude-opus-4-8'
+      })
+    )
+    expect(JSON.parse(codexApi.executes[0]!.body.input_lines.at(-1)!).model).toBe(
+      'claude-opus-4-8'
+    )
+  })
+
+  it('does not override an explicit Codex selection for a visual thread', async () => {
+    bot = createTestBot({
+      visionHarnessType: 'claudecode',
+      visionModel: 'claude-opus-4-8'
+    })
+    const parent = await postUserMessage('Explicit model request context.')
+    const mention = await postUserMessage(
+      `<@${BOT_USER_ID}> --codex --model glm-5.2-fp8 inspect this screenshot`,
+      parent.ts
+    )
+    const waits: Promise<unknown>[] = []
+    const response = await bot.app.request(
+      '/api/webhooks/slack',
+      signedSlackEvent({
+        event_id: 'Ev-slackbotv2-vision-explicit-codex',
+        event: {
+          type: 'app_mention',
+          user: USER_ID,
+          channel: CHANNEL_ID,
+          team: TEAM_ID,
+          ts: mention.ts,
+          thread_ts: parent.ts,
+          text: `<@${BOT_USER_ID}> --codex --model glm-5.2-fp8 inspect this screenshot`,
+          files: [
+            {
+              id: 'F-vision-explicit-codex',
+              mimetype: 'image/png',
+              name: 'screenshot.png',
+              url_private: `${slackApi.url}/files/captured.png`
+            }
+          ]
+        }
+      }),
+      {},
+      waitUntilContext(waits)
+    )
+
+    expect(response.status).toBe(200)
+    await Promise.all(waits)
+    expect(codexApi.creates[0]!.body.harness_type).toBe('codex')
+    expect(JSON.parse(codexApi.executes[0]!.body.input_lines.at(-1)!).model).toBe(
+      'glm-5.2-fp8'
+    )
+  })
+
   it('injects Slack requester identity and verified GitHub handle into Codex input', async () => {
     slackApi.setUserProfile(USER_ID, {
       name: 'akshaan',

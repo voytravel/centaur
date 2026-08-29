@@ -1170,7 +1170,8 @@ async function syncThreadMessageToSession(
   // (unlike it) ridden on the input line to take effect. harness/model/provider
   // are sticky (effectiveOverrides); reasoning is per-turn.
   const channelDefault = resolveChannelDefault(input.options.channelDefaults, thread.id)
-  const resolvedHarnessType = effectiveOverrides.harnessType ?? channelDefault?.harnessType
+  const configuredHarnessType = effectiveOverrides.harnessType ?? channelDefault?.harnessType
+  const stickyHarness = stickyOverrideRaw(state, stickyOverridesUpdate, 'harnessType')
   // A `null` sticky model/provider is a tombstone from a harness switch: honor
   // it, don't re-pair a stale channel default with the new harness. Only
   // `undefined` (never set) falls through to the channel default.
@@ -1181,7 +1182,6 @@ async function syncThreadMessageToSession(
     stickyOverrideRaw(state, stickyOverridesUpdate, 'provider') === null
       ? undefined
       : effectiveOverrides.provider ?? channelDefault?.provider
-  const effectiveHarnessType = resolvedHarnessType ?? input.options.defaultHarnessType ?? 'codex'
   if (overrides.harnessType || overrides.model || overrides.provider || overrides.reasoning) {
     traceLog(input.options, 'slackbotv2_forward_overrides_parsed', trace, {
       harness_type: overrides.harnessType,
@@ -1245,13 +1245,23 @@ async function syncThreadMessageToSession(
     )
   )
   // A channel default is deployment policy, not an explicit user override.
-  // Let a deployment configure a multimodal model for images while honoring a
-  // sticky or inline --model selection made by the user.
-  const resolvedModel =
+  // Let a deployment route the first visual execution to a paired multimodal
+  // harness/model while honoring any sticky or inline user selection. Do not
+  // switch a live thread's harness implicitly: a session keeps its harness for
+  // its lifetime and changing it would otherwise require a restart.
+  const selectVisionRoute =
     shouldStartExecution &&
+    isFirstAssistantMessage &&
     hasVisualAttachment &&
+    !stickyHarness &&
     !stickyModel &&
-    input.options.visionModel
+    Boolean(input.options.visionHarnessType || input.options.visionModel)
+  const resolvedHarnessType = selectVisionRoute
+    ? input.options.visionHarnessType ?? configuredHarnessType
+    : configuredHarnessType
+  const effectiveHarnessType = resolvedHarnessType ?? input.options.defaultHarnessType ?? 'codex'
+  const resolvedModel =
+    selectVisionRoute && input.options.visionModel
       ? input.options.visionModel
       : configuredModel
   // Without an explicit override or channel default the harness runs its
@@ -1301,7 +1311,9 @@ async function syncThreadMessageToSession(
     : undefined
   if (hasVisualAttachment) {
     traceLog(input.options, 'slackbotv2_visual_attachment_detected', trace, {
+      selected_vision_harness: selectVisionRoute && resolvedHarnessType === input.options.visionHarnessType,
       selected_vision_model: resolvedModel === input.options.visionModel,
+      vision_harness_configured: Boolean(input.options.visionHarnessType),
       vision_model_configured: Boolean(input.options.visionModel)
     })
   }

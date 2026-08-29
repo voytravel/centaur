@@ -553,8 +553,12 @@ slackbotv2:
   # Controls structured task rendering in Slack. Leave empty to retain the
   # runtime default (plan, or none when activity summaries are enabled).
   streamTaskDisplayMode: ""
-  # Optional multimodal model selected for a new execution when the Slack
-  # thread includes an image. Leave empty to keep the normal model selection.
+  # Optional paired harness/model selected for the first execution in a new
+  # Slack thread containing an image. Use the same harness vocabulary as
+  # channelDefaults (claude, codex, or nanocodex). Explicit/sticky thread
+  # selections always win, and an existing thread is never restarted just to
+  # switch to vision. Leave both empty to keep normal model selection.
+  visionHarness: ""
   visionModel: ""
   # Sticky percentage of otherwise-default Codex Slack threads assigned to
   # Nanocodex. A non-default model selection bypasses the rollout.
