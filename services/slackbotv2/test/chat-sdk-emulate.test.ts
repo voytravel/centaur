@@ -1854,6 +1854,7 @@ describe('slackbotv2', () => {
   })
 
   it('fetches attachments from preceding Slack thread messages for a mid-thread mention', async () => {
+    bot = createTestBot({ visionModel: 'gemini' })
     const parent = await postUserMessage('Root context before an attachment.')
     const priorReply = await postUserMessage('Screenshot is attached here.', parent.ts)
     const fileUrl = `${slackApi.url}/files/captured.png`
@@ -1910,6 +1911,7 @@ describe('slackbotv2', () => {
     expect(executeInput).toContain('"type":"attachment"')
     expect(executeInput).toContain(`"dataBase64":"${Buffer.from('captured-image').toString('base64')}"`)
     expect(executeInput).not.toContain('data:image/png;base64')
+    expect(JSON.parse(codexApi.executes[0]!.body.input_lines.at(-1)!).model).toBe('gemini')
   })
 
   it('injects Slack requester identity and verified GitHub handle into Codex input', async () => {
@@ -2553,7 +2555,7 @@ describe('slackbotv2', () => {
     expect(codexApi.executes).toHaveLength(2)
   })
 
-  it('steers an active execution with an enabled unmentioned thread reply without interrupting it', async () => {
+  it('keeps unmentioned replies out of an active execution even in legacy all mode', async () => {
     bot = createTestBot({ continueThreadReplies: true })
     codexApi.autoRespond = false
 
@@ -2626,26 +2628,180 @@ describe('slackbotv2', () => {
     expect(stopResponse.status).toBe(200)
     await Promise.all(stopWaits)
 
-    // Each handoff idempotently create-or-reuses the same session before
-    // appending; neither unmentioned reply starts a second execution.
-    expect(codexApi.creates).toHaveLength(3)
-    expect(codexApi.creates.map(create => create.threadKey)).toEqual([
-      threadKey(parent.ts),
-      threadKey(parent.ts),
-      threadKey(parent.ts)
-    ])
-    expect(codexApi.appends).toHaveLength(3)
-    expect(sessionMessageTexts(codexApi.appends[1]!.body.messages)).toEqual([
-      'Add this constraint while still running.'
-    ])
-    expect(sessionMessageTexts(codexApi.appends[2]!.body.messages)).toEqual(['stop'])
-    expect(codexApi.appends[1]!.body.messages[0]!.metadata.is_mention).toBe(false)
-    expect(codexApi.appends[2]!.body.messages[0]!.metadata.is_mention).toBe(false)
+    // Unmentioned replies remain in Slack history, but never steer an active
+    // run or turn a casual "stop" into an interrupt. A later explicit mention
+    // refreshes that history after the stream is done.
+    expect(codexApi.creates).toHaveLength(1)
+    expect(codexApi.appends).toHaveLength(1)
     expect(codexApi.executes).toHaveLength(1)
     expect(codexApi.streamCount).toBe(1)
 
     codexApi.closeStreams()
     await Promise.all(firstWaits)
+  })
+
+  it('runs only explicit actionable unmentioned replies in actionable mode', async () => {
+    bot = createTestBot({ threadReplyMode: 'actionable' })
+
+    const parent = await postUserMessage(`<@${BOT_USER_ID}> investigate this thread`)
+    const initialWaits: Promise<unknown>[] = []
+    await bot.app.request(
+      '/api/webhooks/slack',
+      signedSlackEvent({
+        event_id: 'Ev-slackbotv2-actionable-initial-mention',
+        event: {
+          type: 'app_mention',
+          user: USER_ID,
+          channel: CHANNEL_ID,
+          team: TEAM_ID,
+          ts: parent.ts,
+          text: `<@${BOT_USER_ID}> investigate this thread`
+        }
+      }),
+      {},
+      waitUntilContext(initialWaits)
+    )
+    await Promise.all(initialWaits)
+    expect(codexApi.executes).toHaveLength(1)
+
+    const discussion = await postUserMessage('Agreed — that diagnosis sounds off.', parent.ts)
+    const discussionWaits: Promise<unknown>[] = []
+    await bot.app.request(
+      '/api/webhooks/slack',
+      signedSlackEvent({
+        event_id: 'Ev-slackbotv2-actionable-discussion-ignored',
+        event: {
+          type: 'message',
+          user: USER_ID,
+          channel: CHANNEL_ID,
+          team: TEAM_ID,
+          ts: discussion.ts,
+          thread_ts: parent.ts,
+          text: 'Agreed — that diagnosis sounds off.'
+        }
+      }),
+      {},
+      waitUntilContext(discussionWaits)
+    )
+    await Promise.all(discussionWaits)
+    expect(codexApi.executes).toHaveLength(1)
+
+    const request = await postUserMessage('Please investigate the exact record.', parent.ts)
+    const requestWaits: Promise<unknown>[] = []
+    await bot.app.request(
+      '/api/webhooks/slack',
+      signedSlackEvent({
+        event_id: 'Ev-slackbotv2-actionable-read-only-request',
+        event: {
+          type: 'message',
+          user: USER_ID,
+          channel: CHANNEL_ID,
+          team: TEAM_ID,
+          ts: request.ts,
+          thread_ts: parent.ts,
+          text: 'Please investigate the exact record.'
+        }
+      }),
+      {},
+      waitUntilContext(requestWaits)
+    )
+    await Promise.all(requestWaits)
+    expect(codexApi.executes).toHaveLength(2)
+    const input = codexApi.executes[1]!.body.input_lines.join('\n')
+    expect(input).toContain('# Unmentioned Slack Thread Continuation')
+    expect(input).toContain('Do not edit files, commit, push')
+    expect(input).not.toContain('# Requester Context')
+  })
+
+  it('stops, mutes, and reactivates a subscribed Slack thread on a later mention', async () => {
+    bot = createTestBot()
+
+    const parent = await postUserMessage(`<@${BOT_USER_ID}> start this thread`)
+    const initialWaits: Promise<unknown>[] = []
+    await bot.app.request(
+      '/api/webhooks/slack',
+      signedSlackEvent({
+        event_id: 'Ev-slackbotv2-stop-thread-initial-mention',
+        event: {
+          type: 'app_mention',
+          user: USER_ID,
+          channel: CHANNEL_ID,
+          team: TEAM_ID,
+          ts: parent.ts,
+          text: `<@${BOT_USER_ID}> start this thread`
+        }
+      }),
+      {},
+      waitUntilContext(initialWaits)
+    )
+    await Promise.all(initialWaits)
+    expect(codexApi.executes).toHaveLength(1)
+
+    const stop = await postUserMessage(`<@${BOT_USER_ID}> stop`, parent.ts)
+    const stopWaits: Promise<unknown>[] = []
+    await bot.app.request(
+      '/api/webhooks/slack',
+      signedSlackEvent({
+        event_id: 'Ev-slackbotv2-stop-thread-command',
+        event: {
+          type: 'app_mention',
+          user: USER_ID,
+          channel: CHANNEL_ID,
+          team: TEAM_ID,
+          ts: stop.ts,
+          thread_ts: parent.ts,
+          text: `<@${BOT_USER_ID}> stop`
+        }
+      }),
+      {},
+      waitUntilContext(stopWaits)
+    )
+    await Promise.all(stopWaits)
+    expect(await threadText(parent.ts)).toContain('Stopped and muted this thread.')
+
+    const ignored = await postUserMessage('Fix this without another mention.', parent.ts)
+    const ignoredWaits: Promise<unknown>[] = []
+    await bot.app.request(
+      '/api/webhooks/slack',
+      signedSlackEvent({
+        event_id: 'Ev-slackbotv2-stop-thread-unmentioned-ignored',
+        event: {
+          type: 'message',
+          user: USER_ID,
+          channel: CHANNEL_ID,
+          team: TEAM_ID,
+          ts: ignored.ts,
+          thread_ts: parent.ts,
+          text: 'Fix this without another mention.'
+        }
+      }),
+      {},
+      waitUntilContext(ignoredWaits)
+    )
+    await Promise.all(ignoredWaits)
+    expect(codexApi.executes).toHaveLength(1)
+
+    const resume = await postUserMessage(`<@${BOT_USER_ID}> resume with a summary`, parent.ts)
+    const resumeWaits: Promise<unknown>[] = []
+    await bot.app.request(
+      '/api/webhooks/slack',
+      signedSlackEvent({
+        event_id: 'Ev-slackbotv2-stop-thread-resume-mention',
+        event: {
+          type: 'app_mention',
+          user: USER_ID,
+          channel: CHANNEL_ID,
+          team: TEAM_ID,
+          ts: resume.ts,
+          thread_ts: parent.ts,
+          text: `<@${BOT_USER_ID}> resume with a summary`
+        }
+      }),
+      {},
+      waitUntilContext(resumeWaits)
+    )
+    await Promise.all(resumeWaits)
+    expect(codexApi.executes).toHaveLength(2)
   })
 
   it('does not execute a second mention while a stream is already active', async () => {
@@ -6161,7 +6317,7 @@ async function handleMockCodexRequest(
     await sendWebResponse(res, Response.json({ ok: true }))
     return
   }
-  const match = /^\/api\/session\/([^/]+)(?:\/(messages|execute|events))?$/.exec(url.pathname)
+  const match = /^\/api\/session\/([^/]+)(?:\/(messages|execute|events|interrupt))?$/.exec(url.pathname)
   if (!match?.[1]) {
     await sendWebResponse(res, new Response('not found', { status: 404 }))
     return
@@ -6216,6 +6372,19 @@ async function handleMockCodexRequest(
     req.once('close', () => {
       input.streams.delete(res)
     })
+    return
+  }
+
+  if (endpoint === 'interrupt') {
+    await sendWebResponse(
+      res,
+      Response.json({
+        execution_id: 'exe-interrupted',
+        interrupted: true,
+        ok: true,
+        thread_key: threadKey
+      })
+    )
     return
   }
 

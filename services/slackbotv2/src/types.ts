@@ -5,6 +5,7 @@ import type { Hono } from 'hono'
 import type { ChannelDefaults } from './channel-defaults'
 import type { HarnessOverrides } from './overrides'
 import type { SlackDisplayTextSource } from './slack-display-text'
+import type { SlackThreadReplyMode } from './thread-reply-policy'
 
 export type JsonPrimitive = string | number | boolean | null
 export type JsonValue = JsonPrimitive | JsonObject | JsonValue[]
@@ -147,6 +148,12 @@ export type SlackbotV2Options = {
    */
   continueThreadReplies?: boolean
   /**
+   * Policy for unmentioned replies in a previously subscribed Slack thread.
+   * When absent, `continueThreadReplies` is honored for backwards
+   * compatibility; new deployments should use this explicit policy instead.
+   */
+  threadReplyMode?: SlackThreadReplyMode
+  /**
    * Public origin of the Console UI (same value the Console itself uses,
    * `CENTAUR_CONSOLE_PUBLIC_URL`). When set, the first assistant message in a
    * Slack thread gets an "Open chat in Console" context link. Unset skips the
@@ -222,6 +229,8 @@ export type SlackbotV2Options = {
   state?: StateAdapter
   stateKeyPrefix?: string
   streamTaskDisplayMode?: 'none' | 'plan' | 'timeline'
+  /** Model used for a new Slack execution with visual attachments. */
+  visionModel?: string
   triggerBotAllowlist?: readonly string[]
   userName?: string
   mapper?: CodexAppServerToChatStreamOptions
@@ -255,6 +264,8 @@ export type SlackbotV2ThreadState = {
   lastEventId?: number
   /** Last thread-level model selected by Slack flags. Null clears persisted state. */
   model?: string | null
+  /** True after `@Centaur stop`; an explicit mention reactivates the thread. */
+  muted?: boolean
   /** Last thread-level model provider selected by Slack flags. Null clears persisted state. */
   provider?: string | null
   renderObligation?: SlackbotV2RenderObligation | null
@@ -289,6 +300,11 @@ export type ForwardSessionInput = {
    * new harness still sees the thread history.
    */
   contextPreamble?: string
+  /**
+   * Transport-owned constraints added before the thread transcript. Unlike
+   * contextPreamble, this does not replace the normal Slack thread context.
+   */
+  instructionPreamble?: string
   executionId?: string
   executeMessage?: SlackbotV2ApiMessage
   /** Effective harness selected by Slack policy, including any rollout cohort. */

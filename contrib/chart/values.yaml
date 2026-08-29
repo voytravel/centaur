@@ -546,6 +546,16 @@ slackbotv2:
   # mention. Unmentioned replies remain unable to issue the deterministic stop
   # command or acquire requester credential context.
   continueThreadReplies: false
+  # Explicit policy for unmentioned replies in subscribed threads. Leave empty
+  # to retain the legacy continueThreadReplies behavior; new deployments
+  # should use mentions_only, actionable, or all.
+  threadReplyMode: ""
+  # Controls structured task rendering in Slack. Leave empty to retain the
+  # runtime default (plan, or none when activity summaries are enabled).
+  streamTaskDisplayMode: ""
+  # Optional multimodal model selected for a new execution when the Slack
+  # thread includes an image. Leave empty to keep the normal model selection.
+  visionModel: ""
   # Sticky percentage of otherwise-default Codex Slack threads assigned to
   # Nanocodex. A non-default model selection bypasses the rollout.
   codexNanocodexRolloutPercent: 0
