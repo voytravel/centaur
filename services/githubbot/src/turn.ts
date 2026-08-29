@@ -58,7 +58,20 @@ export type ReviewCommentContext = {
 export type TurnResult = {
   failed: boolean;
   fallbackText: string;
+  /**
+   * A deliberately coarse failure category. It is safe to use for a bounded
+   * model fallback decision, unlike raw provider error text which remains in
+   * the durable Console execution record only.
+   */
+  failureKind?: TurnFailureKind;
 };
+
+export type TurnFailureKind =
+  | "cancelled"
+  | "credential"
+  | "provider_unavailable"
+  | "unsupported_capability"
+  | "unknown";
 
 /**
  * Builds the only public reply path shared by comment and body-mention turns.
@@ -252,8 +265,11 @@ async function runTurnStreamInner(
         collector.update(chunk);
       }
       return {
-        failed: collector.failed,
+        failed: collector.failed || Boolean(fallback.error()),
         fallbackText: fallback.text(),
+        ...(collector.failed || fallback.error()
+          ? { failureKind: classifyTurnFailure(fallback.error()) }
+          : {}),
       };
     } catch (error) {
       if (
@@ -272,12 +288,14 @@ async function runTurnStreamInner(
       return {
         failed: true,
         fallbackText: "",
+        failureKind: classifyTurnFailure(errorMessage(error)),
       };
     }
   }
   return {
     failed: true,
     fallbackText: "",
+    failureKind: "unknown",
   };
 }
 
@@ -395,6 +413,7 @@ export async function runSessionTurn(input: {
  */
 export class GithubRenderFallback {
   private terminalText = "";
+  private terminalError = "";
 
   async *collectSource(
     stream: AsyncIterable<GithubbotRendererSource>,
@@ -409,6 +428,10 @@ export class GithubRenderFallback {
     return this.terminalText.trim();
   }
 
+  error(): string {
+    return this.terminalError.trim();
+  }
+
   private captureTerminalText(event: GithubbotRendererSource): void {
     if (!event || typeof event !== "object") return;
     const eventKind = String(
@@ -418,16 +441,19 @@ export class GithubRenderFallback {
           ? event.event
           : "",
     );
-    if (
-      eventKind !== "session.execution_completed" &&
-      eventKind !== "session.execution_cancelled"
-    ) {
-      return;
-    }
     const data =
       "data" in event && event.data && typeof event.data === "object"
         ? event.data
         : event;
+    if (
+      eventKind === "session.execution_failed" ||
+      eventKind === "session.stream_error" ||
+      eventKind === "session.execution_cancelled"
+    ) {
+      this.terminalError = terminalErrorText(data);
+      return;
+    }
+    if (eventKind !== "session.execution_completed") return;
     const text = terminalResultText(data);
     if (text) this.terminalText = text;
   }
@@ -442,6 +468,44 @@ function terminalResultText(event: unknown): string {
     if (resultText) return resultText;
   }
   return "";
+}
+
+function terminalErrorText(event: unknown): string {
+  if (!event || typeof event !== "object") return "Execution failed";
+  const error = (event as Record<string, unknown>).error;
+  return typeof error === "string" && error.trim()
+    ? error.trim()
+    : "Execution failed";
+}
+
+/**
+ * Permit automatic model fallback only for an exhausted provider transport or
+ * an explicitly unsupported model/capability. Authentication failures,
+ * cancellations, and all ambiguous failures remain visible for operators and
+ * never silently change the reviewing identity.
+ */
+export function classifyTurnFailure(value: string | undefined): TurnFailureKind {
+  const text = value?.toLowerCase() ?? "";
+  if (!text) return "unknown";
+  if (text.includes("cancelled")) return "cancelled";
+  if (
+    /\b(?:401|403)\b/.test(text) ||
+    /(?:unauthori[sz]ed|forbidden|invalid api key|invalid token|credential)/.test(text)
+  ) {
+    return "credential";
+  }
+  if (
+    /(?:not a multimodal model|unsupported (?:model|capability)|no endpoints? found|model .* not found|unknown model)/.test(text)
+  ) {
+    return "unsupported_capability";
+  }
+  if (
+    /\b(?:429|500|502|503|504)\b/.test(text) ||
+    /(?:timeout|timed out|overloaded|rate limit|temporarily unavailable|service unavailable|connection (?:reset|refused)|network error)/.test(text)
+  ) {
+    return "provider_unavailable";
+  }
+  return "unknown";
 }
 
 async function* streamSessionAfterHandoff(

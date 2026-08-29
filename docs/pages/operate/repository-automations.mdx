@@ -110,6 +110,29 @@ one bot cannot starve every other bot and adding bots cannot create an unbounded
 loop. The audit trace
 records changed-line counts and the exact classifier reasons for every review.
 
+### Cross-model review groups
+
+The default strategy is one reviewer. A reviewed, source-managed GitHub policy
+may opt into `review_orchestration.mode: "cross_model"` with two or three
+independent Centaur model profiles and one synthesizer. Each reviewer gets its
+own isolated PR session, model budget, and Console execution record; reviewers
+return structured reports privately. The synthesizer re-checks the live head
+and the relevant claims, then is the only profile allowed to publish the one
+consolidated GitHub review.
+
+The configuration is deliberately bounded: at most three reviewers, at most two
+fallback attempts per profile, three runs per profile per epoch, and a maximum
+of three concurrent reviewers. A fallback is used only after a provider outage
+or a confirmed unsupported model capability. Credential errors, cancellations,
+and ambiguous failures pause rather than silently changing models. Console
+records the requested and resolved model, reviewer ID, epoch, round, and any
+fallback category; GitHub receives neither model transcripts nor provider error
+details.
+
+External reviewers such as Cursor or Greptile are not Centaur profiles. Their
+existing GitHub reviews still feed the normal per-reviewer repair budgets, so
+adding them does not multiply automatic repair loops.
+
 Use allowed base-branch patterns such as `main` or `release/*`, required labels,
 and excluded labels to define eligibility. Existing assigned-review and
 bot-owned PR behavior remains available; the policy only extends automation to

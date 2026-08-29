@@ -2,6 +2,11 @@ import type { GitHubAdapter } from "@chat-adapter/github";
 import type { StateAdapter } from "chat";
 import { backgroundWaitUntil, runExclusive } from "./context";
 import { reactWorkingOnReview, settleReviewReaction } from "./reactions";
+import {
+  planCrossModelReview,
+  runCrossModelReview,
+  type CrossModelReviewOrchestration,
+} from "./review-orchestration";
 import { DEFAULT_REVIEW_PROMPT } from "./review-prompt";
 import { runTurnStream } from "./turn";
 import {
@@ -50,6 +55,8 @@ export type PolicyPrAutomation = {
   checks?: boolean;
   conflicts?: boolean;
   feedback?: boolean;
+  /** Optional policy-owned independent review group for eligible PRs. */
+  reviewOrchestration?: CrossModelReviewOrchestration;
 };
 
 const STATE_TTL_MS = 90 * 24 * 60 * 60 * 1000;
@@ -139,6 +146,8 @@ type ReviewEpochState = {
   /** False when the bounded file inventory could not represent the whole PR. */
   reviewedFilesComplete?: boolean;
   reviewedRiskSurfaces: ReviewRiskSurface[];
+  /** Per-profile review/synthesis runs already reserved in this epoch. */
+  reviewerRuns?: Record<string, number>;
   round: number;
 };
 
@@ -739,6 +748,7 @@ export async function handleAutomaticReview(
   ctx: PrManagerContext,
   rawBody: string,
   deliveryId: string,
+  automation?: PolicyPrAutomation,
 ): Promise<void> {
   const payload = parseJson(rawBody);
   if (!payload) return;
@@ -751,7 +761,7 @@ export async function handleAutomaticReview(
   // Serialize the complete read/classify/write decision across deliveries and
   // replicas so they cannot both advance (or regress) one PR's epoch state.
   await runReviewStateExclusive(ctx, repo.owner, repo.repo, number, () =>
-    handleAutomaticReviewLocked(ctx, payload, repo, number, deliveryId),
+    handleAutomaticReviewLocked(ctx, payload, repo, number, deliveryId, automation),
   );
 }
 
@@ -761,6 +771,7 @@ async function handleAutomaticReviewLocked(
   repo: { owner: string; repo: string },
   number: number,
   deliveryId: string,
+  automation?: PolicyPrAutomation,
 ): Promise<void> {
   const action = stringValue(payload.action);
   const explicitlyRequested = action === "review_requested";
@@ -854,6 +865,7 @@ async function handleAutomaticReviewLocked(
   let nextEpoch: ReviewEpochState;
   let scopeGuidance: string;
   let resetFeedbackBudget = false;
+  let forceSingleReview = false;
 
   if (humanContinuation) {
     // An explicit review request is the human override for an exhausted epoch
@@ -866,6 +878,7 @@ async function handleAutomaticReviewLocked(
       reviewedFiles: previous?.reviewedFiles ?? [],
       reviewedFilesComplete: previous?.reviewedFilesComplete ?? true,
       reviewedRiskSurfaces: previous?.reviewedRiskSurfaces ?? [],
+      reviewerRuns: {},
       round: 1,
     };
     resetFeedbackBudget = true;
@@ -882,6 +895,7 @@ async function handleAutomaticReviewLocked(
       reviewedFiles: [],
       reviewedFilesComplete: true,
       reviewedRiskSurfaces: [],
+      reviewerRuns: {},
       round: 1,
     };
     resetFeedbackBudget = true;
@@ -937,6 +951,7 @@ async function handleAutomaticReviewLocked(
         lastReviewedHeadSha: pr.headSha,
         reviewedChangedLines: currentSnapshot.changedLines,
       };
+      forceSingleReview = true;
       scopeGuidance =
         "The normal review budget is exhausted, but this delta touches an authorization or " +
         "security boundary. Inspect only the changed boundary for an evidence-backed P0 or " +
@@ -950,6 +965,7 @@ async function handleAutomaticReviewLocked(
         reviewedFiles: previous.reviewedFiles,
         reviewedFilesComplete: previous.reviewedFilesComplete ?? true,
         reviewedRiskSurfaces: previous.reviewedRiskSurfaces,
+        reviewerRuns: {},
         round: 1,
       };
       resetFeedbackBudget = true;
@@ -1007,6 +1023,25 @@ async function handleAutomaticReviewLocked(
     reviewedRiskSurfaces,
   };
 
+  // Reserve all selected profiles before background execution. A redelivery or
+  // process restart therefore cannot give a reviewer a fresh per-epoch budget.
+  // The critical-boundary exception deliberately retains its single-review
+  // path: once the normal epoch cap is exhausted, only evidence-backed P0 or
+  // security regressions deserve another turn.
+  const crossModelConfigured = Boolean(automation?.reviewOrchestration) && !forceSingleReview;
+  const crossModelPlan = crossModelConfigured
+    ? planCrossModelReview(
+        automation!.reviewOrchestration!,
+        nextEpoch.reviewerRuns,
+      )
+    : undefined;
+  if (crossModelPlan?.synthesizer) {
+    nextEpoch = {
+      ...nextEpoch,
+      reviewerRuns: crossModelPlan.reviewerRuns,
+    };
+  }
+
   // A push can land while comparison API calls are in flight. Re-read the
   // authoritative head immediately before committing state or starting work.
   const confirmedPr = await fetchPr(ctx, repo.owner, repo.repo, number);
@@ -1036,6 +1071,74 @@ async function handleAutomaticReviewLocked(
   await release(ctx, automaticReviewCapKey(ctx, repo.owner, repo.repo, number));
   if (resetFeedbackBudget) {
     await release(ctx, automatedFeedbackCapKey(ctx, repo.owner, repo.repo, number));
+  }
+
+  if (crossModelPlan?.synthesizer) {
+    const orchestration = automation!.reviewOrchestration!;
+    const pauseClaim = (ctx.options.stateKeyPrefix ?? "centaur-githubbot") +
+      `:cross-model-synthesis-pause:${repo.owner}/${repo.repo}#${number}:${pr.headSha}:e${nextEpoch.epoch}:r${nextEpoch.round}`;
+    backgroundWaitUntil(
+      runCrossModelReview({
+        currentHead: async () =>
+          (await fetchPr(ctx, repo.owner, repo.repo, number))?.headSha,
+        epoch: nextEpoch.epoch,
+        headSha: pr.headSha,
+        number,
+        onSynthesisFailure: () => postAutomationPauseComment(
+          ctx,
+          repo.owner,
+          repo.repo,
+          number,
+          pauseClaim,
+          "githubbot_cross_model_review_paused",
+          "Automatic cross-model review could not produce a synthesized result. " +
+            "No individual model report was published; inspect Centaur Console and request a human review.",
+        ),
+        options: ctx.options,
+        orchestration,
+        owner: repo.owner,
+        repo: repo.repo,
+        reviewers: crossModelPlan.reviewers,
+        round: nextEpoch.round,
+        synthesizer: crossModelPlan.synthesizer,
+        title: pr.title,
+      }).catch((error) => {
+        logger(ctx).warn("githubbot_cross_model_review_failed", {
+          error: errorMessage(error),
+          pr: `${repo.owner}/${repo.repo}#${number}`,
+        });
+      }),
+    );
+    traceLog(ctx.options, "githubbot_cross_model_review_started", makeTrace(
+      managementThreadKey(repo.owner, repo.repo, number),
+      "automatic-review-" + deliveryId,
+    ), {
+      changed_files: delta?.changedFiles.length,
+      changed_file_paths: delta?.changedFiles ?? [],
+      changed_lines: delta?.changedLines,
+      diff_growth: delta?.diffGrowth,
+      epoch: nextEpoch.epoch,
+      pr: repo.owner + "/" + repo.repo + "#" + number,
+      review_mode: "cross_model",
+      reviewer_ids: crossModelPlan.reviewers.map((profile) => profile.id),
+      round: nextEpoch.round,
+      scope_reasons: delta?.reasons ?? [],
+      synthesizer_id: crossModelPlan.synthesizer.id,
+    });
+    return;
+  }
+
+  if (crossModelConfigured) {
+    traceLog(ctx.options, "githubbot_cross_model_review_budget_exhausted", makeTrace(
+      managementThreadKey(repo.owner, repo.repo, number),
+      "automatic-review-" + deliveryId,
+    ), {
+      epoch: nextEpoch.epoch,
+      pr: repo.owner + "/" + repo.repo + "#" + number,
+      reviewer_runs: nextEpoch.reviewerRuns ?? {},
+      round: nextEpoch.round,
+    });
+    return;
   }
 
   const preamble = DEFAULT_REVIEW_PROMPT + "\n\n" +

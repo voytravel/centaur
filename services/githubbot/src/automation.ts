@@ -9,6 +9,8 @@ export type GithubAutomationDecision = {
   decision: "act" | "ignored" | "observe";
   policyId?: string;
   reason: string;
+  /** Policy-owned, untrusted JSON validated again at Githubbot's boundary. */
+  reviewOrchestration?: unknown;
   sessionKey: string;
   workstreamId?: string;
 };
@@ -283,6 +285,9 @@ async function submitEvent(
       decision,
       policyId: stringValue(data.policy_id),
       reason: stringValue(data.reason) ?? "policy result",
+      ...(data.review_orchestration === undefined
+        ? {}
+        : { reviewOrchestration: data.review_orchestration }),
       sessionKey,
       workstreamId: stringValue(data.workstream_id),
     };
