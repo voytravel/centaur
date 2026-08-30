@@ -160,7 +160,9 @@ class Console::AutomationPoliciesController < ApplicationController
       :linear_move_to_in_progress,
       linear_repository_routes: %i[
         repository
+        linear_project_ids
         required_labels
+        qa_enabled
         reviewer_logins
         reviewer_team_slugs
         preview_label
@@ -186,17 +188,21 @@ class Console::AutomationPoliciesController < ApplicationController
 
       route = route.to_h.with_indifferent_access
       repository = route[:repository].to_s.strip
+      project_ids = comma_list(route[:linear_project_ids]).map(&:downcase)
       labels = comma_list(route[:required_labels])
+      qa_enabled = boolean_value(route[:qa_enabled])
       reviewer_logins = comma_list(route[:reviewer_logins])
       reviewer_team_slugs = comma_list(route[:reviewer_team_slugs])
       preview_label = route[:preview_label].to_s.strip
-      blank_route = repository.blank? && labels.empty? && reviewer_logins.empty? &&
+      blank_route = repository.blank? && project_ids.empty? && labels.empty? && !qa_enabled && reviewer_logins.empty? &&
         reviewer_team_slugs.empty? && preview_label.blank?
       next if blank_route
 
       {
         "repository" => repository,
+        "linear_project_ids" => project_ids.presence,
         "required_labels" => labels,
+        "qa_enabled" => (true if qa_enabled),
         "reviewer_logins" => reviewer_logins.presence,
         "reviewer_team_slugs" => reviewer_team_slugs.presence,
         "preview_label" => preview_label.presence

@@ -441,7 +441,7 @@ class AutomationEventIngestorTest < ActiveSupport::TestCase
             },
             {
               "repository" => "acme/travel",
-              "required_labels" => [ "repo:travel" ],
+              "linear_project_ids" => [ "11111111-1111-1111-1111-111111111111" ],
               "preview_label" => "preview"
             }
           ]
@@ -458,7 +458,8 @@ class AutomationEventIngestorTest < ActiveSupport::TestCase
       "linear_team_id" => "team-1",
       "title" => "Implement travel UI",
       "description" => "Ready to ship",
-      "labels" => [ "repo:travel" ]
+      "labels" => [],
+      "linear_project_id" => "11111111-1111-1111-1111-111111111111"
     }
 
     first = AutomationEventIngestor.new(input).call

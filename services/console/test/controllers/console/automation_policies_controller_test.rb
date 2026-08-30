@@ -114,13 +114,16 @@ class Console::AutomationPoliciesControllerTest < ActionDispatch::IntegrationTes
           linear_repository_routes: {
             "0" => {
               repository: "acme/widgets",
+              linear_project_ids: "11111111-1111-1111-1111-111111111111",
               required_labels: "repo:widgets",
+              qa_enabled: "1",
               reviewer_logins: "octocat",
               reviewer_team_slugs: "",
               preview_label: ""
             },
             "1" => {
               repository: "acme/web",
+              linear_project_ids: "",
               required_labels: "repo:web",
               reviewer_logins: "",
               reviewer_team_slugs: "frontend",
@@ -128,6 +131,7 @@ class Console::AutomationPoliciesControllerTest < ActionDispatch::IntegrationTes
             },
             "2" => {
               repository: "",
+              linear_project_ids: "",
               required_labels: "",
               reviewer_logins: "",
               reviewer_team_slugs: "",
@@ -145,7 +149,9 @@ class Console::AutomationPoliciesControllerTest < ActionDispatch::IntegrationTes
       [
         {
           "repository" => "acme/widgets",
+          "linear_project_ids" => [ "11111111-1111-1111-1111-111111111111" ],
           "required_labels" => [ "repo:widgets" ],
+          "qa_enabled" => true,
           "reviewer_logins" => [ "octocat" ]
         },
         {

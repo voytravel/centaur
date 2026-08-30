@@ -458,7 +458,7 @@ class AutomationPolicyTest < ActiveSupport::TestCase
     assert_not policy.requires_execution_role?
   end
 
-  test "routes ready Linear issues to one explicitly label-matched repository" do
+  test "routes ready Linear issues to one explicitly project- or label-matched repository" do
     policy = AutomationPolicy.create!(
       name: "Routed Linear issues",
       provider: "linear",
@@ -478,7 +478,7 @@ class AutomationPolicyTest < ActiveSupport::TestCase
             },
             {
               "repository" => "acme/travel",
-              "required_labels" => [ "repo:travel" ],
+              "linear_project_ids" => [ "11111111-1111-1111-1111-111111111111" ],
               "reviewer_logins" => [ "octocat" ],
               "reviewer_team_slugs" => [ "product" ],
               "preview_label" => "preview"
@@ -494,7 +494,8 @@ class AutomationPolicyTest < ActiveSupport::TestCase
       "linear_team_id" => "team-1",
       "title" => "Ship travel UI",
       "description" => "Acceptance Criteria\n- It is shippable.",
-      "labels" => [ "agent:ready", "repo:travel" ]
+      "labels" => [ "agent:ready" ],
+      "linear_project_id" => "11111111-1111-1111-1111-111111111111"
     )
 
     assert_equal "act", routed["decision"]
@@ -510,10 +511,11 @@ class AutomationPolicyTest < ActiveSupport::TestCase
       "linear_team_id" => "team-1",
       "title" => "Ship unknown UI",
       "description" => "Acceptance Criteria\n- It is shippable.",
-      "labels" => [ "agent:ready" ]
+      "labels" => [ "agent:ready" ],
+      "linear_project_id" => "22222222-2222-2222-2222-222222222222"
     )
     assert_equal "ignored", unmatched["decision"]
-    assert_equal "no configured repository route matches issue labels", unmatched["reason"]
+    assert_equal "no configured repository route matches issue labels or project", unmatched["reason"]
 
     ambiguous = policy.evaluate(
       "event_type" => "Issue",
@@ -521,10 +523,11 @@ class AutomationPolicyTest < ActiveSupport::TestCase
       "linear_team_id" => "team-1",
       "title" => "Ship conflicting UI",
       "description" => "Acceptance Criteria\n- It is shippable.",
-      "labels" => [ "agent:ready", "repo:widgets", "repo:travel" ]
+      "labels" => [ "agent:ready", "repo:widgets" ],
+      "linear_project_id" => "11111111-1111-1111-1111-111111111111"
     )
     assert_equal "ignored", ambiguous["decision"]
-    assert_equal "multiple configured repository routes match issue labels", ambiguous["reason"]
+    assert_equal "multiple configured repository routes match issue labels or project", ambiguous["reason"]
   end
 
   test "requires a verified, fully qualified Linear issue for a manual mention" do
@@ -594,6 +597,65 @@ class AutomationPolicyTest < ActiveSupport::TestCase
     assert_equal "issue description is missing", incomplete["reason"]
   end
 
+  test "runs deterministic QA only for an explicitly QA-enabled repository route" do
+    policy = AutomationPolicy.create!(
+      name: "Routed QA",
+      provider: "linear",
+      linear_team_id: "team-1",
+      enabled: true,
+      mode: "act",
+      created_by: users(:acme_admin),
+      settings: {
+        "linear" => {
+          "issue" => "off",
+          "qa" => "status_transition",
+          "qa_statuses" => [ "QA" ],
+          "repository_routes" => [
+            {
+              "repository" => "acme/widgets",
+              "linear_project_ids" => [ "11111111-1111-1111-1111-111111111111" ],
+              "qa_enabled" => true
+            },
+            {
+              "repository" => "acme/infra",
+              "linear_project_ids" => [ "22222222-2222-2222-2222-222222222222" ],
+              "qa_enabled" => false
+            }
+          ]
+        }
+      }
+    )
+
+    qa = policy.evaluate(
+      "event_type" => "Issue",
+      "event_action" => "update",
+      "linear_team_id" => "team-1",
+      "linear_project_id" => "11111111-1111-1111-1111-111111111111",
+      "title" => "Verify widget",
+      "description" => "Ready for QA",
+      "status" => "QA",
+      "updated_fields" => [ "stateId" ],
+      "labels" => []
+    )
+    assert_equal "act", qa["decision"]
+    assert_equal [ "run_qa" ], qa["actions"]
+    assert_equal "acme/widgets", qa["github_repository"]
+
+    excluded = policy.evaluate(
+      "event_type" => "Issue",
+      "event_action" => "update",
+      "linear_team_id" => "team-1",
+      "linear_project_id" => "22222222-2222-2222-2222-222222222222",
+      "title" => "Verify infrastructure",
+      "description" => "Ready for QA",
+      "status" => "QA",
+      "updated_fields" => [ "stateId" ],
+      "labels" => []
+    )
+    assert_equal "ignored", excluded["decision"]
+    assert_equal "ready issue automation is disabled", excluded["reason"]
+  end
+
   test "requires repository routes to be explicit" do
     policy = AutomationPolicy.new(
       name: "Unsafe routes",
@@ -621,8 +683,40 @@ class AutomationPolicyTest < ActiveSupport::TestCase
 
     assert_not policy.valid?
     assert_includes policy.errors[:settings], "must use either a GitHub repository or repository routes, not both"
-    assert_includes policy.errors[:settings], "repository route 1 needs at least one required label"
+    assert_includes policy.errors[:settings], "repository route 1 needs at least one project or label selector"
     assert_includes policy.errors[:settings], "repository route 2 has unsupported fields"
+  end
+
+  test "rejects invalid and overlapping Linear project route selectors" do
+    policy = AutomationPolicy.new(
+      name: "Unsafe project routes",
+      provider: "linear",
+      linear_team_id: "team-1",
+      created_by: users(:acme_admin),
+      settings: {
+        "linear" => {
+          "issue" => "ready_issues",
+          "repository_routes" => [
+            {
+              "repository" => "acme/widgets",
+              "linear_project_ids" => [ "not-a-linear-project-id" ]
+            },
+            {
+              "repository" => "acme/travel",
+              "linear_project_ids" => [ "11111111-1111-1111-1111-111111111111" ]
+            },
+            {
+              "repository" => "acme/other",
+              "linear_project_ids" => [ "11111111-1111-1111-1111-111111111111" ]
+            }
+          ]
+        }
+      }
+    )
+
+    assert_not policy.valid?
+    assert_includes policy.errors[:settings], "repository route 1 has invalid Linear project IDs"
+    assert_includes policy.errors[:settings], "repository route 3 repeats a Linear project ID from route 2"
   end
 
   test "allows distinct label routes to share a repository" do
