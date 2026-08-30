@@ -16,7 +16,9 @@ class AutomationPolicy < ApplicationRecord
   ACTIVITY_REPORT_KINDS = %w[accepted pr_created].freeze
   LINEAR_REPOSITORY_ROUTE_KEYS = %w[
     repository
+    linear_project_ids
     required_labels
+    qa_enabled
     reviewer_logins
     reviewer_team_slugs
     preview_label
@@ -25,6 +27,7 @@ class AutomationPolicy < ApplicationRecord
   MANAGED_SOURCE_FIELDS = %w[kind repository path revision content_sha256].freeze
   GITHUB_REPOSITORY_PATTERN = /\A[A-Za-z0-9][A-Za-z0-9_.-]*\/[A-Za-z0-9][A-Za-z0-9_.-]*\z/.freeze
   SLACK_CHANNEL_ID_PATTERN = /\A[CG][A-Z0-9]{8,}\z/.freeze
+  LINEAR_PROJECT_ID_PATTERN = /\A[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\z/i.freeze
   QA_ID_PATTERN = /\A[a-z][a-z0-9_-]{0,63}\z/.freeze
   GITHUB_REVIEW_PROFILE_ID_PATTERN = /\A[a-z][a-z0-9_-]{0,31}\z/.freeze
   GITHUB_REVIEW_MODEL_PATTERN = /\A[A-Za-z0-9][A-Za-z0-9._\/-]{0,127}\z/.freeze
@@ -291,7 +294,7 @@ class AutomationPolicy < ApplicationRecord
     normalized["repository_routes"] = Array(config["repository_routes"]).map do |route|
       next route unless route.is_a?(Hash)
 
-      route.deep_stringify_keys.transform_values do |value|
+      normalized_route = route.deep_stringify_keys.transform_values do |value|
         case value
         when Array
           value.filter_map { |item| item.to_s.strip.presence }.uniq
@@ -301,6 +304,10 @@ class AutomationPolicy < ApplicationRecord
           value
         end
       end
+      if normalized_route["linear_project_ids"].is_a?(Array)
+        normalized_route["linear_project_ids"] = normalized_route["linear_project_ids"].map(&:downcase)
+      end
+      normalized_route
     end
     normalized
   end
@@ -592,12 +599,12 @@ class AutomationPolicy < ApplicationRecord
       return ignored("event is not a verified bot mention") unless event["mentioned_bot"] == true
     end
 
-    qa_transition = linear_qa_transition?(event, config)
-    ready, reason = linear_issue_ready?(event, config, enforce_ready_status: !qa_transition)
-    return ignored(reason) unless ready
-
     route, route_reason = linear_repository_route_for(event, config)
     return ignored(route_reason) unless route
+
+    qa_transition = linear_qa_transition?(event, config, route)
+    ready, reason = linear_issue_ready?(event, config, enforce_ready_status: !qa_transition)
+    return ignored(reason) unless ready
 
     if qa_transition
       return routed([ "run_qa" ], linear_route: route)
@@ -609,8 +616,12 @@ class AutomationPolicy < ApplicationRecord
     routed(actions, linear_route: route)
   end
 
-  def linear_qa_transition?(event, config)
+  def linear_qa_transition?(event, config, route)
     return false unless config["qa"] == "status_transition"
+    # A legacy single-repository QA policy retains its established behavior.
+    # A routed policy must explicitly opt a repository into the fixed QA
+    # executor, so an unrelated project cannot accidentally dispatch it.
+    return false if Array(config["repository_routes"]).any? && route["qa_enabled"] != true
 
     qa_statuses = Array(config["qa_statuses"]).map(&:downcase)
     return false unless qa_statuses.include?(event["status"].to_s.downcase)
@@ -728,12 +739,19 @@ class AutomationPolicy < ApplicationRecord
     return [ legacy_linear_repository_route(config), nil ] if routes.empty?
 
     labels = Array(event["labels"]).map { |label| label.to_s.downcase }
+    project_id = event["linear_project_id"].to_s.strip.downcase
     matches = routes.select do |route|
-      required = Array(route["required_labels"]).map(&:downcase)
-      (required - labels).empty?
+      route = route.deep_stringify_keys
+      required_labels = Array(route["required_labels"]).map(&:downcase)
+      project_ids = Array(route["linear_project_ids"]).filter_map do |candidate|
+        candidate.to_s.strip.presence&.downcase
+      end
+      label_match = required_labels.any? && (required_labels - labels).empty?
+      project_match = project_ids.any? && project_ids.include?(project_id)
+      label_match || project_match
     end
-    return [ nil, "no configured repository route matches issue labels" ] if matches.empty?
-    return [ nil, "multiple configured repository routes match issue labels" ] if matches.many?
+    return [ nil, "no configured repository route matches issue labels or project" ] if matches.empty?
+    return [ nil, "multiple configured repository routes match issue labels or project" ] if matches.many?
 
     [ matches.first, nil ]
   end
@@ -793,6 +811,7 @@ class AutomationPolicy < ApplicationRecord
       errors.add(:settings, "needs a GitHub repository or repository routes for Linear automation")
     end
 
+    seen_project_ids = {}
     routes.each_with_index do |route, index|
       unless route.is_a?(Hash)
         errors.add(:settings, "repository route #{index + 1} must be an object")
@@ -807,9 +826,33 @@ class AutomationPolicy < ApplicationRecord
         errors.add(:settings, "repository route #{index + 1} needs a GitHub repository")
       end
 
-      labels = route["required_labels"]
-      unless labels.is_a?(Array) && labels.all? { |label| label.is_a?(String) && label.present? } && labels.any?
-        errors.add(:settings, "repository route #{index + 1} needs at least one required label")
+      labels = route.key?("required_labels") ? route["required_labels"] : []
+      labels_valid = labels.is_a?(Array) && labels.all? { |label| label.is_a?(String) && label.present? }
+      errors.add(:settings, "repository route #{index + 1} has invalid required labels") unless labels_valid
+
+      project_ids = route.key?("linear_project_ids") ? route["linear_project_ids"] : []
+      project_ids_valid = project_ids.is_a?(Array) && project_ids.all? do |project_id|
+        project_id.is_a?(String) && LINEAR_PROJECT_ID_PATTERN.match?(project_id)
+      end
+      errors.add(:settings, "repository route #{index + 1} has invalid Linear project IDs") unless project_ids_valid
+
+      if labels_valid && project_ids_valid && labels.empty? && project_ids.empty?
+        errors.add(:settings, "repository route #{index + 1} needs at least one project or label selector")
+      end
+
+      if route.key?("qa_enabled") && !boolean?(route["qa_enabled"])
+        errors.add(:settings, "repository route #{index + 1} has an invalid QA setting")
+      end
+
+      if project_ids_valid
+        project_ids.each do |project_id|
+          previous_index = seen_project_ids[project_id.downcase]
+          if previous_index
+            errors.add(:settings, "repository route #{index + 1} repeats a Linear project ID from route #{previous_index}")
+          else
+            seen_project_ids[project_id.downcase] = index + 1
+          end
+        end
       end
 
       %w[reviewer_logins reviewer_team_slugs].each do |field|

@@ -154,21 +154,23 @@ pick up new or updated issues only when configured readiness checks pass:
 - excluded labels such as `no-agent`.
 
 Map a simple policy to one GitHub repository and optional reviewers. For a
-project that contains work for more than one repository, use explicit
-label-based repository routes instead of asking the agent to infer a target.
-Each ready issue must match exactly one route; zero or multiple matching routes
-are recorded as an ignored decision and cannot start a sandbox. A route may
-override reviewers and declare an opt-in preview label for that repository:
+team-wide policy, use explicit repository routes instead of asking the agent to
+infer a target. A route can select a Linear project ID, required issue labels,
+or both; if both are present, either selector can choose that same reviewed
+repository. Each ready issue must match exactly one route; zero or multiple
+matching routes are recorded as an ignored decision and cannot start a sandbox.
+A route may override reviewers, opt into the fixed QA executor for that
+repository, and declare an opt-in preview label:
 
 ```json
 {
   "linear": {
     "issue": "ready_issues",
-    "required_labels": ["agent:ready"],
     "repository_routes": [
       {
         "repository": "acme/widgets",
-        "required_labels": ["repo:widgets"]
+        "linear_project_ids": ["00000000-0000-0000-0000-000000000000"],
+        "qa_enabled": true
       },
       {
         "repository": "acme/web",
@@ -188,9 +190,14 @@ a user-visible change. It must be an already-reviewed repository label whose
 workflow creates a real preview; the agent reports a URL only after verifying
 it from the PR's checks or comments.
 
-In Console, native (non-source-managed) Linear policies expose the same route
-fields as labelled rows. Source-managed policies stay read-only in Console and
-must be changed in their reviewed configuration before deployment.
+When a routed policy also enables deterministic QA orchestration,
+`qa_enabled: true` is required on the selected route. This keeps a QA status
+transition for another repository from accidentally dispatching a fixed QA
+workflow. Legacy single-repository QA policies remain compatible.
+
+In Console, native (non-source-managed) Linear policies expose the same
+project-ID and label route fields. Source-managed policies stay read-only in
+Console and must be changed in their reviewed configuration before deployment.
 
 The agent re-checks readiness before coding, opens a linked PR without merging
 it, requests the configured human reviewers, and attaches a real verified
