@@ -198,6 +198,28 @@ class Console::WorkflowsControllerTest < ActionDispatch::IntegrationTest
     assert_select "button", text: "Approve scoped action"
   end
 
+  test "renders an approval-required finding from a Python workflow-host result envelope" do
+    run = fake_run(workflow_name: "github_dependency_maintenance")
+    detail = maintenance_run_detail(run.run_id)
+    payload = detail.fetch("result")
+    detail["result"] = {
+      "output" => payload,
+      "run_id" => run.run_id,
+      "steps" => [ "python_host" ],
+      "task_id" => run.task_id,
+      "workflow_name" => "github_dependency_maintenance"
+    }
+    with_api_client(FakeApiClient.new(run_details: { run.run_id => detail }))
+
+    with_workflow_history("github_dependency_maintenance", runs: [ run ]) do
+      get console_workflow_url("github_dependency_maintenance", run_id: run.run_id)
+    end
+
+    assert_response :ok
+    assert_select "h2", text: "Approval-required findings"
+    assert_select "button", text: "Approve scoped action"
+  end
+
   test "approving a validated dependency finding queues one scoped action with a durable idempotency key" do
     source_run_id = "run-observation-1"
     client = FakeApiClient.new(run_details: { source_run_id => maintenance_run_detail(source_run_id) })
