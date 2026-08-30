@@ -474,7 +474,8 @@ class AutomationPolicyTest < ActiveSupport::TestCase
           "repository_routes" => [
             {
               "repository" => "acme/widgets",
-              "required_labels" => [ "repo:widgets" ]
+              "required_labels" => [ "repo:widgets" ],
+              "label_project_ids" => [ "11111111-1111-1111-1111-111111111111" ]
             },
             {
               "repository" => "acme/travel",
@@ -528,6 +529,18 @@ class AutomationPolicyTest < ActiveSupport::TestCase
     )
     assert_equal "act", label_override["decision"]
     assert_equal "acme/widgets", label_override["github_repository"]
+
+    off_scope_label = policy.evaluate(
+      "event_type" => "Issue",
+      "event_action" => "update",
+      "linear_team_id" => "team-1",
+      "title" => "Ship an unrelated widget",
+      "description" => "Acceptance Criteria\n- It is shippable.",
+      "labels" => [ "agent:ready", "repo:widgets" ],
+      "linear_project_id" => "22222222-2222-2222-2222-222222222222"
+    )
+    assert_equal "ignored", off_scope_label["decision"]
+    assert_equal "no configured repository route matches issue labels or project", off_scope_label["reason"]
   end
 
   test "rejects overlapping explicit Linear label routes even with a project default" do
@@ -743,7 +756,8 @@ class AutomationPolicyTest < ActiveSupport::TestCase
           "repository_routes" => [
             {
               "repository" => "acme/widgets",
-              "linear_project_ids" => [ "not-a-linear-project-id" ]
+              "linear_project_ids" => [ "not-a-linear-project-id" ],
+              "label_project_ids" => [ "also-not-a-linear-project-id" ]
             },
             {
               "repository" => "acme/travel",
@@ -760,6 +774,7 @@ class AutomationPolicyTest < ActiveSupport::TestCase
 
     assert_not policy.valid?
     assert_includes policy.errors[:settings], "repository route 1 has invalid Linear project IDs"
+    assert_includes policy.errors[:settings], "repository route 1 has invalid label project IDs"
     assert_includes policy.errors[:settings], "repository route 3 repeats a Linear project ID from route 2"
   end
 

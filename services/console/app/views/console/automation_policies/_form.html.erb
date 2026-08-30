@@ -293,7 +293,7 @@
       </div>
       <details class="rounded border border-ink-700 bg-ink-900/50 p-4 lg:col-span-2" <%= "open" if repository_routes.any? %>>
         <summary class="cursor-pointer text-sm font-medium text-zinc-200">Route Linear projects or issue labels to repositories</summary>
-        <p class="mt-3 text-xs text-zinc-500">Optional. Each non-empty route needs at least one Linear project ID or label selector. A matching label route overrides a project route; otherwise the project route applies. The selected selector kind must match exactly one route. Zero or multiple matches are recorded and stopped before an agent starts. Filling a route uses routes instead of the single repository above.</p>
+        <p class="mt-3 text-xs text-zinc-500">Optional. Each non-empty route needs at least one Linear project ID or label selector. A matching label route overrides a project route; otherwise the project route applies. Scope a label override to selected projects when needed. The selected selector kind must match exactly one route. Zero or multiple matches are recorded and stopped before an agent starts. Filling a route uses routes instead of the single repository above.</p>
         <div class="mt-4 space-y-4">
           <% repository_route_slots.each_with_index do |route, index| %>
             <% route = route.deep_stringify_keys %>
@@ -320,6 +320,13 @@
                                      id: "automation_policy_linear_repository_routes_#{index}_required_labels",
                                      placeholder: "repo:web",
                                      class: "form-input" %>
+                </div>
+                <div>
+                  <label class="mb-1 block text-xs text-zinc-400" for="automation_policy_linear_repository_routes_<%= index %>_label_project_ids">Label project IDs</label>
+                  <%= text_field_tag "automation_policy[linear_repository_routes][#{index}][label_project_ids]", Array(route["label_project_ids"]).join(", "),
+                                     id: "automation_policy_linear_repository_routes_#{index}_label_project_ids",
+                                     placeholder: "00000000-0000-0000-0000-000000000000",
+                                     class: "form-input font-mono" %>
                 </div>
                 <label class="flex items-center gap-2 pt-6 text-xs text-zinc-400" for="automation_policy_linear_repository_routes_<%= index %>_qa_enabled">
                   <%= check_box_tag "automation_policy[linear_repository_routes][#{index}][qa_enabled]", "1", route["qa_enabled"] == true,

@@ -162,6 +162,7 @@ class Console::AutomationPoliciesController < ApplicationController
         repository
         linear_project_ids
         required_labels
+        label_project_ids
         qa_enabled
         reviewer_logins
         reviewer_team_slugs
@@ -190,11 +191,12 @@ class Console::AutomationPoliciesController < ApplicationController
       repository = route[:repository].to_s.strip
       project_ids = comma_list(route[:linear_project_ids]).map(&:downcase)
       labels = comma_list(route[:required_labels])
+      label_project_ids = comma_list(route[:label_project_ids]).map(&:downcase)
       qa_enabled = boolean_value(route[:qa_enabled])
       reviewer_logins = comma_list(route[:reviewer_logins])
       reviewer_team_slugs = comma_list(route[:reviewer_team_slugs])
       preview_label = route[:preview_label].to_s.strip
-      blank_route = repository.blank? && project_ids.empty? && labels.empty? && !qa_enabled && reviewer_logins.empty? &&
+      blank_route = repository.blank? && project_ids.empty? && labels.empty? && label_project_ids.empty? && !qa_enabled && reviewer_logins.empty? &&
         reviewer_team_slugs.empty? && preview_label.blank?
       next if blank_route
 
@@ -202,6 +204,7 @@ class Console::AutomationPoliciesController < ApplicationController
         "repository" => repository,
         "linear_project_ids" => project_ids.presence,
         "required_labels" => labels,
+        "label_project_ids" => label_project_ids.presence,
         "qa_enabled" => (true if qa_enabled),
         "reviewer_logins" => reviewer_logins.presence,
         "reviewer_team_slugs" => reviewer_team_slugs.presence,
