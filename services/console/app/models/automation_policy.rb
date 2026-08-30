@@ -740,16 +740,22 @@ class AutomationPolicy < ApplicationRecord
 
     labels = Array(event["labels"]).map { |label| label.to_s.downcase }
     project_id = event["linear_project_id"].to_s.strip.downcase
-    matches = routes.select do |route|
+    label_matches = routes.select do |route|
       route = route.deep_stringify_keys
       required_labels = Array(route["required_labels"]).map(&:downcase)
-      project_ids = Array(route["linear_project_ids"]).filter_map do |candidate|
+      required_labels.any? && (required_labels - labels).empty?
+    end
+    project_matches = routes.select do |route|
+      project_ids = Array(route.deep_stringify_keys["linear_project_ids"]).filter_map do |candidate|
         candidate.to_s.strip.presence&.downcase
       end
-      label_match = required_labels.any? && (required_labels - labels).empty?
-      project_match = project_ids.any? && project_ids.include?(project_id)
-      label_match || project_match
+      project_ids.any? && project_ids.include?(project_id)
     end
+
+    # A label is an intentional, issue-level routing override. It wins over a
+    # project default, while still failing closed when labels themselves match
+    # more than one configured route.
+    matches = label_matches.presence || project_matches
     return [ nil, "no configured repository route matches issue labels or project" ] if matches.empty?
     return [ nil, "multiple configured repository routes match issue labels or project" ] if matches.many?
 

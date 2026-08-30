@@ -293,7 +293,7 @@
       </div>
       <details class="rounded border border-ink-700 bg-ink-900/50 p-4 lg:col-span-2" <%= "open" if repository_routes.any? %>>
         <summary class="cursor-pointer text-sm font-medium text-zinc-200">Route Linear projects or issue labels to repositories</summary>
-        <p class="mt-3 text-xs text-zinc-500">Optional. Each non-empty route needs at least one Linear project ID or label selector. A route matches when either selector matches, and a ready issue must match exactly one route. Zero or multiple matches are recorded and stopped before an agent starts. Filling a route uses routes instead of the single repository above.</p>
+        <p class="mt-3 text-xs text-zinc-500">Optional. Each non-empty route needs at least one Linear project ID or label selector. A matching label route overrides a project route; otherwise the project route applies. The selected selector kind must match exactly one route. Zero or multiple matches are recorded and stopped before an agent starts. Filling a route uses routes instead of the single repository above.</p>
         <div class="mt-4 space-y-4">
           <% repository_route_slots.each_with_index do |route, index| %>
             <% route = route.deep_stringify_keys %>

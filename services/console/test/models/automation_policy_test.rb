@@ -458,7 +458,7 @@ class AutomationPolicyTest < ActiveSupport::TestCase
     assert_not policy.requires_execution_role?
   end
 
-  test "routes ready Linear issues to one explicitly project- or label-matched repository" do
+  test "routes ready Linear issues by project, with an explicit label override" do
     policy = AutomationPolicy.create!(
       name: "Routed Linear issues",
       provider: "linear",
@@ -517,7 +517,7 @@ class AutomationPolicyTest < ActiveSupport::TestCase
     assert_equal "ignored", unmatched["decision"]
     assert_equal "no configured repository route matches issue labels or project", unmatched["reason"]
 
-    ambiguous = policy.evaluate(
+    label_override = policy.evaluate(
       "event_type" => "Issue",
       "event_action" => "update",
       "linear_team_id" => "team-1",
@@ -526,8 +526,52 @@ class AutomationPolicyTest < ActiveSupport::TestCase
       "labels" => [ "agent:ready", "repo:widgets" ],
       "linear_project_id" => "11111111-1111-1111-1111-111111111111"
     )
-    assert_equal "ignored", ambiguous["decision"]
-    assert_equal "multiple configured repository routes match issue labels or project", ambiguous["reason"]
+    assert_equal "act", label_override["decision"]
+    assert_equal "acme/widgets", label_override["github_repository"]
+  end
+
+  test "rejects overlapping explicit Linear label routes even with a project default" do
+    policy = AutomationPolicy.create!(
+      name: "Ambiguous label override",
+      provider: "linear",
+      linear_team_id: "team-1",
+      enabled: true,
+      mode: "act",
+      execution_role: automation_role,
+      created_by: users(:acme_admin),
+      settings: {
+        "linear" => {
+          "issue" => "ready_issues",
+          "repository_routes" => [
+            {
+              "repository" => "acme/widgets",
+              "required_labels" => [ "repo:widgets" ]
+            },
+            {
+              "repository" => "acme/web",
+              "required_labels" => [ "repo:widgets", "area:web" ]
+            },
+            {
+              "repository" => "acme/travel",
+              "linear_project_ids" => [ "11111111-1111-1111-1111-111111111111" ]
+            }
+          ]
+        }
+      }
+    )
+
+    result = policy.evaluate(
+      "event_type" => "Issue",
+      "event_action" => "update",
+      "linear_team_id" => "team-1",
+      "title" => "Ship the web widget",
+      "description" => "Acceptance Criteria\n- It is shippable.",
+      "labels" => [ "repo:widgets", "area:web" ],
+      "linear_project_id" => "11111111-1111-1111-1111-111111111111"
+    )
+
+    assert_equal "ignored", result["decision"]
+    assert_equal "multiple configured repository routes match issue labels or project", result["reason"]
   end
 
   test "requires a verified, fully qualified Linear issue for a manual mention" do
