@@ -39,10 +39,12 @@ existing PR or issue session -> api-rs execution -> platform reply / PR work
 The Console records a workstream for each PR or issue, including the stable
 session key and recent event count. When api-rs creates the matching derived
 principal, Console attaches the policy's selected execution role only while
-the latest event remains authorized. Disabling the policy, changing it out of
-Act mode, or receiving a newly ineligible event revokes that policy-owned role
-binding. It keeps only compact event metadata; raw webhook bodies and
-credentials do not enter the policy store.
+the latest authorized action is an agent action. A deterministic `run_qa`
+event dispatches its fixed workflow without attaching a model or repository
+role to the issue principal. Disabling the policy, changing it out of Act mode,
+or receiving a newly ineligible event revokes that policy-owned role binding.
+It keeps only compact event metadata; raw webhook bodies and credentials do not
+enter the policy store.
 
 ## Optional Slack activity report
 
