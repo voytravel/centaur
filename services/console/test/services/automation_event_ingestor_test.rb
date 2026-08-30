@@ -422,6 +422,77 @@ class AutomationEventIngestorTest < ActiveSupport::TestCase
     assert_equal [ "stateId" ], event.metadata["updated_fields"]
   end
 
+  test "a QA transition on a hybrid policy never grants its coding role" do
+    role = automation_role
+    AutomationPolicy.create!(
+      name: "Hybrid Linear coding and QA",
+      provider: "linear",
+      linear_team_id: "team-1",
+      enabled: true,
+      mode: "act",
+      execution_role: role,
+      created_by: users(:acme_admin),
+      settings: {
+        "linear" => {
+          "issue" => "ready_issues",
+          "qa" => "status_transition",
+          "qa_statuses" => [ "QA" ],
+          "github_repository" => "acme/widgets"
+        }
+      }
+    )
+    issue = {
+      "provider" => "linear",
+      "event_type" => "Issue",
+      "event_action" => "update",
+      "linear_issue_id" => "hybrid-issue",
+      "linear_team_id" => "team-1",
+      "title" => "Implement it",
+      "description" => "Ready to ship",
+      "labels" => []
+    }
+
+    AutomationQaDispatchJob.stub(:perform_later, ->(_event_id) { }) do
+      qa = AutomationEventIngestor.new(issue.merge(
+        "deduplication_key" => "hybrid-qa-v1",
+        "status" => "QA",
+        "updated_fields" => [ "stateId" ]
+      )).call
+      assert_equal [ "run_qa" ], qa["actions"]
+    end
+
+    principal = Principal.create!(
+      foreign_id: "hybrid-linear-issue-#{SecureRandom.hex(6)}",
+      name: "ENG-42",
+      kind: "linear_issue",
+      labels: { "linear_issue_id" => "hybrid-issue" },
+      created_by: users(:acme_admin)
+    )
+    AutomationPrincipalAuthorizer.reconcile_principal(principal)
+    workstream = AutomationWorkstream.sole
+    assert_nil workstream.reload.authorization_role
+    assert_not_includes principal.reload.roles, role
+
+    implementation = AutomationEventIngestor.new(issue.merge(
+      "deduplication_key" => "hybrid-implementation-v1",
+      "status" => "Todo"
+    )).call
+    assert_equal [ "implement_issue" ], implementation["actions"]
+    assert_equal role, workstream.reload.authorization_role
+    assert_includes principal.reload.roles, role
+
+    AutomationQaDispatchJob.stub(:perform_later, ->(_event_id) { }) do
+      qa_again = AutomationEventIngestor.new(issue.merge(
+        "deduplication_key" => "hybrid-qa-v2",
+        "status" => "QA",
+        "updated_fields" => [ "stateId" ]
+      )).call
+      assert_equal [ "run_qa" ], qa_again["actions"]
+    end
+    assert_nil workstream.reload.authorization_role
+    assert_not_includes principal.reload.roles, role
+  end
+
   test "returns the explicitly selected Linear repository route and preview label" do
     AutomationPolicy.create!(
       name: "Routed Linear",
