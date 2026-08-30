@@ -158,8 +158,11 @@ pick up new or updated issues only when configured readiness checks pass:
 Map a simple policy to one GitHub repository and optional reviewers. For a
 team-wide policy, use explicit repository routes instead of asking the agent to
 infer a target. A route can select a Linear project ID, required issue labels,
-or both; if both are present, either selector can choose that same reviewed
-repository. Each ready issue must match exactly one route; zero or multiple
+or both. A matching label route is an explicit issue-level override and takes
+precedence over a project route; otherwise the project route selects the target.
+Use `label_project_ids` to limit that override to named Linear projects rather
+than allowing the label to select a repository anywhere in the team.
+The selected selector kind must match exactly one route; zero or multiple
 matching routes are recorded as an ignored decision and cannot start a sandbox.
 A route may override reviewers, opt into the fixed QA executor for that
 repository, and declare an opt-in preview label:
@@ -177,6 +180,7 @@ repository, and declare an opt-in preview label:
       {
         "repository": "acme/web",
         "required_labels": ["repo:web"],
+        "label_project_ids": ["00000000-0000-0000-0000-000000000000"],
         "reviewer_team_slugs": ["frontend"],
         "preview_label": "preview"
       }

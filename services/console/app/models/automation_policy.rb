@@ -18,6 +18,7 @@ class AutomationPolicy < ApplicationRecord
     repository
     linear_project_ids
     required_labels
+    label_project_ids
     qa_enabled
     reviewer_logins
     reviewer_team_slugs
@@ -306,6 +307,9 @@ class AutomationPolicy < ApplicationRecord
       end
       if normalized_route["linear_project_ids"].is_a?(Array)
         normalized_route["linear_project_ids"] = normalized_route["linear_project_ids"].map(&:downcase)
+      end
+      if normalized_route["label_project_ids"].is_a?(Array)
+        normalized_route["label_project_ids"] = normalized_route["label_project_ids"].map(&:downcase)
       end
       normalized_route
     end
@@ -740,16 +744,26 @@ class AutomationPolicy < ApplicationRecord
 
     labels = Array(event["labels"]).map { |label| label.to_s.downcase }
     project_id = event["linear_project_id"].to_s.strip.downcase
-    matches = routes.select do |route|
+    label_matches = routes.select do |route|
       route = route.deep_stringify_keys
       required_labels = Array(route["required_labels"]).map(&:downcase)
-      project_ids = Array(route["linear_project_ids"]).filter_map do |candidate|
+      label_project_ids = Array(route["label_project_ids"]).filter_map do |candidate|
         candidate.to_s.strip.presence&.downcase
       end
-      label_match = required_labels.any? && (required_labels - labels).empty?
-      project_match = project_ids.any? && project_ids.include?(project_id)
-      label_match || project_match
+      required_labels.any? && (required_labels - labels).empty? &&
+        (label_project_ids.empty? || label_project_ids.include?(project_id))
     end
+    project_matches = routes.select do |route|
+      project_ids = Array(route.deep_stringify_keys["linear_project_ids"]).filter_map do |candidate|
+        candidate.to_s.strip.presence&.downcase
+      end
+      project_ids.any? && project_ids.include?(project_id)
+    end
+
+    # A label is an intentional, issue-level routing override. It wins over a
+    # project default, while still failing closed when labels themselves match
+    # more than one configured route.
+    matches = label_matches.presence || project_matches
     return [ nil, "no configured repository route matches issue labels or project" ] if matches.empty?
     return [ nil, "multiple configured repository routes match issue labels or project" ] if matches.many?
 
@@ -835,6 +849,15 @@ class AutomationPolicy < ApplicationRecord
         project_id.is_a?(String) && LINEAR_PROJECT_ID_PATTERN.match?(project_id)
       end
       errors.add(:settings, "repository route #{index + 1} has invalid Linear project IDs") unless project_ids_valid
+
+      label_project_ids = route.key?("label_project_ids") ? route["label_project_ids"] : []
+      label_project_ids_valid = label_project_ids.is_a?(Array) && label_project_ids.all? do |project_id|
+        project_id.is_a?(String) && LINEAR_PROJECT_ID_PATTERN.match?(project_id)
+      end
+      errors.add(:settings, "repository route #{index + 1} has invalid label project IDs") unless label_project_ids_valid
+      if label_project_ids_valid && label_project_ids.any? && (!labels_valid || labels.empty?)
+        errors.add(:settings, "repository route #{index + 1} needs labels to scope label project IDs")
+      end
 
       if labels_valid && project_ids_valid && labels.empty? && project_ids.empty?
         errors.add(:settings, "repository route #{index + 1} needs at least one project or label selector")

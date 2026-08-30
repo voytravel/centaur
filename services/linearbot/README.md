@@ -124,10 +124,14 @@ When Console's repository-automation policy enables `ready_issues`, Linearbot
 submits only a signature-verified, normalized issue summary to Console. Console
 selects the repository deterministically. A simple policy supplies one
 `github_repository`; a multi-repository policy supplies project-ID and/or
-label-based `repository_routes`. Each ready issue must match exactly one route
-or the event is recorded as ignored and no agent turn starts. A route can also
-explicitly opt into the fixed QA executor; Linearbot itself never infers a
-repository or a QA target.
+label-based `repository_routes`. A matching label route explicitly overrides a
+project route; otherwise the project route selects the repository. The selected
+selector kind must match exactly one route or the event is recorded as ignored
+and no agent turn starts. A route can also explicitly opt into the fixed QA
+executor; Linearbot itself never infers a repository or a QA target.
+`label_project_ids` can scope a label override to named Linear projects, so a
+team-wide policy does not turn a label into a repository selector for unrelated
+projects.
 
 A selected route can supply reviewers and a `preview_label`. For a user-visible
 change, the resulting prompt tells the agent to apply that already-configured
