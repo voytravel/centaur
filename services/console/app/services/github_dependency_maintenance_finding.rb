@@ -108,7 +108,7 @@ class GithubDependencyMaintenanceFinding
 
     def findings
       ensure_workflow!
-      result = hash(@run["result"], "workflow result")
+      result = workflow_result(@run["result"])
       return [] unless result["status"] == "completed"
 
       source_run_id = required_string(@run["run_id"], "workflow run id")
@@ -122,6 +122,18 @@ class GithubDependencyMaintenanceFinding
     end
 
     private
+
+    # Python-hosted workflows return their own payload under `result.output`,
+    # alongside run/task metadata. Native workflows return the payload directly
+    # as `result`. Normalize only the known wrapper shape so both paths use the
+    # same strict finding parser below; a malformed wrapper remains no-action.
+    def workflow_result(value)
+      result = hash(value, "workflow result")
+      return result if result.key?("status")
+      return result unless result["output"].is_a?(Hash)
+
+      hash(result["output"], "workflow result output")
+    end
 
     def ensure_workflow!
       unless @run.is_a?(Hash) && @run["workflow_name"] == WORKFLOW_NAME

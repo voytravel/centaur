@@ -67,6 +67,40 @@ class GithubDependencyMaintenanceFindingTest < ActiveSupport::TestCase
     assert_equal "https://github.com/acme/widgets/pull/42", finding.source_url
   end
 
+  test "parses an approval finding from the Python workflow-host result envelope" do
+    run = maintenance_run(
+      security: {
+        "mode" => "approval_required",
+        "outcome" => "observed",
+        "alert_numbers" => [ 19 ]
+      },
+      proposals: [
+        {
+          "kind" => "security_advisory",
+          "action" => "draft_pr",
+          "source_numbers" => [ 19 ]
+        }
+      ]
+    )
+    payload = run.fetch("result")
+    run["result"] = {
+      "output" => payload,
+      "run_id" => "run-observation-1",
+      "steps" => [ "python_host" ],
+      "task_id" => "task-observation-1",
+      "workflow_name" => "github_dependency_maintenance"
+    }
+
+    finding = GithubDependencyMaintenanceFinding.find_for_approval(
+      run: run,
+      repository: "acme/widgets",
+      finding_key: "security:19"
+    )
+
+    assert_equal "security:19", finding.key
+    assert_equal "Create a scoped Draft PR", finding.action_label
+  end
+
   test "does not expose an action for an observe-only or mismatched proposal" do
     observed = maintenance_run(
       security: {
