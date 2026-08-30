@@ -452,7 +452,7 @@ class AutomationEventIngestorTest < ActiveSupport::TestCase
       "labels" => []
     }
 
-    AutomationQaDispatchJob.stub(:perform_later, ->(_event_id) {}) do
+    AutomationQaDispatchJob.stub(:perform_later, ->(_event_id) { }) do
       qa = AutomationEventIngestor.new(issue.merge(
         "deduplication_key" => "hybrid-qa-v1",
         "status" => "QA",
@@ -481,7 +481,7 @@ class AutomationEventIngestorTest < ActiveSupport::TestCase
     assert_equal role, workstream.reload.authorization_role
     assert_includes principal.reload.roles, role
 
-    AutomationQaDispatchJob.stub(:perform_later, ->(_event_id) {}) do
+    AutomationQaDispatchJob.stub(:perform_later, ->(_event_id) { }) do
       qa_again = AutomationEventIngestor.new(issue.merge(
         "deduplication_key" => "hybrid-qa-v2",
         "status" => "QA",
