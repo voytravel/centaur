@@ -5,15 +5,49 @@
 class GithubDependencyMaintenanceFinding
   WORKFLOW_NAME = "github_dependency_maintenance"
   ACTION_WORKFLOW_NAME = "github_dependency_maintenance_action"
-  SCHEMA_VERSION = "2"
+  SCHEMA_VERSIONS = %w[2 3].freeze
 
   REPOSITORY_PATTERN = /\A[A-Za-z0-9][A-Za-z0-9_.-]*\/[A-Za-z0-9][A-Za-z0-9_.-]*\z/.freeze
   BRANCH_PATTERN = /\A[A-Za-z0-9][A-Za-z0-9._\/-]{0,199}\z/.freeze
   RUN_ID_PATTERN = /\A[A-Za-z0-9_-]{1,200}\z/.freeze
   FINDING_KINDS = %w[security_advisory dependabot_pull_request dependabot_consolidation].freeze
   ACTIONS = %w[draft_pr repair consolidate merge].freeze
+  DIAGNOSTICS = {
+    "obsolete_proposal_shape" => {
+      title: "Observer result rejected",
+      detail: "The observer used an obsolete proposal shape. No repository action was authorized."
+    },
+    "unsupported_result_schema" => {
+      title: "Observer result rejected",
+      detail: "The observer used an unsupported result schema. No repository action was authorized."
+    },
+    "selection_count_contract" => {
+      title: "Observer result rejected",
+      detail: "The observer mixed observed totals and selected candidates. No repository action was authorized."
+    },
+    "missing_structured_result" => {
+      title: "Observer result rejected",
+      detail: "The observer did not return the required structured result. No repository action was authorized."
+    },
+    "invalid_structured_result" => {
+      title: "Observer result rejected",
+      detail: "The observer result failed the reviewed contract. No repository action was authorized."
+    },
+    "agent_turn_unavailable" => {
+      title: "Observer unavailable",
+      detail: "The scheduled observer did not complete after its bounded retry. No repository action was authorized."
+    },
+    "legacy_contract_rejection" => {
+      title: "Observer result rejected",
+      detail: "The observer result was rejected by the workflow contract. No repository action was authorized."
+    }
+  }.freeze
+  DIAGNOSTIC_KINDS = {
+    "agent_turn_unavailable" => "observer_unavailable"
+  }.freeze
 
   Invalid = Class.new(StandardError)
+  Diagnostic = Struct.new(:repository, :code, :title, :detail, keyword_init: true)
 
   attr_reader :source_run_id, :repository, :base_branch, :kind, :action, :source_numbers
 
@@ -28,6 +62,12 @@ class GithubDependencyMaintenanceFinding
 
   def self.for_run(run)
     Parser.new(run).findings
+  rescue Invalid
+    []
+  end
+
+  def self.diagnostics_for_run(run)
+    Parser.new(run).diagnostics
   rescue Invalid
     []
   end
@@ -155,6 +195,19 @@ class GithubDependencyMaintenanceFinding
       routes.flat_map { |route| parse_route(route, source_run_id) }
     end
 
+    def diagnostics
+      ensure_workflow!
+      result = workflow_result(@run["result"])
+      return [] unless result["status"] == "completed"
+
+      routes = result["routes"]
+      unless routes.is_a?(Array) && routes.length <= 100
+        raise Invalid, "workflow result routes must be an array"
+      end
+
+      routes.filter_map { |route| parse_diagnostic(route) }
+    end
+
     private
 
     # Python-hosted workflows return their own payload under `result.output`,
@@ -177,7 +230,7 @@ class GithubDependencyMaintenanceFinding
 
     def parse_route(value, source_run_id)
       route = hash(value, "workflow route")
-      return [] unless route["schema_version"] == SCHEMA_VERSION
+      return [] unless SCHEMA_VERSIONS.include?(route["schema_version"])
 
       repository = required_string(route["repository"], "repository")
       raise Invalid, "workflow route repository is invalid" unless REPOSITORY_PATTERN.match?(repository)
@@ -206,6 +259,54 @@ class GithubDependencyMaintenanceFinding
       end
       validate_proposal_limits!(findings)
       findings
+    end
+
+    def parse_diagnostic(value)
+      route = hash(value, "workflow route")
+      return unless SCHEMA_VERSIONS.include?(route["schema_version"])
+
+      repository = required_string(route["repository"], "repository")
+      raise Invalid, "workflow route repository is invalid" unless REPOSITORY_PATTERN.match?(repository)
+
+      code = diagnostic_code(route)
+      return unless code
+
+      presentation = DIAGNOSTICS.fetch(code)
+      Diagnostic.new(
+        repository: repository,
+        code: code,
+        title: presentation.fetch(:title),
+        detail: presentation.fetch(:detail)
+      )
+    end
+
+    def diagnostic_code(route)
+      diagnostic = route["diagnostic"]
+      if diagnostic.is_a?(Hash)
+        source = diagnostic.deep_stringify_keys
+        return unless source.keys.sort == %w[code kind summary]
+        code = source["code"]
+        return unless DIAGNOSTICS.key?(code)
+
+        expected_kind = DIAGNOSTIC_KINDS.fetch(code, "observer_result_rejected")
+        return code if source["kind"] == expected_kind
+      end
+
+      return "legacy_contract_rejection" if legacy_contract_rejection?(route)
+
+      nil
+    end
+
+    def legacy_contract_rejection?(route)
+      security = route["security_advisories"]
+      dependabot = route["dependabot"]
+      return false unless security.is_a?(Hash) && dependabot.is_a?(Hash)
+      return false unless security["outcome"] == "blocked" && dependabot["outcome"] == "blocked"
+      return false unless route["proposals"] == []
+
+      Array(route["validation"]).any? do |entry|
+        entry.is_a?(Hash) && entry["command"] == "structured workflow result" && entry["status"] == "failed"
+      end
     end
 
     def parse_proposal(value, source_run_id:, repository:, base_branch:, security:, dependabot:)

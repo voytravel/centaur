@@ -158,6 +158,12 @@ class Console::WorkflowsController < ApplicationController
       else
         []
       end
+    @maintenance_diagnostics =
+      if @workflow_name == GithubDependencyMaintenanceFinding::WORKFLOW_NAME
+        GithubDependencyMaintenanceFinding.diagnostics_for_run(@maintenance_run_detail)
+      else
+        []
+      end
     @maintenance_action_runs = action_runs_for(@maintenance_findings)
 
     return if @latest_run_detail.blank? && @workflow_schedules.blank?
