@@ -54,6 +54,24 @@ export class SessionApiError extends Error {
   }
 }
 
+// GitHub repair and review turns must eventually settle. A bounded default
+// prevents a stuck provider/tool call from holding a management session (and
+// blocking the next explicit repair) indefinitely. Deployments can extend or
+// shorten either bound through the existing environment options.
+export const DEFAULT_SESSION_IDLE_TIMEOUT_MS = 15 * 60 * 1000;
+export const DEFAULT_SESSION_MAX_DURATION_MS = 60 * 60 * 1000;
+
+export function sessionTimeouts(
+  options: Pick<GithubbotOptions, "idleTimeoutMs" | "maxDurationMs">,
+): { idleTimeoutMs: number; maxDurationMs: number } {
+  const maxDurationMs = options.maxDurationMs ?? DEFAULT_SESSION_MAX_DURATION_MS;
+  const idleTimeoutMs = Math.min(
+    options.idleTimeoutMs ?? DEFAULT_SESSION_IDLE_TIMEOUT_MS,
+    maxDurationMs,
+  );
+  return { idleTimeoutMs, maxDurationMs };
+}
+
 export function isRetryableSessionApiError(error: unknown): boolean {
   if (error instanceof SessionApiError) return error.retryable;
   if (!(error instanceof Error)) return false;
@@ -521,6 +539,7 @@ async function executeSession(
   executionMetadata?: JsonObject,
 ): Promise<GithubbotExecuteSessionResponse> {
   const fetchFn = options.fetch ?? fetch;
+  const timeouts = sessionTimeouts(options);
   const body: GithubbotExecuteSessionRequest = {
     idempotency_key: message.id,
     metadata: sessionMetadata(message, { ...executionMetadata, action: "execute" }),
@@ -533,12 +552,8 @@ async function executeSession(
       contextPreamble,
       executionMetadata,
     ),
-    ...(options.idleTimeoutMs === undefined
-      ? {}
-      : { idle_timeout_ms: options.idleTimeoutMs }),
-    ...(options.maxDurationMs === undefined
-      ? {}
-      : { max_duration_ms: options.maxDurationMs }),
+    idle_timeout_ms: timeouts.idleTimeoutMs,
+    max_duration_ms: timeouts.maxDurationMs,
   };
   const response = await fetchFn(
     apiSessionUrl(options.apiUrl, threadId, "execute"),

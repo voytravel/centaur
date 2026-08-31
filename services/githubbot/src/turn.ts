@@ -11,6 +11,7 @@ import {
   buildWorkingReplyBody,
   CommentReplyCollector,
   type GithubPublicReply,
+  type GithubWorkingReplyKind,
 } from "./comment-bot";
 import { runExclusive } from "./context";
 import { resolveStickyProvider } from "./overrides";
@@ -53,6 +54,9 @@ export type ReviewCommentContext = {
   line?: number;
   diffHunk?: string;
 };
+
+/** A policy-authorized instruction that changes the PR turn from discussion to execution. */
+export type GithubPrExecutionIntent = "resolve_conflict";
 
 /** Accumulated result of one streamed agent turn. */
 export type TurnResult = {
@@ -152,6 +156,7 @@ export function reviewCommentContextFromRaw(
 export function githubContextPreamble(
   threadKey: string,
   reviewComment?: ReviewCommentContext,
+  executionIntent?: GithubPrExecutionIntent,
 ): string | undefined {
   const ref = parseGithubThreadKey(threadKey);
   if (!ref) return undefined;
@@ -182,12 +187,19 @@ export function githubContextPreamble(
     );
   }
 
+  const repairDirective = executionIntent === "resolve_conflict"
+    ? "\n\nThis is an explicit, authorized repair request. The PR is currently conflicted. " +
+      "Resolve the merge conflict in the existing PR branch, run the narrowest relevant " +
+      "checks, then commit and push the repair. Do not stop at diagnosis or merely describe " +
+      "a fix. Do not merge or deploy. If a correct resolution cannot be determined safely, " +
+      "state the concrete blocker in the final summary."
+    : "";
   return (
     `You are responding in the main conversation thread of GitHub pull request ` +
     `${subject}. The comment alone may not be enough context, so fetch the PR ` +
     `before replying — use the gh CLI in your sandbox (e.g. \`gh pr view ` +
     `${ref.number}\`, \`gh pr diff ${ref.number}\`). Your turn's final message ` +
-    `is posted back as your reply in this thread.`
+    `is posted back as your reply in this thread.${repairDirective}`
   );
 }
 
@@ -325,6 +337,8 @@ export async function runSessionTurn(input: {
   thread: Thread<GithubbotThreadState>;
   threadKey: string;
   trace: GithubbotTrace;
+  /** Make an authorized repair acknowledgement explicit without exposing work logs. */
+  workingReplyKind?: GithubWorkingReplyKind;
 }): Promise<void> {
   const {
     adapter,
@@ -339,7 +353,7 @@ export async function runSessionTurn(input: {
   } = input;
   const logger = options.logger ?? noopLogger;
   try {
-    await thread.post(buildWorkingReplyBody());
+    await thread.post(buildWorkingReplyBody(input.workingReplyKind));
   } catch (error) {
     logger.warn("githubbot_thread_acknowledgement_failed", {
       error: errorMessage(error),

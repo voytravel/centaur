@@ -86,6 +86,18 @@ describe("githubContextPreamble", () => {
     expect(preamble).toContain("gh pr diff 123");
   });
 
+  test("manual conflict repair turns require an actual branch repair", () => {
+    const preamble = githubContextPreamble(
+      "github:0xSplits/centaur:123",
+      undefined,
+      "resolve_conflict",
+    );
+    expect(preamble).toContain("explicit, authorized repair request");
+    expect(preamble).toContain("Resolve the merge conflict");
+    expect(preamble).toContain("commit and push the repair");
+    expect(preamble).toContain("Do not stop at diagnosis");
+  });
+
   test("issue thread: uses issue wording", () => {
     const preamble = githubContextPreamble("github:0xSplits/centaur:issue:42");
     expect(preamble).toContain("issue 0xSplits/centaur#42");
