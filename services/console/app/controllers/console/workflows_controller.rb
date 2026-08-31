@@ -158,6 +158,7 @@ class Console::WorkflowsController < ApplicationController
       else
         []
       end
+    @maintenance_action_runs = action_runs_for(@maintenance_findings)
 
     return if @latest_run_detail.blank? && @workflow_schedules.blank?
     return if @latest_run&.display_status == "failed"
@@ -186,6 +187,25 @@ class Console::WorkflowsController < ApplicationController
   rescue StandardError => e
     Rails.logger.warn("console_workflow_run_detail_failed run=#{run_id} error=#{e.class}: #{e.message}")
     nil
+  end
+
+  # A page render must not queue an action. The action's durable idempotency
+  # key makes this lookup exact even after the action has left recent history.
+  def action_runs_for(findings)
+    findings.each_with_object({}) do |finding, action_runs|
+      action_run = api_client.find_workflow_run_by_idempotency_key(
+        workflow_name: GithubDependencyMaintenanceFinding::ACTION_WORKFLOW_NAME,
+        idempotency_key: finding.idempotency_key
+      )
+      next unless action_run.is_a?(Hash) && action_run["run_id"].present?
+
+      action_runs[finding.idempotency_key] = action_run
+    rescue StandardError => e
+      Rails.logger.warn(
+        "console_workflow_finding_action_lookup_failed key=#{finding.idempotency_key} " \
+        "error=#{e.class}: #{e.message}"
+      )
+    end
   end
 
   def api_client

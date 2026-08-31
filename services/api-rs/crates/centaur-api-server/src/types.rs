@@ -137,6 +137,7 @@ pub struct EventsQuery {
 pub struct ListWorkflowRunsQuery {
     pub limit: Option<i64>,
     pub workflow_name: Option<String>,
+    pub idempotency_key: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
