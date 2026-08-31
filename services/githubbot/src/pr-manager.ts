@@ -654,6 +654,7 @@ export async function fetchPrAutomationContext(
   draft: boolean;
   headSha: string;
   labels: string[];
+  mergeableState: string;
 } | null> {
   const pr = await fetchPr(ctx, owner, repo, number);
   if (!pr) return null;
@@ -663,6 +664,7 @@ export async function fetchPrAutomationContext(
     draft: pr.draft,
     headSha: pr.headSha,
     labels: pr.labels,
+    mergeableState: pr.mergeableState,
   };
 }
 
@@ -927,7 +929,8 @@ async function handleAutomaticReviewLocked(
         "Automatic review paused because a bot-authored or unverified revision expanded " +
           "the reviewed risk " +
           `surface (${reasonText}). I did not grant myself a new review epoch for head ` +
-          `\`${pr.headSha.slice(0, 12)}\`. A human must request another review to approve the expansion.`,
+          `\`${pr.headSha.slice(0, 12)}\`. A human must request another review to approve the expansion. ` +
+          "This pauses automated review only; it does not block an explicit authorized repair, CI-fix, or conflict-resolution request.",
       );
       return;
     }

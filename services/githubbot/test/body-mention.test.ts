@@ -161,7 +161,7 @@ describe("handleBodyMention", () => {
       openedPr("@centaur-bot please review"),
     );
     expect(spies.comments).toBe(2);
-    expect(spies.commentBodies[0]).toContain("reproduce relevant failures locally");
+    expect(spies.commentBodies[0]).toContain("carry out the requested work");
     expect(spies.reactions).toBeGreaterThanOrEqual(1);
   });
 });

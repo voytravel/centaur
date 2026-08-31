@@ -47,12 +47,19 @@ export class CommentReplyCollector {
   }
 }
 
+export type GithubWorkingReplyKind = "general" | "repair";
+
 /**
  * A short acknowledgement posted before a potentially long-lived sandbox turn.
  * It establishes the public contract without narrating the execution itself.
  */
-export function buildWorkingReplyBody(): string {
-  return "I’m on it. I’ll inspect the request, reproduce relevant failures locally, run the closest CI-equivalent checks, and report the verified outcome here.";
+export function buildWorkingReplyBody(
+  kind: GithubWorkingReplyKind = "general",
+): string {
+  if (kind === "repair") {
+    return "I’m resolving the requested PR repair now. I’ll make and push the necessary branch changes, run relevant verification, and report the verified outcome here.";
+  }
+  return "I’m on it. I’ll carry out the requested work where policy permits, verify it locally, and report the verified outcome here.";
 }
 
 /**

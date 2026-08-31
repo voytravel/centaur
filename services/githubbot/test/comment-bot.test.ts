@@ -76,8 +76,15 @@ describe("GitHub public reply rendering", () => {
 
   test("acknowledges the verification contract without exposing execution detail", () => {
     const body = buildWorkingReplyBody();
-    expect(body).toContain("reproduce relevant failures locally");
-    expect(body).toContain("CI-equivalent checks");
+    expect(body).toContain("carry out the requested work");
+    expect(body).toContain("verify it locally");
     expect(body).not.toContain("Command execution");
+  });
+
+  test("makes an explicit PR repair acknowledgement action-oriented", () => {
+    const body = buildWorkingReplyBody("repair");
+    expect(body).toContain("resolving the requested PR repair");
+    expect(body).toContain("make and push");
+    expect(body).not.toContain("inspect the request");
   });
 });
