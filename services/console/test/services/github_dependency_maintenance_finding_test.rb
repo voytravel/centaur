@@ -63,8 +63,37 @@ class GithubDependencyMaintenanceFindingTest < ActiveSupport::TestCase
     finding = findings.first
 
     assert_equal "dependabot:42", finding.key
-    assert_equal "Repair through a scoped Draft PR", finding.action_label
+    assert_equal "Repair the existing Dependabot PR", finding.action_label
     assert_equal "https://github.com/acme/widgets/pull/42", finding.source_url
+    assert_match(/ordinary non-force update/, finding.action_explanation)
+  end
+
+  test "parses a ready Dependabot merge proposal only when it matches the observed direct path" do
+    run = maintenance_run(
+      dependabot: {
+        "mode" => "approval_required",
+        "outcome" => "direct_ready",
+        "source_pr_numbers" => [ 42 ]
+      },
+      proposals: [
+        {
+          "kind" => "dependabot_pull_request",
+          "action" => "merge",
+          "source_numbers" => [ 42 ]
+        }
+      ]
+    )
+
+    finding = GithubDependencyMaintenanceFinding.find_for_approval(
+      run: run,
+      repository: "acme/widgets",
+      finding_key: "dependabot:42"
+    )
+
+    assert_equal "Merge the ready Dependabot PR", finding.action_label
+    assert_match(/squash-merge/, finding.action_explanation)
+    assert_match(/can merge only if GitHub still accepts/, finding.approval_confirmation)
+    assert_match(/may squash-merge only the revalidated ready/, finding.queued_notice)
   end
 
   test "parses an approval finding from the Python workflow-host result envelope" do

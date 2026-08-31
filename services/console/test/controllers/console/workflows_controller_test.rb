@@ -254,6 +254,39 @@ class Console::WorkflowsControllerTest < ActionDispatch::IntegrationTest
     ], client.created_runs
   end
 
+  test "renders a ready Dependabot merge as a distinct, revalidated approval" do
+    run = fake_run(workflow_name: "github_dependency_maintenance")
+    detail = maintenance_run_detail(run.run_id)
+    route = detail.fetch("result").fetch("routes").first
+    route["security_advisories"] = {
+      "mode" => "approval_required",
+      "outcome" => "none",
+      "alert_numbers" => []
+    }
+    route["dependabot"] = {
+      "mode" => "approval_required",
+      "outcome" => "direct_ready",
+      "source_pr_numbers" => [ 42 ]
+    }
+    route["proposals"] = [
+      {
+        "kind" => "dependabot_pull_request",
+        "action" => "merge",
+        "source_numbers" => [ 42 ]
+      }
+    ]
+    with_api_client(FakeApiClient.new(run_details: { run.run_id => detail }))
+
+    with_workflow_history("github_dependency_maintenance", runs: [ run ]) do
+      get console_workflow_url("github_dependency_maintenance", run_id: run.run_id)
+    end
+
+    assert_response :ok
+    assert_select "p", text: /Merge the ready Dependabot PR/
+    assert_select "p", text: /squash-merge it through GitHub's normal protections/
+    assert_select "button", text: "Approve scoped action"
+  end
+
   test "does not queue an action when a proposal fails the approval-required contract" do
     source_run_id = "run-observation-1"
     detail = maintenance_run_detail(source_run_id)
