@@ -108,6 +108,18 @@ class CentaurApiClient
     get("/api/workflows/runs/#{escape_path(run_id)}")
   end
 
+  # This is deliberately a read-only lookup. Approval cards must not use a
+  # create request to discover whether their scoped action already exists.
+  def find_workflow_run_by_idempotency_key(workflow_name:, idempotency_key:)
+    response = get(
+      "/api/workflows/runs",
+      workflow_name: workflow_name,
+      idempotency_key: idempotency_key,
+      limit: 1
+    )
+    Array(response["runs"]).first
+  end
+
   def create_workflow_run(workflow_name:, input: nil, idempotency_key: nil, max_attempts: nil)
     payload = { workflow_name: workflow_name }
     payload[:input] = input unless input.nil?
