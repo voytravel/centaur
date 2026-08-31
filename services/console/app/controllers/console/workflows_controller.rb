@@ -105,7 +105,7 @@ class Console::WorkflowsController < ApplicationController
   # This trusted Console transition re-reads the immutable workflow result,
   # validates the selected proposal, and starts one separately scoped action
   # workflow under an idempotency key. The action workflow must still re-check
-  # the reviewed route and live GitHub state before it can make a Draft PR.
+  # the reviewed route and live GitHub state before its narrowly scoped action.
   def approve_finding
     workflow_name = params[:id].to_s
     unless workflow_name == GithubDependencyMaintenanceFinding::WORKFLOW_NAME
@@ -129,7 +129,7 @@ class Console::WorkflowsController < ApplicationController
       if result["created"] == false
         "That scoped action is already queued (#{run_id})."
       else
-        "Scoped action queued (#{run_id}). It may create only a Draft PR; it cannot merge or deploy."
+        "Scoped action queued (#{run_id}). #{finding.queued_notice}"
       end
     redirect_to console_workflow_path(workflow_name, run_id: finding.source_run_id), notice: notice
   rescue GithubDependencyMaintenanceFinding::Invalid, ActionController::ParameterMissing, KeyError => e
