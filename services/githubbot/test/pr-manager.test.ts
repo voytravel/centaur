@@ -4,9 +4,12 @@ import {
   decideMerge,
   handleAutomaticReview,
   handleCiEvent,
+  handlePullRequestEvent,
   handleReviewEvent,
   isOwnedPr,
   managementTurnContextPreamble,
+  mergeConflictEscalationBody,
+  mergeConflictPreamble,
   type PolicyPrAutomation,
   type PrManagerContext,
 } from "../src/pr-manager";
@@ -164,6 +167,91 @@ describe("management turn prompt", () => {
     expect(preamble.lastIndexOf("External GitHub AI reviewer guard:")).toBeGreaterThan(
       preamble.indexOf("Address the review."),
     );
+    expect(preamble).toContain("PR change verification and visual evidence:");
+    expect(preamble).toContain("Try the documented whole-stack or local-application flow");
+    expect(preamble).toContain("Put it inline in the PR description or a PR comment");
+  });
+});
+
+describe("merge conflict prompt", () => {
+  test("requires a loud human handoff instead of an uncertain push", () => {
+    const preamble = mergeConflictPreamble({
+      baseBranch: "main",
+      escalationHandle: "maintainer",
+      headRef: "feature/conflict",
+      owner: "example",
+      pullNumber: 42,
+      repo: "project",
+    });
+
+    expect(preamble).toContain("explicit, authorized repair request");
+    expect(preamble).toContain("Do not push or force-push an uncertain resolution");
+    expect(preamble).toContain("## ⚠️ Human review needed — merge conflict");
+    expect(preamble).toContain("@-mention @maintainer");
+    expect(preamble).toContain("Do not hide this only in Console");
+  });
+
+  test("makes an unverified conflict turn visibly ask a human to take over", () => {
+    const body = mergeConflictEscalationBody({
+      baseBranch: "main",
+      escalationHandle: "maintainer",
+      headRef: "feature/conflict",
+      headSha: "0123456789abcdef",
+      pullNumber: 42,
+    });
+
+    expect(body).toStartWith("## ⚠️ Human review needed — merge conflict");
+    expect(body).toContain("@maintainer Centaur could not confirm");
+    expect(body).toContain("`feature/conflict` at `0123456789ab`");
+    expect(body).toContain("No further automatic conflict-resolution push");
+  });
+});
+
+describe("merge conflict failure handoff", () => {
+  test("posts one visible human escalation when a conflict turn cannot run", async () => {
+    const comments: string[] = [];
+    const ctx = {
+      octokit: {
+        rest: {
+          issues: {
+            createComment: async ({ body }: { body: string }) => {
+              comments.push(body);
+              return { data: {} };
+            },
+          },
+          pulls: {
+            get: async () => ({
+              data: prPayload({
+                headRepoFullName: "base/repo",
+                mergeableState: "dirty",
+              }),
+            }),
+          },
+        },
+      },
+      options: {
+        apiUrl: "http://localhost",
+        escalationHandle: "maintainer",
+        fetch: () => Promise.resolve(new Response("no", { status: 400 })),
+        logger: quietLogger,
+      },
+      state: makeState(),
+      userName: "centaur-bot",
+    } as unknown as PrManagerContext;
+
+    await handlePullRequestEvent(
+      ctx,
+      JSON.stringify({
+        action: "synchronize",
+        pull_request: { number: 7 },
+        repository: { full_name: "base/repo" },
+      }),
+    );
+    await drainBackgroundWork(5_000);
+
+    expect(comments).toHaveLength(1);
+    expect(comments[0]).toStartWith("## ⚠️ Human review needed — merge conflict");
+    expect(comments[0]).toContain("@maintainer");
   });
 });
 
