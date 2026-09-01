@@ -104,23 +104,24 @@ class Console::WorkflowsController < ApplicationController
   # A scheduled observation is never itself permission to change a repository.
   # This trusted Console transition re-reads the immutable workflow result,
   # validates the selected proposal, and starts one separately scoped action
-  # workflow under an idempotency key. The action workflow must still re-check
-  # the reviewed route and live GitHub state before its narrowly scoped action.
+  # workflow under an idempotency key. Every action workflow must still re-check
+  # its reviewed route and live target before its narrowly scoped mutation.
   def approve_finding
     workflow_name = params[:id].to_s
-    unless workflow_name == GithubDependencyMaintenanceFinding::WORKFLOW_NAME
+    finding_class = approvable_finding_class(workflow_name)
+    unless finding_class
       redirect_to console_workflow_path(workflow_name), alert: "This workflow has no approvable findings."
       return
     end
 
     source_run = api_client.get_workflow_run(params.require(:run_id)).fetch("run")
-    finding = GithubDependencyMaintenanceFinding.find_for_approval(
+    finding = finding_class.find_for_approval(
       run: source_run,
       repository: params.require(:repository),
       finding_key: params.require(:finding_key)
     )
     result = api_client.create_workflow_run(
-      workflow_name: GithubDependencyMaintenanceFinding::ACTION_WORKFLOW_NAME,
+      workflow_name: finding_class::ACTION_WORKFLOW_NAME,
       input: finding.action_input(approved_by: current_user.oid),
       idempotency_key: finding.idempotency_key
     )
@@ -132,7 +133,10 @@ class Console::WorkflowsController < ApplicationController
         "Scoped action queued (#{run_id}). #{finding.queued_notice}"
       end
     redirect_to console_workflow_path(workflow_name, run_id: finding.source_run_id), notice: notice
-  rescue GithubDependencyMaintenanceFinding::Invalid, ActionController::ParameterMissing, KeyError => e
+  rescue GithubDependencyMaintenanceFinding::Invalid,
+         AutomationInteractionReviewFinding::Invalid,
+         ActionController::ParameterMissing,
+         KeyError => e
     redirect_to console_workflow_path(workflow_name || params[:id]), alert: "Could not approve finding: #{e.message}"
   rescue StandardError => e
     Rails.logger.warn("console_workflow_finding_approval_failed workflow=#{workflow_name} error=#{e.class}: #{e.message}")
@@ -158,13 +162,26 @@ class Console::WorkflowsController < ApplicationController
       else
         []
       end
+    @interaction_review_findings =
+      if @workflow_name == AutomationInteractionReviewFinding::WORKFLOW_NAME
+        AutomationInteractionReviewFinding.for_run(@maintenance_run_detail)
+      else
+        []
+      end
     @maintenance_diagnostics =
       if @workflow_name == GithubDependencyMaintenanceFinding::WORKFLOW_NAME
         GithubDependencyMaintenanceFinding.diagnostics_for_run(@maintenance_run_detail)
       else
         []
       end
-    @maintenance_action_runs = action_runs_for(@maintenance_findings)
+    @maintenance_action_runs = action_runs_for(
+      @maintenance_findings,
+      action_workflow_name: GithubDependencyMaintenanceFinding::ACTION_WORKFLOW_NAME
+    )
+    @interaction_review_action_runs = action_runs_for(
+      @interaction_review_findings,
+      action_workflow_name: AutomationInteractionReviewFinding::ACTION_WORKFLOW_NAME
+    )
 
     return if @latest_run_detail.blank? && @workflow_schedules.blank?
     return if @latest_run&.display_status == "failed"
@@ -197,10 +214,10 @@ class Console::WorkflowsController < ApplicationController
 
   # A page render must not queue an action. The action's durable idempotency
   # key makes this lookup exact even after the action has left recent history.
-  def action_runs_for(findings)
+  def action_runs_for(findings, action_workflow_name:)
     findings.each_with_object({}) do |finding, action_runs|
       action_run = api_client.find_workflow_run_by_idempotency_key(
-        workflow_name: GithubDependencyMaintenanceFinding::ACTION_WORKFLOW_NAME,
+        workflow_name: action_workflow_name,
         idempotency_key: finding.idempotency_key
       )
       next unless action_run.is_a?(Hash) && action_run["run_id"].present?
@@ -211,6 +228,15 @@ class Console::WorkflowsController < ApplicationController
         "console_workflow_finding_action_lookup_failed key=#{finding.idempotency_key} " \
         "error=#{e.class}: #{e.message}"
       )
+    end
+  end
+
+  def approvable_finding_class(workflow_name)
+    case workflow_name
+    when GithubDependencyMaintenanceFinding::WORKFLOW_NAME
+      GithubDependencyMaintenanceFinding
+    when AutomationInteractionReviewFinding::WORKFLOW_NAME
+      AutomationInteractionReviewFinding
     end
   end
 

@@ -1,0 +1,55 @@
+<section class="mb-8">
+  <div class="mb-3 flex flex-wrap items-end justify-between gap-2">
+    <div>
+      <h2 class="text-xs font-semibold uppercase tracking-wider text-zinc-500">Improvement proposals awaiting approval</h2>
+      <p class="mt-1 text-xs text-zinc-500">The weekly review used aggregate, redacted operational evidence. Approval starts one verification-led Draft-PR action; it cannot merge, deploy, or expand access.</p>
+    </div>
+    <% if interaction_review_run_detail["run_id"].present? %>
+      <span class="font-mono text-xs text-zinc-600" title="<%= interaction_review_run_detail["run_id"] %>">review <%= truncate_middle(interaction_review_run_detail["run_id"], max: 28) %></span>
+    <% end %>
+  </div>
+
+  <div class="grid gap-3 xl:grid-cols-2">
+    <% findings.each do |finding| %>
+      <% action_run = action_runs[finding.idempotency_key] %>
+      <article class="console-panel border border-amber-500/25 p-4">
+        <div class="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <p class="text-sm font-medium text-zinc-100"><%= finding.title %></p>
+            <p class="mt-1 text-xs text-zinc-400"><%= finding.repository %> · <%= finding.source_label %></p>
+          </div>
+          <%= link_to "Open repository ↗", finding.source_url,
+                      target: "_blank", rel: "noopener noreferrer", class: "console-link text-xs" %>
+        </div>
+        <p class="mt-3 text-xs text-zinc-300"><%= finding.rationale %></p>
+        <p class="mt-2 text-xs text-amber-100/80"><%= finding.proposed_change %></p>
+        <p class="mt-3 text-xs text-zinc-500"><%= finding.action_explanation %></p>
+        <div class="mt-4 flex flex-wrap items-center gap-3">
+          <% if action_run.present? %>
+            <span class="text-xs text-amber-100/80">Action <%= action_run["status"].presence || "queued" %></span>
+            <%= link_to "Open action ↗",
+                        console_workflow_path(
+                          AutomationInteractionReviewFinding::ACTION_WORKFLOW_NAME,
+                          run_id: action_run["run_id"]
+                        ),
+                        class: "console-link text-xs" %>
+          <% else %>
+            <%= button_to "Approve Draft-PR action",
+                          approve_finding_console_workflow_path(AutomationInteractionReviewFinding::WORKFLOW_NAME),
+                          method: :post,
+                          params: {
+                            run_id: finding.source_run_id,
+                            repository: finding.repository,
+                            finding_key: finding.key
+                          },
+                          class: "btn-primary",
+                          data: {
+                            turbo_confirm: finding.approval_confirmation
+                          } %>
+          <% end %>
+          <span class="font-mono text-xs text-zinc-600"><%= finding.key %></span>
+        </div>
+      </article>
+    <% end %>
+  </div>
+</section>

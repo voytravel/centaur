@@ -91,6 +91,13 @@
     <% end %>
   <% end %>
 
+  <% if @workflow_name == AutomationInteractionReviewFinding::WORKFLOW_NAME && @interaction_review_findings.present? %>
+    <%= render "interaction_review_findings",
+               findings: @interaction_review_findings,
+               interaction_review_run_detail: @maintenance_run_detail,
+               action_runs: @interaction_review_action_runs %>
+  <% end %>
+
   <% debug_rows = [] %>
   <% if @display_run_detail.present? %>
     <% input = @display_run_detail["input"] %>
