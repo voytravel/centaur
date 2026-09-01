@@ -6,6 +6,7 @@ import {
   handleCiEvent,
   handleReviewEvent,
   isOwnedPr,
+  managementTurnContextPreamble,
   type PolicyPrAutomation,
   type PrManagerContext,
 } from "../src/pr-manager";
@@ -147,6 +148,22 @@ describe("isOwnedPr", () => {
 
   test("not owned when there are no assignees", () => {
     expect(isOwnedPr({ assignees: [], userName: "centaur-bot" })).toBe(false);
+  });
+});
+
+describe("management turn prompt", () => {
+  test("keeps the external AI reviewer guard after custom deployment guidance", () => {
+    const preamble = managementTurnContextPreamble(
+      "Custom deployment guidance.",
+      "Address the review.",
+    );
+    expect(preamble).toContain("Custom deployment guidance.");
+    expect(preamble).toContain("Address the review.");
+    expect(preamble).toContain("External GitHub AI reviewer guard:");
+    expect(preamble).toContain("Do not request, re-request, @-mention");
+    expect(preamble.lastIndexOf("External GitHub AI reviewer guard:")).toBeGreaterThan(
+      preamble.indexOf("Address the review."),
+    );
   });
 });
 
@@ -1196,6 +1213,8 @@ describe("automated review loop budgets", () => {
     expect(managementStarts).toHaveLength(4);
     expect(comments).toHaveLength(1);
     expect(comments[0]).toContain("bot-authored review feedback are paused");
+    expect(comments[0]).toContain("automated reviewer `codex[bot]`");
+    expect(comments[0]).not.toContain("@codex[bot]");
     expect(await state.get("centaur-githubbot:pr:base/repo#7")).toMatchObject({
       automatedFeedbackRounds: 4,
       automatedFeedbackRoundsByReviewer: {

@@ -44,6 +44,9 @@ describe("DEFAULT_REVIEW_PROMPT", () => {
     expect(DEFAULT_REVIEW_PROMPT).toContain("reachable case");
     expect(DEFAULT_REVIEW_PROMPT).toContain("<!-- centaur-finding:");
     expect(DEFAULT_REVIEW_PROMPT).toContain("Post at most five findings");
+    expect(DEFAULT_REVIEW_PROMPT).toContain(
+      "Do not request, re-request, or @-mention an external AI reviewer",
+    );
     expect(DEFAULT_REVIEW_PROMPT).not.toContain("nits (optional)");
   });
 });

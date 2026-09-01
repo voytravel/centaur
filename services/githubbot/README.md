@@ -85,10 +85,12 @@ to have it take over, and unassign to hand it back. Bot-owned work runs on a ded
   pushed last.
 - **Address review.** A submitted review (`changes_requested` / `commented`) triggers one holistic
   turn that independently validates the feedback, makes only supported changes in a single coherent
-  commit, replies on each thread, resolves what it addressed, and re-requests review. Human reviews
-  remain authoritative. Each reviewer bot gets its own bounded response budget, and an aggregate
-  epoch cap prevents adding bots from multiplying the loop. At either cap, Githubbot comments that
-  human validation is required instead of continuing automatically.
+  commit, replies on each thread, and resolves what it addressed. It never re-requests an external
+  AI reviewer: Centaur-owned cross-model profiles are invoked internally, while a human deliberately
+  chooses any separate GitHub review bot. Human reviews remain authoritative. Each external reviewer
+  bot gets its own bounded response budget, and an aggregate epoch cap prevents adding bots from
+  multiplying the loop. At either cap, Githubbot comments that human validation is required instead
+  of continuing automatically.
 - **Merge when ready.** Deterministic — no agent. When GitHub reports the PR `mergeable_state == clean`
   the bot merges it (`GITHUBBOT_MERGE_METHOD`, default squash) and deletes the branch. `dirty` →
   conflict-resolution turn; `behind` → branch update; anything else → wait. Enabled by default for
@@ -157,9 +159,11 @@ ambiguous errors remain fail-closed and are visible to operators. Execution
 metadata records the requested/resolved harness and model, reviewer ID, epoch,
 round, and fallback category without exposing provider error text in GitHub.
 
-This orchestration controls Centaur-owned models only. Cursor, Greptile, and
-other external GitHub reviewers remain independent reviewer identities; their
-comments continue through the existing per-reviewer repair budgets.
+This orchestration controls Centaur-owned models only. Cursor, Greptile, Codex,
+and other external GitHub reviewers remain independent reviewer identities;
+Githubbot never requests or tags them itself. Their comments continue through
+the existing per-reviewer repair budgets after a human has deliberately invoked
+them.
 
 No policy request is trusted without both a verified GitHub signature and the
 single-purpose Console ingress credential. An unavailable or rejecting Console

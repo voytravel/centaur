@@ -39,6 +39,18 @@ const RENDER_RETRY_INITIAL_DELAY_MS = 250;
 const RENDER_RETRY_MAX_DELAY_MS = 5_000;
 const REVIEW_HUNK_MAX_CHARS = 4_000;
 
+/**
+ * Internal review profiles are started by Githubbot's policy orchestration,
+ * never by asking another GitHub bot to review. Keep this guard in the prompt
+ * that every conversational and management turn receives: a literal mention
+ * such as `@codex review` can trigger an unrelated third-party automation and
+ * create a repair/review loop outside Centaur's bounded epoch state.
+ */
+export const EXTERNAL_AI_REVIEWER_GUARD = [
+  "External GitHub AI reviewer guard:",
+  "- Centaur invokes its configured internal Codex and Claude reviewer profiles itself. Do not request, re-request, @-mention, or otherwise trigger an external AI reviewer through a GitHub comment, review request, or `gh pr edit --add-reviewer`. A human must explicitly choose and invoke any external reviewer.",
+].join("\n");
+
 /** Decoded GitHub thread key (mirrors the adapter's encodeThreadId formats). */
 export type GithubThreadRef = {
   owner: string;
@@ -215,6 +227,7 @@ export function githubTurnPreamble(preamble?: string): string {
     "- Keep detailed execution evidence in Console. Your terminal text must be exactly one concise block in this form (use one short factual sentence or phrase per field; use `None.` for a field with no relevant value):\nGITHUB_SUMMARY:\nOutcome: ...\nChanges: ...\nVerification: ...\nCI: ...\nNext: ...\nThe GitHub renderer turns a complete block into a compact Markdown update. For reviews, report the verdict and high-level next step only; keep code walkthroughs, command lines, hashes, timings, detailed nit lists, and baseline diagnosis in Console.",
     "- If you change code, inspect the repository CI workflow and run the closest local equivalent before pushing. Do not call CI green based only on a narrow test subset when a broader local equivalent is available.",
     "- When relevant and feasible, start the local app or preview needed to validate the change. After pushing, monitor checks for the new head; if a check fails because of your change, diagnose, fix, and verify it before finalizing. If you cannot run a check, name it and explain why.",
+    EXTERNAL_AI_REVIEWER_GUARD,
   ].join("\n");
   return [preamble, publicReplyContract].filter(Boolean).join("\n\n");
 }
