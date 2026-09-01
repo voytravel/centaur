@@ -81,7 +81,7 @@ function createTestBot(overrides: Partial<LinearbotOptions> = {}): Linearbot {
 describe("linearbot comment-thread pipeline", () => {
   // Assertions filter by this thread's own key / parent comment id: a prior
   // test's detached run can post into the shared mock servers after reset.
-  it("answers a comment @-mention with one comment (answer + collapsed CoT) on the comment-thread sandbox", async () => {
+  it("answers a comment @-mention with one concise final comment on the comment-thread sandbox", async () => {
     const threadKey = `linear:${ISSUE_ID}:c:comment-q`;
     const res = await postWebhook(
       commentCreatedPayload({
@@ -111,8 +111,8 @@ describe("linearbot comment-thread pipeline", () => {
 
     codexApi.emitOutputLines(threadKey, sampleCodexOutputLines("About a day."));
 
-    // The live comment is posted with the first thought, then finalized in
-    // place — wait for the settled answer body, not just the comment.
+    // The concise working status is finalized in place — wait for the settled
+    // answer body, not just the initial comment.
     await waitFor(() =>
       linearApi.botComments.some(
         (c) => c.parentId === "comment-q" && c.body.includes("About a day."),
@@ -123,11 +123,9 @@ describe("linearbot comment-thread pipeline", () => {
     )!;
     expect(reply.issueId).toBe(ISSUE_ID);
     expect(reply.body).toContain("About a day.");
-    expect(reply.body).toContain(">>> Chain of thought");
-    // The command renders as an inline code span, not a fenced block that
-    // would swallow the rest of the chain-of-thought list.
-    expect(reply.body).toContain("Command execution: `pnpm test`");
-    expect(reply.body).not.toContain("```");
+    expect(reply.body).not.toContain("Chain of thought");
+    expect(reply.body).not.toContain("Command execution");
+    expect(reply.body).not.toContain("pnpm test");
     // Edited in place, not re-posted: exactly one comment in this thread.
     expect(
       linearApi.botComments.filter((c) => c.parentId === "comment-q"),
@@ -299,7 +297,7 @@ describe("linearbot comment-thread pipeline", () => {
     );
   });
 
-  it("posts a live 'Thinking…' comment on the first thought, then swaps it to the answer in place", async () => {
+  it("posts a concise working status, keeps streamed details private, and swaps it to the answer in place", async () => {
     const threadKey = `linear:${ISSUE_ID}:c:comment-live`;
     await postWebhook(
       commentCreatedPayload({ id: "comment-live", body: "@centaur go" }),
@@ -308,21 +306,24 @@ describe("linearbot comment-thread pipeline", () => {
       codexApi.executes.some((e) => e.threadKey === threadKey),
     );
 
-    // Stream the thinking phase only — enough to settle one chain-of-thought
-    // line, with no answer or terminal event yet.
-    codexApi.emitOutputLines(threadKey, thinkingOnlyOutputLines());
+    // The status appears before any agent output, and does not include a
+    // streamed command or thought.
     await waitFor(() =>
       linearApi.botComments.some((c) => c.parentId === "comment-live"),
     );
     const live = linearApi.botComments.find(
       (c) => c.parentId === "comment-live",
     )!;
-    expect(live.body).toContain(">>> Thinking…");
-    expect(live.body).toContain("pnpm test");
-    expect(live.body).not.toContain(">>> Chain of thought");
+    expect(live.body).toContain("I’m assessing this issue");
+    expect(live.body).not.toContain("Thinking");
+    expect(live.body).not.toContain("pnpm test");
+
+    codexApi.emitOutputLines(threadKey, activityOnlyOutputLines());
+    await Bun.sleep(25);
+    expect(live.body).not.toContain("pnpm test");
 
     // Stream the answer + terminal — the SAME comment switches to its final
-    // form (answer above a "Chain of thought" section).
+    // form without exposing the preceding activity.
     codexApi.emitOutputLines(threadKey, answerOutputLines("All set."));
     await waitFor(() =>
       linearApi.botComments.some(
@@ -334,8 +335,9 @@ describe("linearbot comment-thread pipeline", () => {
     )!;
     expect(finalReply.id).toBe(live.id);
     expect(finalReply.body).toContain("All set.");
-    expect(finalReply.body).toContain(">>> Chain of thought");
-    expect(finalReply.body).not.toContain(">>> Thinking…");
+    expect(finalReply.body).not.toContain("Chain of thought");
+    expect(finalReply.body).not.toContain("Thinking");
+    expect(finalReply.body).not.toContain("pnpm test");
     // Edited in place, never re-posted.
     expect(
       linearApi.botComments.filter((c) => c.parentId === "comment-live"),
@@ -608,7 +610,7 @@ describe("linearbot comment-thread pipeline", () => {
     )!;
     expect(reply.body).toContain("Shipped.");
     expect(reply.body).not.toContain("Linear-Status:");
-    expect(reply.body).toContain(">>> Chain of thought");
+    expect(reply.body).not.toContain("Chain of thought");
     // Terminal marker moves the assigned issue to Done.
     await waitFor(() =>
       linearApi.issueStateUpdates.some((u) => u.stateId === "st-done"),
@@ -619,7 +621,7 @@ describe("linearbot comment-thread pipeline", () => {
     ).toBe(true);
   });
 
-  it("posts a 'starting work' comment up front on assignment, then swaps it to the answer", async () => {
+  it("posts a concise working comment up front on assignment, then swaps it to the answer", async () => {
     const threadKey = `linear:${ISSUE_ID}`;
     await postWebhook(
       issueAssignmentPayload({ updatedAt: "2026-06-16T04:00:00.000Z" }),
@@ -631,8 +633,8 @@ describe("linearbot comment-thread pipeline", () => {
     const start = linearApi.botComments.find(
       (c) => c.issueId === ISSUE_ID && !c.parentId,
     )!;
-    expect(start.body).toContain("On it");
-    expect(start.body).toContain(">>> Thinking…");
+    expect(start.body).toContain("I’m assessing this issue");
+    expect(start.body).not.toContain("Thinking");
 
     codexApi.emitOutputLines(threadKey, sampleCodexOutputLines("All done."));
     await waitFor(() =>
@@ -1174,17 +1176,17 @@ function sampleCodexOutputLines(answer: string): string[] {
   ];
 }
 
-// The thinking phase only: turn start, the answer item, a reasoning delta, and a
-// completed command — enough to settle the first chain-of-thought line, with no
-// answer text or terminal event. Pair with answerOutputLines to finish the run.
-function thinkingOnlyOutputLines(): string[] {
+// The activity phase only: turn start, the answer item, a reasoning delta, and a
+// completed command, with no answer text or terminal event. Pair with
+// answerOutputLines to finish the run; the activity must remain private.
+function activityOnlyOutputLines(): string[] {
   return sampleCodexNotifications("")
     .slice(0, 5)
     .map((notification) => JSON.stringify(notification));
 }
 
 // The answer delta + terminal event that finalize a run begun with
-// thinkingOnlyOutputLines.
+// activityOnlyOutputLines.
 function answerOutputLines(answer: string): string[] {
   return [
     JSON.stringify({
