@@ -96,6 +96,8 @@ describe("githubContextPreamble", () => {
     expect(preamble).toContain("Resolve the merge conflict");
     expect(preamble).toContain("commit and push the repair");
     expect(preamble).toContain("Do not stop at diagnosis");
+    expect(preamble).toContain("⚠️ Human review needed — merge conflict");
+    expect(preamble).toContain("Do not leave only a generic blocked message");
   });
 
   test("issue thread: uses issue wording", () => {
@@ -126,6 +128,9 @@ describe("githubContextPreamble", () => {
     expect(preamble).toContain("detailed nit lists");
     expect(preamble).toContain("closest local equivalent");
     expect(preamble).toContain("monitor checks for the new head");
+    expect(preamble).toContain("Try the documented whole-stack or local-application flow");
+    expect(preamble).toContain("Put it inline in the PR description or a PR comment");
+    expect(preamble).toContain("Do not leave it only as an attachment");
   });
 
   test("forbids conversational turns from triggering external AI reviewers", () => {

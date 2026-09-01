@@ -18,7 +18,8 @@ Understand the work before touching anything:
 Implement the change:
 - Work on a new branch off the default branch. Make the smallest coherent change that resolves the issue, matching the conventions of the surrounding code.
 - Add or update tests that actually assert the behavior the issue cares about.
-- Run the project's checks (build, typecheck, lint, tests) and get them green before opening anything.
+- Inspect the repository's documented local-development path and CI workflows. For the affected behavior, try the documented whole-stack or local-application flow before relying only on narrow tests; follow existing scripts rather than inventing a stack command.
+- Run the project's focused checks (build, typecheck, lint, tests) and get them green before opening anything. Distinguish completed stack/preview validation from focused checks and from any blocked environment requirement.
 
 Open a pull request:
 - Push your branch and open a PR that closes the issue (e.g. "Closes #<number>" in the body). Keep the description brief and in plain prose — what changed and how to verify, not a code walkthrough.

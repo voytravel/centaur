@@ -51,6 +51,19 @@ export const EXTERNAL_AI_REVIEWER_GUARD = [
   "- Centaur invokes its configured internal Codex and Claude reviewer profiles itself. Do not request, re-request, @-mention, or otherwise trigger an external AI reviewer through a GitHub comment, review request, or `gh pr edit --add-reviewer`. A human must explicitly choose and invoke any external reviewer.",
 ].join("\n");
 
+/**
+ * A non-negotiable evidence contract for code-changing PR work. It is shared
+ * by direct PR conversations and lifecycle-managed PR work, so a custom
+ * management prompt cannot reduce validation to a narrow test or turn a
+ * screenshot into an unrendered artifact.
+ */
+export const PR_CHANGE_VERIFICATION_AND_EVIDENCE_GUARD = [
+  "PR change verification and visual evidence:",
+  "- Before pushing a code change, inspect the repository's documented development path and CI workflows. Try the documented whole-stack or local-application flow needed to exercise the affected behavior, rather than relying only on a narrow test. Follow existing scripts and setup instructions; do not invent a stack command or claim a full-stack result that did not run.",
+  "- Run focused tests too. In the PR, distinguish a completed stack/preview check from focused checks and from anything blocked by missing dependencies, credentials, or environment access.",
+  "- For a user-visible UI change, capture a real screenshot from the verified local or preview flow. Put it inline in the PR description or a PR comment as rendered Markdown (for example `![Verified flow](https://...)`). Do not leave it only as an attachment, local file, artifact, or bare link. Never fabricate a screenshot; if it cannot be safely published inline, say why in the PR.",
+].join("\n");
+
 /** Decoded GitHub thread key (mirrors the adapter's encodeThreadId formats). */
 export type GithubThreadRef = {
   owner: string;
@@ -201,10 +214,15 @@ export function githubContextPreamble(
 
   const repairDirective = executionIntent === "resolve_conflict"
     ? "\n\nThis is an explicit, authorized repair request. The PR is currently conflicted. " +
-      "Resolve the merge conflict in the existing PR branch, run the narrowest relevant " +
-      "checks, then commit and push the repair. Do not stop at diagnosis or merely describe " +
-      "a fix. Do not merge or deploy. If a correct resolution cannot be determined safely, " +
-      "state the concrete blocker in the final summary."
+      "Resolve the merge conflict in the existing PR branch, validate it, then commit and push " +
+      "the repair. Do not stop at diagnosis or merely describe a fix. Do not merge or deploy. " +
+      "Only resolve it when the intended behavior is clear from both sides of the conflict, the " +
+      "PR context, and verification. If the resolution is not straightforward — for example, " +
+      "the two sides represent competing behavior or you cannot validate the result — do NOT " +
+      "push or force-push a guess. Make the handoff conspicuous in the final `GITHUB_SUMMARY`: " +
+      "set `Outcome: ⚠️ Human review needed — merge conflict`, name the affected area and the " +
+      "decision a human must make, state what you tried, and @-mention a human maintainer when " +
+      "one is known. Do not leave only a generic blocked message."
     : "";
   return (
     `You are responding in the main conversation thread of GitHub pull request ` +
@@ -227,6 +245,7 @@ export function githubTurnPreamble(preamble?: string): string {
     "- Keep detailed execution evidence in Console. Your terminal text must be exactly one concise block in this form (use one short factual sentence or phrase per field; use `None.` for a field with no relevant value):\nGITHUB_SUMMARY:\nOutcome: ...\nChanges: ...\nVerification: ...\nCI: ...\nNext: ...\nThe GitHub renderer turns a complete block into a compact Markdown update. For reviews, report the verdict and high-level next step only; keep code walkthroughs, command lines, hashes, timings, detailed nit lists, and baseline diagnosis in Console.",
     "- If you change code, inspect the repository CI workflow and run the closest local equivalent before pushing. Do not call CI green based only on a narrow test subset when a broader local equivalent is available.",
     "- When relevant and feasible, start the local app or preview needed to validate the change. After pushing, monitor checks for the new head; if a check fails because of your change, diagnose, fix, and verify it before finalizing. If you cannot run a check, name it and explain why.",
+    PR_CHANGE_VERIFICATION_AND_EVIDENCE_GUARD,
     EXTERNAL_AI_REVIEWER_GUARD,
   ].join("\n");
   return [preamble, publicReplyContract].filter(Boolean).join("\n\n");
