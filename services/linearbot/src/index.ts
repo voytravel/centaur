@@ -30,7 +30,8 @@ import {
 } from "./issue-comments";
 import {
   buildCommentReplyBody,
-  buildThinkingReplyBody,
+  buildFailedReplyBody,
+  buildWorkingReplyBody,
   commentMentionsBot,
   CommentReplyCollector,
 } from "./comment-bot";
@@ -366,19 +367,10 @@ function issueCommentMessage(
 }
 
 const THREAD_TURN_MAX_RETRIES = 3;
-// Min gap between live edits of the streaming "Thinking…" comment. The first
-// thought posts immediately; subsequent thoughts coalesce to stay well under
-// Linear's mutation rate limits. The final answer always writes regardless.
-const LIVE_THINKING_EDIT_MIN_INTERVAL_MS = 2_500;
 // Cap on the full issue-context preamble seeded on a thread's first turn. The
 // description rides inline in the execute, so keep it bounded (the whole issue
 // description, untruncated, could be huge).
 const ISSUE_CONTEXT_PREAMBLE_MAX_CHARS = 8_000;
-// Headline of the comment posted the moment the bot picks up a delegated issue
-// (an assignment turn has no triggering comment to react to, so the comment
-// itself is the "I've started" signal). Replaced by the live thought, then the
-// final answer, as the run proceeds.
-const WORK_START_HEADLINE = "On it — working on this issue.";
 const PROFILE_HANDLE_PATTERN = /\/profiles\/([^/?#]+)/;
 
 type ThreadHandlerInput = {
@@ -809,7 +801,6 @@ function handleIssueAssignment(
       .linearClient;
     backgroundWaitUntil(
       runThreadTurn({
-        announceStart: true,
         applyStatus: true,
         botUserId: input.botUserId,
         client,
@@ -900,7 +891,6 @@ function handleIssueAutomation(
       .linearClient;
     backgroundWaitUntil(
       runThreadTurn({
-        announceStart: true,
         applyStatus: decision.moveToInProgress,
         botUserId: input.botUserId,
         client: issueClient,
@@ -917,21 +907,14 @@ function handleIssueAutomation(
 }
 
 /**
- * Runs one agent turn on a thread's sandbox in a single, live comment. The
- * comment is posted with the first thought as a collapsed "Thinking…" section
- * that logs thoughts as the run streams (throttled), then swapped in place to
- * the final answer above a "Chain of thought" section when the run settles.
- * Seeds the issue context on the thread's first turn. Best-effort with a bounded
- * retry on transient (cold-start) failures; a hard failure shows an error.
+ * Runs one agent turn on a thread's sandbox in one live-edited Linear comment.
+ * It starts with a concise status, then swaps that in place for the final answer.
+ * Detailed reasoning, tool activity, and provider errors remain in the durable
+ * session record for Console instead of being copied to the issue thread. Seeds
+ * the issue context on the thread's first turn. Best-effort with a bounded retry
+ * on transient (cold-start) failures; a hard failure has a safe public summary.
  */
 async function runThreadTurn(input: {
-  /**
-   * Post the reply (and move the issue to In Progress) the moment work starts,
-   * before any thought streams — for assignment turns, which have no triggering
-   * comment to react to. Mentions leave this off (they post on the first thought
-   * and ack with a 👀 reaction instead).
-   */
-  announceStart?: boolean;
   applyStatus: boolean;
   /** Bot's app-user id; used to detect whether the issue is delegated to it. */
   botUserId?: string;
@@ -950,7 +933,6 @@ async function runThreadTurn(input: {
   trace: LinearbotTrace;
 }): Promise<void> {
   const {
-    announceStart,
     applyStatus,
     botUserId,
     client,
@@ -1062,57 +1044,13 @@ async function runThreadTurn(input: {
     threadId: threadKey,
     trace,
   };
-  // The live reply: posted with the first thought as a "Thinking…" section,
-  // edited (throttled) as more thoughts settle, then swapped to the final
-  // answer. `liveCommentId` persists across retries so a transient failure
-  // mid-stream keeps editing the same comment.
+  // Post a single concise status now and update it in place when the turn
+  // settles. The durable event stream remains the source of the full trace.
   let liveCommentId: string | undefined;
-  let livePostStarted = false;
-  let lastLiveRenderAtMs = 0;
-  let lastLiveLineCount = 0;
-  const renderThinking = async (
-    collector: CommentReplyCollector,
-  ): Promise<void> => {
-    if (!client) return;
-    const cotLines = collector.cotLines;
-    if (cotLines.length === 0) return;
-    try {
-      if (!livePostStarted) {
-        livePostStarted = true;
-        lastLiveLineCount = cotLines.length;
-        lastLiveRenderAtMs = nowMs();
-        liveCommentId = await postIssueReply(client, {
-          body: buildThinkingReplyBody(cotLines, collector.latestThought),
-          issueId,
-          parentCommentId,
-        });
-        return;
-      }
-      if (!liveCommentId || cotLines.length === lastLiveLineCount) return;
-      if (nowMs() - lastLiveRenderAtMs < LIVE_THINKING_EDIT_MIN_INTERVAL_MS)
-        return;
-      lastLiveLineCount = cotLines.length;
-      lastLiveRenderAtMs = nowMs();
-      await updateIssueReply(client, {
-        body: buildThinkingReplyBody(cotLines, collector.latestThought),
-        commentId: liveCommentId,
-      });
-    } catch (error) {
-      logger.debug("linearbot_live_render_failed", {
-        error: errorMessage(error),
-      });
-    }
-  };
-  // Assignment turns have no triggering comment to react to, so post the reply
-  // up front as the "I've started" signal — the chain of thought then fills in
-  // live (renderThinking) and the answer takes over when the run settles.
-  if (announceStart && client) {
-    livePostStarted = true;
-    lastLiveLineCount = 0;
-    lastLiveRenderAtMs = nowMs();
+  if (client) {
     try {
       liveCommentId = await postIssueReply(client, {
-        body: buildThinkingReplyBody([], WORK_START_HEADLINE),
+        body: buildWorkingReplyBody(),
         issueId,
         parentCommentId,
       });
@@ -1143,7 +1081,6 @@ async function runThreadTurn(input: {
         rendererOptions(options),
       )) {
         collector.update(chunk);
-        await renderThinking(collector);
       }
       await thread.setState({
         historyForwarded: true,
@@ -1156,10 +1093,7 @@ async function runThreadTurn(input: {
       });
       if (collector.failed) {
         failed = true;
-        body = buildCommentReplyBody({
-          answer: `⚠️ I ran into an error before finishing:\n\n${collector.errorText || "unknown error"}`,
-          cotLines: collector.cotLines,
-        });
+        body = buildFailedReplyBody();
       } else {
         const extracted = extractStatusMarker(
           collector.answer || fallback.text(),
@@ -1167,7 +1101,6 @@ async function runThreadTurn(input: {
         marker = extracted.marker;
         body = buildCommentReplyBody({
           answer: extracted.text,
-          cotLines: collector.cotLines,
           fallback: fallback.text(),
         });
       }
@@ -1187,14 +1120,14 @@ async function runThreadTurn(input: {
         error: errorMessage(error),
       });
       failed = true;
-      body = `⚠️ I ran into an error before finishing: ${errorMessage(error)}`;
+      body = buildFailedReplyBody();
       break;
     }
   }
   if (client && body !== undefined) {
     try {
-      // Swap the live "Thinking…" comment to the final answer in place; if no
-      // thought ever streamed (no live comment), post the answer fresh.
+      // Swap the concise status to the final answer in place; if the initial
+      // status could not be posted, publish the final answer fresh.
       if (liveCommentId) {
         await updateIssueReply(client, { body, commentId: liveCommentId });
       } else {
