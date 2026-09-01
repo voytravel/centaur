@@ -91,6 +91,16 @@ to have it take over, and unassign to hand it back. Bot-owned work runs on a ded
   bot gets its own bounded response budget, and an aggregate epoch cap prevents adding bots from
   multiplying the loop. At either cap, Githubbot comments that human validation is required instead
   of continuing automatically.
+- **PR verification and visual evidence.** Before it pushes a code change, Githubbot inspects the
+  repository's documented development and CI paths, tries the documented whole-stack or local-app
+  flow for the affected behavior, and still runs focused checks. It reports a blocked stack check
+  rather than claiming one completed. For a user-visible UI change, it puts a real verified
+  screenshot inline as rendered Markdown in the PR description or a PR comment — never only as an
+  attachment, artifact, local path, or bare link.
+- **Conflict handoff.** A conflict-resolution turn may push only when the semantic resolution is
+  clear and verified. If competing behavior or missing validation makes the choice non-straightforward,
+  it stops without pushing a guess and posts a conspicuous `⚠️ Human review needed — merge conflict`
+  comment that names the decision and evidence needed from a human.
 - **Merge when ready.** Deterministic — no agent. When GitHub reports the PR `mergeable_state == clean`
   the bot merges it (`GITHUBBOT_MERGE_METHOD`, default squash) and deletes the branch. `dirty` →
   conflict-resolution turn; `behind` → branch update; anything else → wait. Enabled by default for
