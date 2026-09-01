@@ -38,6 +38,7 @@ class AutomationQaDispatchJobTest < ActiveJob::TestCase
     assert_equal AutomationQaDispatch::WORKFLOW_NAME, request[:workflow_name]
     assert_equal "automation-qa-dispatch:#{event.id}", request[:idempotency_key]
     assert_equal "ENG-42", request.dig(:input, "issue_identifier")
+    assert_equal "Verify it", request.dig(:input, "issue_title")
     assert_equal "acme/widgets", request.dig(:input, "repository")
     assert_equal [ "ios_smoke" ], request.dig(:input, "profiles")
     assert_equal "auto", request.dig(:input, "target")
@@ -81,6 +82,7 @@ class AutomationQaDispatchJobTest < ActiveJob::TestCase
       metadata: {
         "linear_issue_id" => "issue-42",
         "linear_issue_identifier" => "ENG-42",
+        "linear_issue_title" => "Verify it",
         "linear_issue_url" => "https://linear.app/acme/issue/ENG-42/verify"
       },
       last_event_at: Time.current
