@@ -413,7 +413,16 @@ export function createSlackbotV2(options: SlackbotV2Options): SlackbotV2 {
         )
         return
       }
-      const decision = slackThreadReplyDecision(slackThreadReplyMode(options), message.text)
+      // Chat SDK can strip ordinary member mentions from `message.text`, but
+      // Slack's signed event retains them in `raw.text`. The reply policy uses
+      // that canonical source to avoid mistaking a request to another person
+      // for a continuation directed to Centaur.
+      const rawThreadReplyText = stringField(slackRawRecord(message).text)
+      const decision = slackThreadReplyDecision(
+        slackThreadReplyMode(options),
+        rawThreadReplyText || message.text,
+        options.botUserId
+      )
       if (decision.kind === 'ignore') {
         traceLog(
           options,

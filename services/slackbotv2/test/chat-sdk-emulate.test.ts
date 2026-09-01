@@ -2757,6 +2757,31 @@ describe('slackbotv2', () => {
     await Promise.all(initialWaits)
     expect(codexApi.executes).toHaveLength(1)
 
+    const addressedElsewhere = await postUserMessage(
+      `<@${USER_B_ID}> great. Can you write a small summary of where the service is at?`,
+      parent.ts
+    )
+    const addressedElsewhereWaits: Promise<unknown>[] = []
+    await bot.app.request(
+      '/api/webhooks/slack',
+      signedSlackEvent({
+        event_id: 'Ev-slackbotv2-actionable-other-user-ignored',
+        event: {
+          type: 'message',
+          user: USER_ID,
+          channel: CHANNEL_ID,
+          team: TEAM_ID,
+          ts: addressedElsewhere.ts,
+          thread_ts: parent.ts,
+          text: `<@${USER_B_ID}> great. Can you write a small summary of where the service is at?`
+        }
+      }),
+      {},
+      waitUntilContext(addressedElsewhereWaits)
+    )
+    await Promise.all(addressedElsewhereWaits)
+    expect(codexApi.executes).toHaveLength(1)
+
     const discussion = await postUserMessage('Agreed — that diagnosis sounds off.', parent.ts)
     const discussionWaits: Promise<unknown>[] = []
     await bot.app.request(

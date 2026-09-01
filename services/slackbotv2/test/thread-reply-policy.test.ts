@@ -18,6 +18,39 @@ describe('Slack thread reply policy', () => {
     })
   })
 
+  test('does not continue a reply addressed to another Slack user', () => {
+    const botUserId = 'UCENTAUR'
+    expect(
+      classifySlackThreadReply(
+        '<@UKEVINTIM> great. Can you write a small summary of where the service is at?',
+        botUserId
+      )
+    ).toEqual({
+      kind: 'ignore',
+      reason: 'directed_to_other_slack_user'
+    })
+    expect(
+      classifySlackThreadReply('Can you write a small summary for <@UKEVINTIM>?', botUserId)
+    ).toEqual({
+      kind: 'ignore',
+      reason: 'directed_to_other_slack_user'
+    })
+    expect(classifySlackThreadReply('@UCENTAUR can you write a small summary?', botUserId)).toEqual({
+      kind: 'act',
+      reason: 'explicit_action_request'
+    })
+    expect(
+      slackThreadReplyDecision(
+        'all',
+        '@UKEVINTIM great. Can you write a small summary of where the service is at?',
+        botUserId
+      )
+    ).toEqual({
+      kind: 'ignore',
+      reason: 'directed_to_other_slack_user'
+    })
+  })
+
   test('accepts explicit read-only requests', () => {
     expect(classifySlackThreadReply('Can you investigate how this record entered the pool?')).toEqual({
       kind: 'investigate',
