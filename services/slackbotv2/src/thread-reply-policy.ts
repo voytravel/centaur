@@ -11,7 +11,10 @@ import type { SlackbotV2Options } from './types'
 export type SlackThreadReplyMode = 'mentions_only' | 'actionable' | 'all'
 
 export type SlackThreadReplyDecision =
-  | { kind: 'ignore'; reason: 'not_explicitly_addressed' }
+  | {
+      kind: 'ignore'
+      reason: 'not_explicitly_addressed' | 'directed_to_other_slack_user'
+    }
   | { kind: 'investigate'; reason: 'explicit_read_only_request' }
   | { kind: 'act'; reason: 'explicit_action_request' }
   | { kind: 'continue'; reason: 'legacy_all_mode' }
@@ -65,6 +68,7 @@ const READ_ONLY_VERB_SOURCE = [
 const ACTION_VERB_PATTERN = new RegExp(`^(?:${ACTION_VERB_SOURCE})$`, 'i')
 const READ_ONLY_VERB_PATTERN = new RegExp(`^(?:${READ_ONLY_VERB_SOURCE})$`, 'i')
 const DIRECTIVE_VERB_SOURCE = `(?:${ACTION_VERB_SOURCE}|${READ_ONLY_VERB_SOURCE})`
+const SLACK_MEMBER_MENTION_PATTERN = /<@([UW][A-Z0-9]+)>|@([UW][A-Z0-9]+)\b/gi
 
 // Each pattern captures only the directive verb. Classification must never
 // scan the rest of a request: "Please investigate why the failed run..." is
@@ -104,8 +108,14 @@ export function slackThreadReplyMode(options: SlackbotV2Options): SlackThreadRep
  * conversational text must fail closed and remain available as Slack context
  * on a later explicit mention.
  */
-export function classifySlackThreadReply(text: string): SlackThreadReplyDecision {
+export function classifySlackThreadReply(
+  text: string,
+  botUserId?: string
+): SlackThreadReplyDecision {
   const normalized = text.replace(/\s+/g, ' ').trim()
+  if (normalized && isDirectedToOtherSlackUser(normalized, botUserId)) {
+    return { kind: 'ignore', reason: 'directed_to_other_slack_user' }
+  }
   const directiveVerb = normalized ? matchedDirectiveVerb(normalized) : undefined
   if (!directiveVerb) {
     return { kind: 'ignore', reason: 'not_explicitly_addressed' }
@@ -121,6 +131,24 @@ export function classifySlackThreadReply(text: string): SlackThreadReplyDecision
   return { kind: 'investigate', reason: 'explicit_read_only_request' }
 }
 
+/**
+ * Slack event text encodes individual mentions as `<@U…>` or `<@W…>`; the
+ * Chat SDK may instead normalize those to `@U…` / `@W…`. An unmentioned reply
+ * that names another member is directed elsewhere, even if it happens to
+ * contain an otherwise actionable phrase.
+ *
+ * A direct Centaur mention is handled before this continuation policy runs;
+ * accepting the configured bot ID here also keeps the pure policy safe if a
+ * caller invokes it independently.
+ */
+function isDirectedToOtherSlackUser(text: string, botUserId?: string): boolean {
+  const normalizedBotUserId = botUserId?.replace(/^@/, '').toUpperCase()
+  return [...text.matchAll(SLACK_MEMBER_MENTION_PATTERN)].some(match => {
+    const mentionedUserId = (match[1] ?? match[2])?.toUpperCase()
+    return Boolean(mentionedUserId && mentionedUserId !== normalizedBotUserId)
+  })
+}
+
 function matchedDirectiveVerb(text: string): string | undefined {
   for (const pattern of DIRECTIVE_PATTERNS) {
     const value = pattern.exec(text)?.[1]?.trim()
@@ -131,11 +159,18 @@ function matchedDirectiveVerb(text: string): string | undefined {
 
 export function slackThreadReplyDecision(
   mode: SlackThreadReplyMode,
-  text: string
+  text: string,
+  botUserId?: string
 ): SlackThreadReplyDecision {
+  // This is an addressee boundary, rather than an intent heuristic: a reply
+  // explicitly addressed to someone else must never wake Centaur, including
+  // in legacy `all` mode.
+  if (isDirectedToOtherSlackUser(text, botUserId)) {
+    return { kind: 'ignore', reason: 'directed_to_other_slack_user' }
+  }
   if (mode === 'mentions_only') return { kind: 'ignore', reason: 'not_explicitly_addressed' }
   if (mode === 'all') return { kind: 'continue', reason: 'legacy_all_mode' }
-  return classifySlackThreadReply(text)
+  return classifySlackThreadReply(text, botUserId)
 }
 
 /**
