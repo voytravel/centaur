@@ -127,6 +127,14 @@ describe("githubContextPreamble", () => {
     expect(preamble).toContain("closest local equivalent");
     expect(preamble).toContain("monitor checks for the new head");
   });
+
+  test("forbids conversational turns from triggering external AI reviewers", () => {
+    const preamble = githubTurnPreamble("Inspect the pull request.");
+    expect(preamble).toContain("External GitHub AI reviewer guard:");
+    expect(preamble).toContain("configured internal Codex and Claude reviewer profiles");
+    expect(preamble).toContain("Do not request, re-request, @-mention");
+    expect(preamble).toContain("gh pr edit --add-reviewer");
+  });
 });
 
 describe("GithubRenderFallback", () => {

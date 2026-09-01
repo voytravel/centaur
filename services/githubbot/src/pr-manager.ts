@@ -8,7 +8,7 @@ import {
   type CrossModelReviewOrchestration,
 } from "./review-orchestration";
 import { DEFAULT_REVIEW_PROMPT } from "./review-prompt";
-import { runTurnStream } from "./turn";
+import { EXTERNAL_AI_REVIEWER_GUARD, runTurnStream } from "./turn";
 import {
   fetchCiEvaluation,
   maybeEmitReviewSubmitted,
@@ -1265,8 +1265,11 @@ export async function handleReviewEvent(
             reviewerRounds >= maxReviewerRounds ||
             epochRounds >= maxEpochRounds
           ) {
+            // This becomes a public GitHub comment. Render a reviewer login as
+            // code rather than a Markdown mention: an external AI reviewer can
+            // treat a literal @-mention as a new work request.
             const reviewerDescription = reviewer
-              ? `@${reviewer}`
+              ? `automated reviewer \`${reviewer}\``
               : "an automated reviewer";
             const limitDescription = reviewerRounds >= maxReviewerRounds
               ? `${maxReviewerRounds} responses to ${reviewerDescription}`
@@ -1662,7 +1665,8 @@ function fireAddressReviewTurn(
     `the reviewer. Resolve the threads you've addressed.\n` +
     `- Run the narrowest relevant verification before pushing. If your change breaks a ` +
     `check, diagnose and fix it; do not declare the review addressed while your revision is red.\n` +
-    `- Re-request review from @${reviewer} once you've pushed.\n` +
+    "- Do not request or re-request any reviewer after pushing. Centaur's configured " +
+    "internal review profiles run through policy; a human controls external reviewer requests.\n" +
     `- If a request is unclear or you can't validate it, say so in the thread and ask.` +
     automatedGuidance;
   fireManagementTurn(
@@ -1674,7 +1678,7 @@ function fireAddressReviewTurn(
     {
       id: `review-resp-${owner}/${repo}#${pr.number}-${reviewId}`,
       label: "address-review",
-      text: `Address the review on ${owner}/${repo}#${pr.number} from @${reviewer}.`,
+      text: `Address the review on ${owner}/${repo}#${pr.number} from GitHub reviewer ${reviewer}.`,
     },
     reviewNodeId,
   );
@@ -1711,9 +1715,12 @@ function fireManagementTurn(
   const threadKey = managementThreadKey(owner, repo, pr.number);
   const trace = makeTrace(threadKey, message.id);
   // A deployment can prepend its own constraints to the management methodology
-  // (the per-action preamble still rides underneath).
-  const guidance = ctx.options.managementPrompt;
-  const contextPreamble = guidance ? `${guidance}\n\n${preamble}` : preamble;
+  // (the per-action preamble and non-negotiable external-reviewer guard still
+  // ride underneath, so an override cannot accidentally reinstate a loop).
+  const contextPreamble = managementTurnContextPreamble(
+    ctx.options.managementPrompt,
+    preamble,
+  );
   let lastEventId = 0;
   const forwardInput: ForwardSessionInput = {
     afterEventId: 0,
@@ -1768,6 +1775,20 @@ function fireManagementTurn(
         }
       }),
   );
+}
+
+/**
+ * Keeps the external-reviewer guard last even when an operator supplies custom
+ * management guidance. The final position makes it less likely that a generic
+ * deployment prompt can revive a GitHub-bot review loop.
+ */
+export function managementTurnContextPreamble(
+  guidance: string | undefined,
+  preamble: string,
+): string {
+  return [ guidance, preamble, EXTERNAL_AI_REVIEWER_GUARD ]
+    .filter(Boolean)
+    .join("\n\n");
 }
 
 function managementMessage(
