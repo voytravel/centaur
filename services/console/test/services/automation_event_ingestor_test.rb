@@ -372,6 +372,7 @@ class AutomationEventIngestorTest < ActiveSupport::TestCase
     workstream = AutomationWorkstream.sole
     assert_equal "ENG-42", workstream.metadata["linear_issue_identifier"]
     assert_equal "https://linear.app/voytravel/issue/ENG-42/implement-it", workstream.metadata["linear_issue_url"]
+    assert_equal "Implement it", workstream.metadata["linear_issue_title"]
   end
 
   test "queues one QA workflow for a verified Linear status transition" do
