@@ -585,10 +585,11 @@ impl AgentSandboxBackend {
                 continue;
             }
             let fresh_agent = self.get_pod(id).await?;
-            if !fresh_agent
-                .as_ref()
-                .is_some_and(|fresh| fresh.metadata.uid == agent.metadata.uid && pod_stopped(fresh))
-            {
+            if !fresh_agent.as_ref().is_some_and(|fresh| {
+                fresh.metadata.uid == agent.metadata.uid
+                    && fresh.metadata.deletion_timestamp.is_none()
+                    && pod_stopped(fresh)
+            }) {
                 break;
             }
             let params = DeleteParams {
@@ -2023,6 +2024,7 @@ fn terminal_proxy_cleanup_candidate(
         || agent.metadata.uid.is_none()
         || agent.metadata.deletion_timestamp.is_some()
         || proxy.metadata.uid.is_none()
+        || proxy.metadata.resource_version.is_none()
         || proxy.metadata.deletion_timestamp.is_some()
     {
         return false;
@@ -2036,18 +2038,19 @@ fn terminal_proxy_cleanup_candidate(
     {
         return false;
     }
-    let owned = proxy
-        .metadata
-        .owner_references
-        .as_ref()
-        .is_some_and(|owners| {
-            owners.iter().any(|owner| {
-                owner.uid == sandbox_uid
-                    && owner.name == id.as_str()
-                    && owner.kind == "Sandbox"
-                    && owner.api_version == crate::crd::Sandbox::api_version(&())
+    let owned = |pod: &Pod| {
+        pod.metadata
+            .owner_references
+            .as_ref()
+            .is_some_and(|owners| {
+                owners.iter().any(|owner| {
+                    owner.uid == sandbox_uid
+                        && owner.name == id.as_str()
+                        && owner.kind == "Sandbox"
+                        && owner.api_version == crate::crd::Sandbox::api_version(&())
+                })
             })
-        });
+    };
     // A proxy repaired during the failed turn is also obsolete. A proxy made
     // at/after termination may belong to a resume, so retain it. Fall back to
     // Pod creation when the kubelet has not recorded a termination timestamp.
@@ -2068,7 +2071,8 @@ fn terminal_proxy_cleanup_candidate(
         })
         .max_by_key(|time| time.0)
         .or(agent.metadata.creation_timestamp.as_ref());
-    owned
+    owned(proxy)
+        && owned(agent)
         && matches!(
             (&proxy.metadata.creation_timestamp, terminal_cutoff),
         (Some(proxy_created), Some(cutoff)) if proxy_created.0 < cutoff.0
@@ -2288,7 +2292,8 @@ mod tests {
     #[test]
     fn terminal_cleanup_requires_owned_old_proxy_and_terminal_agent_identity() {
         let agent: Pod = serde_json::from_value(json!({
-            "metadata": {"name":"sandbox-test", "uid":"agent-uid", "creationTimestamp":"2026-01-02T00:00:00Z"},
+            "metadata": {"name":"sandbox-test", "uid":"agent-uid", "creationTimestamp":"2026-01-02T00:00:00Z",
+                "ownerReferences": [{"apiVersion":"agents.x-k8s.io/v1alpha1", "kind":"Sandbox", "name":"sandbox-test", "uid":"sandbox-uid"}]},
             "status": {"phase":"Failed", "containerStatuses":[{
                 "name":"agent", "image":"fixture", "imageID":"fixture", "ready":false,
                 "restartCount":0, "state":{"terminated":{"exitCode":137, "finishedAt":"2026-01-04T00:00:00Z"}}
@@ -2296,7 +2301,7 @@ mod tests {
         })).unwrap();
         let proxy: Pod = serde_json::from_value(json!({
             "metadata": {
-                "name":"sandbox-test-proxy-old", "uid":"proxy-uid", "creationTimestamp":"2026-01-01T00:00:00Z",
+                "name":"sandbox-test-proxy-old", "uid":"proxy-uid", "resourceVersion":"fixture-version", "creationTimestamp":"2026-01-01T00:00:00Z",
                 "labels": {"centaur.ai/managed-by":"api-rs", "centaur.ai/iron-proxy":"true", "centaur.ai/sandbox-id":"sandbox-test"},
                 "ownerReferences": [{"apiVersion":"agents.x-k8s.io/v1alpha1", "kind":"Sandbox", "name":"sandbox-test", "uid":"sandbox-uid"}]
             }
@@ -2325,6 +2330,12 @@ mod tests {
         let mut foreign = proxy.clone();
         foreign.metadata.owner_references.as_mut().unwrap()[0].uid = "another-owner".to_owned();
         assert!(!eligible(&foreign, &agent));
+        let mut foreign_agent = agent.clone();
+        foreign_agent.metadata.owner_references = None;
+        assert!(!eligible(&proxy, &foreign_agent));
+        let mut no_version = proxy.clone();
+        no_version.metadata.resource_version = None;
+        assert!(!eligible(&no_version, &agent));
         let mut unlabeled = proxy.clone();
         unlabeled.metadata.labels = None;
         assert!(!eligible(&unlabeled, &agent));
