@@ -60,6 +60,15 @@ class SystemPromptTest(unittest.TestCase):
         self.assertIn("Codex model IDs are routed through the configured OpenAI-compatible gateway", prompt)
         self.assertIn("Use `-rsn <effort>` to set Codex reasoning effort", prompt)
 
+    def test_slack_progress_is_concise_and_reasoning_stays_in_console(self) -> None:
+        prompt = SYSTEM_PROMPT.read_text()
+
+        self.assertIn("[Chat progress discipline]", prompt)
+        self.assertIn("not a chain-of-thought", prompt)
+        self.assertIn("concise live status", prompt)
+        self.assertIn("durable Console trace", prompt)
+        self.assertIn("Do not replay your investigation chronologically", prompt)
+
     def test_personal_oauth_app_connection_guidance_is_present(self) -> None:
         prompt = SYSTEM_PROMPT.read_text()
 
