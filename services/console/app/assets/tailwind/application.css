@@ -1,6 +1,25 @@
 @import "tailwindcss";
 @config "../../../config/tailwind.config.js";
 
+/* Workflow status/approval colors must remain legible in the Console's
+   explicit light theme, independently of the operating-system preference. */
+html[data-console-theme="light"] .console-workflow-surface .text-amber-100\/80,
+html[data-console-theme="light"] .console-workflow-surface .text-amber-200 {
+  color: #854d0e;
+}
+html[data-console-theme="light"] .console-workflow-surface .text-red-300,
+html[data-console-theme="light"] .console-workflow-surface .text-red-400 {
+  color: #b91c1c;
+}
+html[data-console-theme="light"] .console-workflow-surface .text-centaur-300,
+html[data-console-theme="light"] .console-workflow-surface .btn-primary,
+html[data-console-theme="light"] .console-workflow-surface .console-link {
+  color: #087443;
+}
+html[data-console-theme="light"] .console-workflow-surface .text-sky-300 {
+  color: #075985;
+}
+
 /* Console form building blocks, matching the centaur/ink terminal aesthetic.
    Three-level surface hierarchy: page (ink-900) < section card (ink-800) <
    input (ink-700), so fields stay legible against their card. */

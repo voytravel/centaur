@@ -2,6 +2,23 @@ require "test_helper"
 require "timeout"
 
 class ApplicationHelperTest < ActionView::TestCase
+  test "QA conclusion is separate from successful workflow execution" do
+    detail = { "workflow_name" => "linear_qa_control_plane", "status" => "completed",
+               "result" => { "output" => { "conclusion" => "failure" } } }
+    assert_equal({ label: "QA failure", status: "failed" }, workflow_application_outcome(detail))
+    detail["result"]["output"]["conclusion"] = "success"
+    assert_equal({ label: "QA passed", status: "completed" }, workflow_application_outcome(detail))
+    detail["result"]["output"]["conclusion"] = "skipped"
+    assert_equal "pending", workflow_application_outcome(detail)[:status]
+  end
+
+  test "workflow outcome ignores untyped results and unrelated workflows" do
+    [ nil, {}, { "workflow_name" => "linear_qa_control_plane", "result" => "failure" },
+      { "workflow_name" => "linear_qa_control_plane", "result" => { "output" => "failure" } },
+      { "workflow_name" => "unrelated", "result" => { "output" => { "conclusion" => "failure" } } }
+    ].each { |detail| assert_nil workflow_application_outcome(detail) }
+  end
+
   test "truncate_middle leaves short values unchanged" do
     assert_equal "short", truncate_middle("short")
     assert_equal "", truncate_middle(nil)
