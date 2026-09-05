@@ -469,6 +469,10 @@ spec:
             # proxy sync.
             - name: IRON_CONTROL_URL
               value: {{ include "centaur.consoleUrl" . | quote }}
+{{- if and $console.sandboxUrl (not (hasKey .Values.apiRs.extraEnv "KUBERNETES_IRON_PROXY_SANDBOX_CONSOLE_URL")) }}
+            - name: KUBERNETES_IRON_PROXY_SANDBOX_CONSOLE_URL
+              value: {{ $console.sandboxUrl | quote }}
+{{- end }}
             - name: IRON_CONTROL_API_KEY
               valueFrom:
                 secretKeyRef:
