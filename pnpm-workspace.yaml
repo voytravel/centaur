@@ -14,3 +14,4 @@ patchedDependencies:
 
 overrides:
   nanoid: 3.3.18
+  undici: 6.28.0
