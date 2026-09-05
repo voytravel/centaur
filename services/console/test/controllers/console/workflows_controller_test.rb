@@ -310,6 +310,58 @@ class Console::WorkflowsControllerTest < ActionDispatch::IntegrationTest
     ], client.created_runs
   end
 
+  test "renders a weekly interaction-improvement proposal from the selected review run" do
+    run = fake_run(workflow_name: "automation_interaction_review")
+    detail = interaction_review_run_detail(run.run_id)
+    with_api_client(FakeApiClient.new(run_details: { run.run_id => detail }))
+
+    with_workflow_history("automation_interaction_review", runs: [ run ]) do
+      get console_workflow_url("automation_interaction_review", run_id: run.run_id)
+    end
+
+    assert_response :ok
+    assert_select "h2", text: "Improvement proposals and actions"
+    assert_select "p", text: /Harden the result contract/
+    assert_select "form[action=?]", approve_finding_console_workflow_path("automation_interaction_review")
+    assert_select "button", text: "Approve Draft-PR action"
+  end
+
+  test "approving a validated interaction-review proposal queues only its bounded Draft-PR action" do
+    source_run_id = "run-interaction-review-1"
+    client = FakeApiClient.new(run_details: { source_run_id => interaction_review_run_detail(source_run_id) })
+    with_api_client(client)
+
+    post approve_finding_console_workflow_path("automation_interaction_review"), params: {
+      run_id: source_run_id,
+      repository: "acme/widgets",
+      finding_key: "0123456789abcdef"
+    }
+
+    assert_redirected_to console_workflow_path("automation_interaction_review", run_id: source_run_id)
+    assert_match(/Scoped action queued/, flash[:notice])
+    assert_equal [
+      {
+        workflow_name: "automation_interaction_review_action",
+        input: {
+          "source_run_id" => source_run_id,
+          "repository" => "acme/widgets",
+          "base_branch" => "main",
+          "finding" => {
+            "fingerprint" => "0123456789abcdef",
+            "category" => "workflow_contract",
+            "evidence_refs" => [ "workflow:github_dependency_maintenance:failed" ],
+            "title" => "Harden the result contract",
+            "rationale" => "The same scheduled workflow failed repeatedly during the review window.",
+            "proposed_change" => "Validate the result before the scheduled batch reporter consumes it."
+          },
+          "approved_by" => @operator.oid
+        },
+        idempotency_key: AutomationInteractionReviewFinding.for_run(interaction_review_run_detail(source_run_id)).first.idempotency_key,
+        max_attempts: nil
+      }
+    ], client.created_runs
+  end
+
   test "unknown action status hides approval and also rejects a direct approval POST" do
     run = fake_run(workflow_name: "github_dependency_maintenance")
     client = FakeApiClient.new(run_details: { run.run_id => maintenance_run_detail(run.run_id) }, lookup_error: "unavailable")
@@ -323,6 +375,44 @@ class Console::WorkflowsControllerTest < ActionDispatch::IntegrationTest
       run_id: run.run_id, repository: "acme/widgets", finding_key: "security:19"
     }
     assert_match(/Could not queue/, flash[:alert])
+    assert_empty client.created_runs
+  end
+
+  test "weekly approval fails closed when lookup is unavailable and cannot be manually triggered empty" do
+    run = fake_run(workflow_name: "automation_interaction_review")
+    client = FakeApiClient.new(run_details: { run.run_id => interaction_review_run_detail(run.run_id) }, lookup_error: "unavailable")
+    with_api_client(client)
+    with_workflow_history(run.workflow_name, runs: [ run ]) do
+      get console_workflow_url(run.workflow_name, run_id: run.run_id)
+    end
+    assert_select "button", text: "Approve Draft-PR action", count: 0
+    assert_select "span", text: /Action status unavailable/
+    post approve_finding_console_workflow_path(run.workflow_name), params: {
+      run_id: run.run_id, repository: "acme/widgets", finding_key: "0123456789abcdef"
+    }
+    assert_match(/Could not queue/, flash[:alert])
+    post run_console_workflow_path("automation_interaction_review_action")
+    assert_match(/approval card/, flash[:alert])
+    assert_empty client.created_runs
+  end
+
+  test "weekly approval links an existing failed action rather than queueing another" do
+    run = fake_run(workflow_name: "automation_interaction_review")
+    detail = interaction_review_run_detail(run.run_id)
+    finding = AutomationInteractionReviewFinding.for_run(detail).first
+    client = FakeApiClient.new(run_details: { run.run_id => detail }, action_runs: {
+      finding.idempotency_key => { "run_id" => "review-action-1", "status" => "failed" }
+    })
+    with_api_client(client)
+    with_workflow_history(run.workflow_name, runs: [ run ]) do
+      get console_workflow_url(run.workflow_name, run_id: run.run_id)
+    end
+    assert_select "button", text: "Approve Draft-PR action", count: 0
+    assert_select "a[href=?]", console_workflow_path("automation_interaction_review_action", run_id: "review-action-1"), text: "Open action ↗"
+    post approve_finding_console_workflow_path(run.workflow_name), params: {
+      run_id: run.run_id, repository: "acme/widgets", finding_key: finding.key
+    }
+    assert_match(/already exists/, flash[:notice])
     assert_empty client.created_runs
   end
 
@@ -525,6 +615,30 @@ class Console::WorkflowsControllerTest < ActionDispatch::IntegrationTest
                 "source_numbers" => [ 19 ]
               }
             ]
+          }
+        ]
+      }
+    }
+  end
+
+  def interaction_review_run_detail(run_id)
+    {
+      "workflow_name" => "automation_interaction_review",
+      "run_id" => run_id,
+      "status" => "completed",
+      "result" => {
+        "status" => "completed",
+        "schema_version" => 1,
+        "findings" => [
+          {
+            "repository" => "acme/widgets",
+            "base_branch" => "main",
+            "fingerprint" => "0123456789abcdef",
+            "category" => "workflow_contract",
+            "evidence_refs" => [ "workflow:github_dependency_maintenance:failed" ],
+            "title" => "Harden the result contract",
+            "rationale" => "The same scheduled workflow failed repeatedly during the review window.",
+            "proposed_change" => "Validate the result before the scheduled batch reporter consumes it."
           }
         ]
       }
