@@ -339,7 +339,7 @@ class Console::WorkflowsControllerTest < ActionDispatch::IntegrationTest
     end
     assert_response :ok
     assert_select "h2", text: "Workflow diagnostics"
-    assert_select "p", text: /Repository action state is unknown/
+    assert_select "p.text-red-300", text: /Repository action state is unknown/
     assert_select "p", text: /inspect GitHub before retrying/
     refute_includes response.body, "no-action workflow failures"
     refute_includes response.body, "No repository action was authorized"
