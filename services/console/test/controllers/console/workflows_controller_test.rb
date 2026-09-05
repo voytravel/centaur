@@ -326,6 +326,26 @@ class Console::WorkflowsControllerTest < ActionDispatch::IntegrationTest
     assert_empty client.created_runs
   end
 
+  test "mutating workflow diagnostics never claim that no action happened" do
+    run = fake_run(workflow_name: "github_dependency_maintenance")
+    detail = maintenance_run_detail(run.run_id)
+    route = detail.fetch("result").fetch("routes").first
+    route["security_advisories"]["mode"] = "draft_pr"
+    route["proposals"] = []
+    route["diagnostic"] = { "kind" => "observer_unavailable", "code" => "agent_turn_unavailable", "summary" => "unused untrusted description" }
+    with_api_client(FakeApiClient.new(run_details: { run.run_id => detail }))
+    with_workflow_history(run.workflow_name, runs: [ run ]) do
+      get console_workflow_url(run.workflow_name, run_id: run.run_id)
+    end
+    assert_response :ok
+    assert_select "h2", text: "Workflow diagnostics"
+    assert_select "p", text: /Repository action state is unknown/
+    assert_select "p", text: /inspect GitHub before retrying/
+    refute_includes response.body, "no-action workflow failures"
+    refute_includes response.body, "No repository action was authorized"
+    assert_select "button", text: "Approve scoped action", count: 0
+  end
+
   test "matching legacy action is linked and cannot be approved a second time" do
     detail = maintenance_run_detail("run-observation-1")
     finding = GithubDependencyMaintenanceFinding.for_run(detail).first
