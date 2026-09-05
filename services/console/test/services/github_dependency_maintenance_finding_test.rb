@@ -39,7 +39,31 @@ class GithubDependencyMaintenanceFindingTest < ActiveSupport::TestCase
       },
       finding.action_input(approved_by: "usr_approved")
     )
-    assert_equal "github-dependency-maintenance-action:run-observation-1:security:19", finding.idempotency_key
+    assert_match(/\Agithub-dependency-maintenance-action:v2:[0-9a-f]{64}\z/, finding.idempotency_key)
+    assert_equal "github-dependency-maintenance-action:run-observation-1:security:19", finding.legacy_idempotency_key
+  end
+
+  test "idempotency separates repositories branches and actions with the same finding number" do
+    base = { source_run_id: "run-1", repository: "acme/widgets", base_branch: "main",
+             kind: "dependabot_pull_request", action: "repair", source_numbers: [ 42 ] }
+    keys = [ base, base.merge(repository: "acme/other"), base.merge(action: "merge"),
+            base.merge(base_branch: "develop") ].map do |attributes|
+      GithubDependencyMaintenanceFinding.new(**attributes).idempotency_key
+    end
+    assert_equal 4, keys.uniq.length
+    assert_equal keys.first, GithubDependencyMaintenanceFinding.new(**base).idempotency_key
+  end
+
+  test "legacy action reuse requires the exact immutable approval target" do
+    finding = GithubDependencyMaintenanceFinding.new(
+      source_run_id: "run-1", repository: "acme/widgets", base_branch: "main",
+      kind: "dependabot_pull_request", action: "repair", source_numbers: [ 42 ]
+    )
+    input = finding.action_input(approved_by: "usr_original")
+    assert finding.matches_action_input?(input)
+    refute finding.matches_action_input?(input.merge("repository" => "acme/other"))
+    refute finding.matches_action_input?(input.merge("finding" => input["finding"].merge("action" => "merge")))
+    refute finding.matches_action_input?(nil)
   end
 
   test "parses a repair proposal only when it matches the observed Dependabot outcome" do
@@ -207,6 +231,21 @@ class GithubDependencyMaintenanceFindingTest < ActiveSupport::TestCase
         ]
       )
     )
+  end
+
+  test "a failed direct route does not claim that no action was authorized" do
+    %w[agent_turn_unavailable invalid_structured_result].each do |code|
+      run = maintenance_run(security: { "mode" => "draft_pr", "outcome" => "blocked" }, diagnostic: {
+        "kind" => code == "agent_turn_unavailable" ? "observer_unavailable" : "observer_result_rejected",
+        "code" => code, "summary" => "untrusted summary"
+      })
+      diagnostic = GithubDependencyMaintenanceFinding.diagnostics_for_run(run).first
+      assert_includes diagnostic.detail, "Repository action state is unknown"
+      assert_includes diagnostic.detail, "Inspect GitHub before retrying"
+      assert_not_includes diagnostic.detail, "No repository action was authorized"
+      assert_not_includes diagnostic.detail, "untrusted"
+      assert_empty GithubDependencyMaintenanceFinding.for_run(run)
+    end
   end
 
   test "does not expose an action for an observe-only or mismatched proposal" do

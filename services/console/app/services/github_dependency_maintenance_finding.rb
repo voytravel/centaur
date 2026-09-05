@@ -2,6 +2,8 @@
 # maintenance workflow into a safe Console approval target. The model's result
 # is treated as data: this class derives every action input from a small allow
 # list and never forwards free-form text to the action workflow.
+require "digest"
+
 class GithubDependencyMaintenanceFinding
   WORKFLOW_NAME = "github_dependency_maintenance"
   ACTION_WORKFLOW_NAME = "github_dependency_maintenance_action"
@@ -35,7 +37,7 @@ class GithubDependencyMaintenanceFinding
     },
     "agent_turn_unavailable" => {
       title: "Observer unavailable",
-      detail: "The scheduled observer did not complete after its bounded retry. No repository action was authorized."
+      detail: "The scheduled agent turn did not complete. No repository action was authorized."
     },
     "legacy_contract_rejection" => {
       title: "Observer result rejected",
@@ -172,7 +174,21 @@ class GithubDependencyMaintenanceFinding
   end
 
   def idempotency_key
+    # Finding numbers are repository-local, and repair/merge are distinct
+    # approvals. Never let another repository or action reuse this task.
+    identity = [ source_run_id, repository, base_branch, kind, action, source_numbers ]
+    "github-dependency-maintenance-action:v2:#{Digest::SHA256.hexdigest(identity.to_json)}"
+  end
+
+  def legacy_idempotency_key
     "github-dependency-maintenance-action:#{source_run_id}:#{key}"
+  end
+
+  def matches_action_input?(input)
+    return false unless input.is_a?(Hash)
+
+    expected = action_input(approved_by: nil).except("approved_by")
+    input.slice(*expected.keys) == expected
   end
 
   class Parser
@@ -272,11 +288,19 @@ class GithubDependencyMaintenanceFinding
       return unless code
 
       presentation = DIAGNOSTICS.fetch(code)
+      read_only = [ route["security_advisories"], route["dependabot"] ].all? do |section|
+        section.is_a?(Hash) && %w[observe approval_required].include?(section["mode"])
+      end
+      detail = presentation.fetch(:detail)
+      unless read_only
+        detail = detail.sub("No repository action was authorized.",
+          "Repository action state is unknown. Inspect GitHub before retrying; a change may already exist.")
+      end
       Diagnostic.new(
         repository: repository,
         code: code,
         title: presentation.fetch(:title),
-        detail: presentation.fetch(:detail)
+        detail: detail
       )
     end
 
