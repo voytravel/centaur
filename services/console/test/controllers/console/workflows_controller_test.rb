@@ -38,12 +38,13 @@ class Console::WorkflowsControllerTest < ActionDispatch::IntegrationTest
   class FakeApiClient
     attr_reader :created_runs, :idempotency_lookups
 
-    def initialize(schedules: [], run_details: {}, action_runs: {}, create_result: nil, create_error: nil)
+    def initialize(schedules: [], run_details: {}, action_runs: {}, create_result: nil, create_error: nil, lookup_error: nil)
       @schedules = schedules
       @run_details = run_details
       @action_runs = action_runs
       @create_result = create_result || { "ok" => true, "run_id" => "run-new", "created" => true }
       @create_error = create_error
+      @lookup_error = lookup_error
       @created_runs = []
       @idempotency_lookups = []
     end
@@ -60,6 +61,7 @@ class Console::WorkflowsControllerTest < ActionDispatch::IntegrationTest
     end
 
     def find_workflow_run_by_idempotency_key(workflow_name:, idempotency_key:)
+      raise CentaurApiClient::Error, @lookup_error if @lookup_error
       @idempotency_lookups << { workflow_name: workflow_name, idempotency_key: idempotency_key }
       @action_runs[idempotency_key]
     end
@@ -171,6 +173,21 @@ class Console::WorkflowsControllerTest < ActionDispatch::IntegrationTest
     assert_select "dt", text: "Schedule", count: 0
   end
 
+  test "a completed QA monitor prominently shows a failed QA outcome" do
+    run = fake_run(workflow_name: "linear_qa_control_plane", display_status: "completed")
+    with_api_client(FakeApiClient.new(run_details: {
+      run.run_id => { "run_id" => run.run_id, "workflow_name" => run.workflow_name, "status" => "completed",
+                      "result" => { "output" => { "conclusion" => "failure" } } }
+    }))
+    with_workflow_history(run.workflow_name, runs: [ run ]) do
+      get console_workflow_url(run.workflow_name)
+    end
+    assert_response :ok
+    assert_select "span", text: "Engine: completed"
+    assert_select "span", text: "QA failure"
+    assert_select "a[href=?]", console_workflow_path(run.workflow_name, run_id: run.run_id)
+  end
+
   test "force starting a workflow queues a run with the schedule input" do
     client = FakeApiClient.new(schedules: [ slack_sync_schedule ])
     with_api_client(client)
@@ -229,7 +246,7 @@ class Console::WorkflowsControllerTest < ActionDispatch::IntegrationTest
 
   test "links an already queued scoped action instead of offering a second approval" do
     run = fake_run(workflow_name: "github_dependency_maintenance")
-    finding_key = "github-dependency-maintenance-action:#{run.run_id}:security:19"
+    finding_key = GithubDependencyMaintenanceFinding.for_run(maintenance_run_detail(run.run_id)).first.idempotency_key
     client = FakeApiClient.new(
       run_details: { run.run_id => maintenance_run_detail(run.run_id) },
       action_runs: {
@@ -287,10 +304,59 @@ class Console::WorkflowsControllerTest < ActionDispatch::IntegrationTest
           },
           "approved_by" => @operator.oid
         },
-        idempotency_key: "github-dependency-maintenance-action:#{source_run_id}:security:19",
+        idempotency_key: GithubDependencyMaintenanceFinding.for_run(maintenance_run_detail(source_run_id)).first.idempotency_key,
         max_attempts: nil
       }
     ], client.created_runs
+  end
+
+  test "unknown action status hides approval and also rejects a direct approval POST" do
+    run = fake_run(workflow_name: "github_dependency_maintenance")
+    client = FakeApiClient.new(run_details: { run.run_id => maintenance_run_detail(run.run_id) }, lookup_error: "unavailable")
+    with_api_client(client)
+    with_workflow_history("github_dependency_maintenance", runs: [ run ]) do
+      get console_workflow_url("github_dependency_maintenance", run_id: run.run_id)
+    end
+    assert_select "button", text: "Approve scoped action", count: 0
+    assert_select "span", text: /Action status unavailable/
+    post approve_finding_console_workflow_path("github_dependency_maintenance"), params: {
+      run_id: run.run_id, repository: "acme/widgets", finding_key: "security:19"
+    }
+    assert_match(/Could not queue/, flash[:alert])
+    assert_empty client.created_runs
+  end
+
+  test "matching legacy action is linked and cannot be approved a second time" do
+    detail = maintenance_run_detail("run-observation-1")
+    finding = GithubDependencyMaintenanceFinding.for_run(detail).first
+    client = FakeApiClient.new(
+      run_details: {
+        finding.source_run_id => detail,
+        "legacy-action" => { "run_id" => "legacy-action", "workflow_name" => "github_dependency_maintenance_action", "status" => "completed", "input" => finding.action_input(approved_by: "usr_previous") }
+      },
+      action_runs: { finding.legacy_idempotency_key => { "run_id" => "legacy-action" } }
+    )
+    with_api_client(client)
+    post approve_finding_console_workflow_path("github_dependency_maintenance"), params: {
+      run_id: finding.source_run_id, repository: finding.repository, finding_key: finding.key
+    }
+    assert_match(/already exists/, flash[:notice])
+    assert_empty client.created_runs
+  end
+
+  test "selected action status does not show the latest run status or an empty trigger" do
+    latest = fake_run(workflow_name: "github_dependency_maintenance_action", display_status: "completed")
+    with_api_client(FakeApiClient.new(run_details: {
+      "selected-failure" => { "run_id" => "selected-failure", "workflow_name" => latest.workflow_name, "status" => "failed", "failure" => { "message" => "fixture failure" } }
+    }))
+    with_workflow_history(latest.workflow_name, runs: [ latest ]) do
+      get console_workflow_url(latest.workflow_name, run_id: "selected-failure")
+    end
+    assert_select "div[role=status]", text: /Viewing selected run.*failed/m
+    assert_select "span", text: "failed"
+    assert_select "button", text: "Manually Trigger", count: 0
+    post run_console_workflow_path(latest.workflow_name)
+    assert_match(/approval card/, flash[:alert])
   end
 
   test "renders a ready Dependabot merge as a distinct, revalidated approval" do

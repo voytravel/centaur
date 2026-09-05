@@ -1,6 +1,7 @@
 <% title = @latest_run&.workflow_name_label || @workflow_name %>
 <% content_for :title, "#{title} · Centaur Console" %>
 
+<div class="console-workflow-surface">
 <% if @workflow_db_unavailable %>
   <div class="mb-8">
     <a href="<%= console_workflows_path %>" class="back-link">← back to workflows</a>
@@ -16,23 +17,31 @@
     No workflow runs found for <span class="text-zinc-300"><%= @workflow_name %></span>.
   </div>
 <% else %>
-  <% status = @latest_run.display_status %>
+  <% status = @selected_run_detail&.dig("status").presence || @latest_run.display_status %>
+  <% application_outcome = workflow_application_outcome(@display_run_detail) %>
   <% schedule = @workflow_schedules&.first %>
   <% source_path = schedule&.dig("source_path").presence %>
   <% source_url = workflow_source_url(source_path) %>
   <div class="mb-8">
     <a href="<%= console_workflows_path %>" class="back-link">← back to workflows</a>
     <div class="mt-2 flex flex-wrap items-center gap-3">
-      <h1 class="page-title" title="<%= @latest_run.workflow_name_label %>">
+      <h1 class="page-title min-w-0 break-all" title="<%= @latest_run.workflow_name_label %>">
         <%= truncate_middle(@latest_run.workflow_name_label, max: 72) %>
       </h1>
       <span class="inline-flex rounded border px-2 py-0.5 text-xs font-medium <%= workflow_status_classes(status) %>">
-        <%= status.tr("_", " ") %>
+        <%= "Engine: " if application_outcome %><%= status.tr("_", " ") %>
       </span>
+      <% if application_outcome %>
+        <span class="inline-flex rounded border px-2 py-0.5 text-xs font-medium <%= workflow_status_classes(application_outcome[:status]) %>">
+          <%= application_outcome[:label] %>
+        </span>
+      <% end %>
       <div class="ml-auto">
+        <% unless @workflow_name == GithubDependencyMaintenanceFinding::ACTION_WORKFLOW_NAME %>
         <%= button_to "Manually Trigger", run_console_workflow_path(@workflow_name), method: :post,
               class: "btn-primary",
               data: { turbo_confirm: "Manually trigger a #{@workflow_name} run?#{schedule ? " It starts with the registered schedule input." : ""}" } %>
+        <% end %>
       </div>
     </div>
     <div class="mt-2 flex flex-wrap items-center gap-2 text-sm">
@@ -48,6 +57,15 @@
     </div>
   </div>
 
+  <% if @selected_run_detail.present? %>
+    <div class="mb-4 rounded border border-zinc-700 px-4 py-3 text-sm" role="status">
+      Viewing selected run <code><%= @selected_run_detail["run_id"] %></code> · <%= status %>.
+      <%= link_to "View latest run", console_workflow_path(@workflow_name), class: "console-link" %>
+    </div>
+  <% elsif @selected_run_unavailable %>
+    <p class="mb-4 text-sm text-amber-200" role="status">The requested run could not be loaded for this workflow. Showing the latest run instead.</p>
+  <% end %>
+
   <section class="mb-8">
     <h2 class="mb-3 text-xs font-semibold uppercase tracking-wider text-zinc-500">Overview</h2>
     <% schedule_text = nil %>
@@ -62,11 +80,13 @@
     <dl class="console-panel divide-y divide-ink-700">
       <% [
         [ "Queue", @queue_names.map { |queue_name| CentaurWorkflowRun.queue_label_for(queue_name) }.join(", ").presence || @latest_run.queue_label ],
-        [ "Engine", workflow_engine_label(@latest_run.harness_type) ],
+        ([ "Engine", workflow_engine_label(@latest_run.harness_type) ] unless @selected_run_detail),
         ([ "Schedule", schedule_text ] if schedule_text.present?),
-        [ "Started", local_time(@latest_run.started_or_created_at) ],
-        [ "Duration", workflow_duration_label(@latest_run) ],
-        [ "Attempts", safe_join([ (@latest_run.attempts || 0).to_s, tag.span(" / #{@latest_run.max_attempts.presence || "unlimited"}", class: "text-zinc-600") ]) ],
+        ([ "Created", @selected_run_detail["created_at"] ] if @selected_run_detail),
+        ([ "Attempts", @selected_run_detail["attempts"] ] if @selected_run_detail),
+        ([ "Started", local_time(@latest_run.started_or_created_at) ] unless @selected_run_detail),
+        ([ "Duration", workflow_duration_label(@latest_run) ] unless @selected_run_detail),
+        ([ "Attempts", safe_join([ (@latest_run.attempts || 0).to_s, tag.span(" / #{@latest_run.max_attempts.presence || "unlimited"}", class: "text-zinc-600") ]) ] unless @selected_run_detail),
         [ "Runs", pluralize(number_with_delimiter(@total_runs), "run") ]
       ].compact.each do |label, value| %>
         <div class="flex flex-col gap-1 px-5 py-3 sm:flex-row sm:gap-4">
@@ -98,9 +118,6 @@
     <% debug_rows << [ "Result", @display_run_detail["result"], nil ] unless @display_run_detail["result"].nil? %>
     <% debug_rows << [ "Failure", @display_run_detail["failure"], @display_run_detail["run_id"] ] unless @display_run_detail["failure"].nil? %>
   <% end %>
-  <% if @latest_failure_detail.present? && @latest_failure_detail["failure"].present? %>
-    <% debug_rows << [ "Last failure", @latest_failure_detail["failure"], @latest_failure_detail["run_id"] ] %>
-  <% end %>
   <% if debug_rows.any? %>
     <section class="mb-8">
       <h2 class="mb-3 text-xs font-semibold uppercase tracking-wider text-zinc-500">Debugging</h2>
@@ -118,6 +135,14 @@
         <% end %>
       </dl>
     </section>
+  <% end %>
+
+  <% if @latest_failure_detail.present? && @latest_failure_detail["failure"].present? %>
+    <details class="console-panel mb-8 p-4 text-xs text-zinc-400">
+      <summary class="cursor-pointer">Previous failure (historical; not the current run)</summary>
+      <%= link_to "Open failed run", console_workflow_path(@workflow_name, run_id: @latest_failure_detail["run_id"]), class: "console-link" %>
+      <pre class="mt-3 max-h-64 overflow-auto"><%= workflow_debug_json(@latest_failure_detail["failure"]) %></pre>
+    </details>
   <% end %>
 
   <h2 class="mb-3 text-xs font-semibold uppercase tracking-wider text-zinc-500">Historical Runs</h2>
@@ -202,7 +227,9 @@
             </td>
 
             <td class="console-td text-xs text-zinc-500">
-              <div title="<%= run.run_id %>"><%= truncate_middle(run.run_id, max: 34) %></div>
+              <%= link_to truncate_middle(run.run_id, max: 34),
+                          console_workflow_path(@workflow_name, run_id: run.run_id),
+                          title: run.run_id, class: "console-link" %>
               <div class="mt-1 text-zinc-600" title="<%= run.task_id %>"><%= truncate_middle(run.task_id, max: 34) %></div>
             </td>
           </tr>
@@ -217,3 +244,4 @@
                unit: "run" %>
   </section>
 <% end %>
+</div>
