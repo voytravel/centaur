@@ -95,8 +95,9 @@ Rails.application.configure do
   # health-check or ingress hosts with CENTAUR_CONSOLE_ALLOWED_HOSTS.
   public_url = ConsoleEnv["PUBLIC_URL"].presence
   internal_url = ConsoleEnv["URL"].presence
+  sandbox_url = ConsoleEnv["SANDBOX_URL"].presence
   allowed_hosts = ConsoleEnv["ALLOWED_HOSTS"].to_s.split(/[,\s]+/).map(&:strip).reject(&:blank?)
-  [ public_url, internal_url ].compact.each do |url|
+  [ public_url, internal_url, sandbox_url ].compact.each do |url|
     host = URI.parse(url).host
     allowed_hosts << host if host.present?
   end

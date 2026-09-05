@@ -1685,6 +1685,14 @@ struct IronProxyArgs {
         value_delimiter = ','
     )]
     upstream_deny_cidrs: Vec<String>,
+    /// Optional public Console URL used only by sandbox entitlement tools.
+    /// Keep iron-control on its private URL; a sandbox request is routed through
+    /// iron-proxy, which intentionally denies private Kubernetes CIDRs.
+    #[arg(
+        long = "kubernetes-iron-proxy-sandbox-console-url",
+        env = "KUBERNETES_IRON_PROXY_SANDBOX_CONSOLE_URL"
+    )]
+    sandbox_console_url: Option<String>,
     /// Per-sandbox iron-proxy container resources as a JSON Kubernetes
     /// `ResourceRequirements` object.
     #[arg(
@@ -1730,6 +1738,7 @@ impl IronProxyArgs {
             .filter_map(|cidr| non_empty(Some(cidr.as_str())))
             .map(ToOwned::to_owned)
             .collect();
+        config.sandbox_console_url = clean_optional_value(self.sandbox_console_url.as_deref());
         self.source.apply_to_config(&mut config);
         config.fragments = harness_fragments;
         config.env_from_secret_names = self.env_from_secret_names();
@@ -3031,6 +3040,8 @@ mod tests {
             "centaur-firewall-ca-key",
             "--kubernetes-iron-proxy-upstream-deny-cidrs",
             "127.0.0.0/8,10.42.0.0/16,10.43.0.0/16",
+            "--kubernetes-iron-proxy-sandbox-console-url",
+            "https://console.example.test",
         ])
         .unwrap();
 
@@ -3042,6 +3053,10 @@ mod tests {
                 "10.42.0.0/16".to_owned(),
                 "10.43.0.0/16".to_owned(),
             ]
+        );
+        assert_eq!(
+            config.sandbox_console_url.as_deref(),
+            Some("https://console.example.test")
         );
     }
 

@@ -87,6 +87,11 @@ pub struct IronProxyConfig {
     pub env_from_secret_names: Vec<String>,
     pub extra_env: BTreeMap<String, String>,
     pub upstream_deny_cidrs: Vec<String>,
+    /// Optional public Console endpoint for all sandbox-scoped API calls. The
+    /// proxy still syncs against the private iron-control URL, but sandboxes
+    /// must not be sent to a cluster Service address when private CIDRs are
+    /// deliberately denied at the egress boundary.
+    pub sandbox_console_url: Option<String>,
     pub op_connect_app_name: String,
     pub op_connect_port: u16,
     pub api_pod_labels: BTreeMap<String, String>,
@@ -110,6 +115,7 @@ impl IronProxyConfig {
             env_from_secret_names: Vec::new(),
             extra_env: BTreeMap::new(),
             upstream_deny_cidrs: Vec::new(),
+            sandbox_console_url: None,
             op_connect_app_name: "onepassword-connect".to_owned(),
             op_connect_port: 8080,
             api_pod_labels: BTreeMap::from([(
@@ -331,7 +337,19 @@ impl AgentSandboxBackend {
             proxy_host: iron_proxy_service_name(id),
             proxy_pod_name: new_iron_proxy_pod_name(id),
             proxy_port: PROXY_TUNNEL_PORT,
-            console_url: self.config.iron_control.control_url.clone(),
+            // The control plane itself remains on its private in-cluster URL.
+            // A sandbox call is intentionally different: it is forwarded
+            // through iron-proxy, whose SSRF guard rejects private Service and
+            // Pod CIDRs.  An explicitly configured public Console URL keeps
+            // all signed, path-scoped sandbox Console calls working without
+            // weakening that private-CIDR deny list.
+            console_url: resolved_sandbox_console_url(
+                self.config
+                    .iron_proxy
+                    .as_ref()
+                    .and_then(|config| config.sandbox_console_url.as_deref()),
+                &self.config.iron_control.control_url,
+            ),
             principal_id,
             requester_principal_id,
             labels,
@@ -2118,6 +2136,15 @@ fn proxy_binding_matches(
         && labels.is_empty()
 }
 
+fn resolved_sandbox_console_url(explicit: Option<&str>, control_url: &str) -> String {
+    // Config can also be constructed without clap, so normalize at this boundary.
+    explicit
+        .map(str::trim)
+        .filter(|url| !url.is_empty())
+        .unwrap_or(control_url)
+        .to_owned()
+}
+
 fn unique_suffix() -> String {
     let millis = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -2129,6 +2156,18 @@ fn unique_suffix() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sandbox_console_origin_prefers_explicit_and_defaults_for_blank_values() {
+        let private = "http://console:3000";
+        assert_eq!(
+            resolved_sandbox_console_url(Some(" https://console.example.test "), private),
+            "https://console.example.test"
+        );
+        for value in [None, Some(""), Some(" \n\t")] {
+            assert_eq!(resolved_sandbox_console_url(value, private), private);
+        }
+    }
 
     fn no_scheduling() -> ProxyPodScheduling<'static> {
         static EMPTY_SELECTOR: BTreeMap<String, String> = BTreeMap::new();
