@@ -2,6 +2,8 @@
 # Console approval target. Narrative fields remain untrusted supporting data:
 # they are rendered for an administrator and supplied to the action only inside
 # a fixed contract that cannot widen the repository, branch, or mutation.
+require "digest"
+
 class AutomationInteractionReviewFinding
   WORKFLOW_NAME = "automation_interaction_review"
   ACTION_WORKFLOW_NAME = "automation_interaction_review_action"
@@ -93,7 +95,16 @@ class AutomationInteractionReviewFinding
   end
 
   def idempotency_key
+    identity = [ source_run_id, repository, base_branch, fingerprint ]
+    "automation-interaction-review-action:v2:#{Digest::SHA256.hexdigest(JSON.generate(identity))}"
+  end
+
+  def legacy_idempotency_key
     "automation-interaction-review-action:#{source_run_id}:#{fingerprint}"
+  end
+
+  def matches_action_input?(value)
+    value.is_a?(Hash) && value.except("approved_by") == action_input(approved_by: nil).except("approved_by")
   end
 
   class Parser

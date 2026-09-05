@@ -52,8 +52,22 @@ class AutomationInteractionReviewFindingTest < ActiveSupport::TestCase
     )
     assert_equal(
       "automation-interaction-review-action:run-review-1:0123456789abcdef",
-      finding.idempotency_key
+      finding.legacy_idempotency_key
     )
+  end
+
+  test "action identity separates repository and base and only matches immutable input" do
+    original = AutomationInteractionReviewFinding.for_run(review_run).first
+    alternate = review_run.deep_dup
+    alternate["result"]["findings"][0]["repository"] = "acme/another"
+    refute_equal original.idempotency_key, AutomationInteractionReviewFinding.for_run(alternate).first.idempotency_key
+    alternate["result"]["findings"][0]["repository"] = original.repository
+    alternate["result"]["findings"][0]["base_branch"] = "develop"
+    refute_equal original.idempotency_key, AutomationInteractionReviewFinding.for_run(alternate).first.idempotency_key
+    input = original.action_input(approved_by: "usr_original")
+    assert original.matches_action_input?(input)
+    input["repository"] = "acme/another"
+    refute original.matches_action_input?(input)
   end
 
   test "fails closed on unsupported finding fields and malformed evidence" do

@@ -126,7 +126,8 @@ class AutomationEventIngestor
       "linear_team_id" => @event["linear_team_id"],
       "linear_project_id" => @event["linear_project_id"],
       "linear_issue_identifier" => @event["linear_issue_identifier"].to_s.strip.presence,
-      "linear_issue_url" => AutomationWorkstream.normalize_linear_issue_url(@event["linear_issue_url"])
+      "linear_issue_url" => AutomationWorkstream.normalize_linear_issue_url(@event["linear_issue_url"]),
+      "linear_issue_title" => AutomationWorkstream.normalize_linear_issue_title(@event["title"])
     }.compact
   end
 

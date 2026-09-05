@@ -1,6 +1,6 @@
 # Builds the narrow input for the reviewed QA orchestration workflow. Provider
 # webhook bodies never cross this boundary: the workflow receives only the
-# normalized issue identity and policy-selected repository/profile fields.
+# normalized issue identity/title and policy-selected repository/profile fields.
 class AutomationQaDispatch
   WORKFLOW_NAME = "linear_qa_control_plane"
   WORKFLOW_MAX_ATTEMPTS = 3
@@ -23,6 +23,7 @@ class AutomationQaDispatch
       "automation_event_id" => @event.id,
       "issue_id" => @workstream.metadata["linear_issue_id"].to_s,
       "issue_identifier" => issue_identifier,
+      "issue_title" => issue_title,
       "issue_url" => @workstream.safe_source_url,
       "repository" => repository,
       "profiles" => profiles,
@@ -39,6 +40,10 @@ class AutomationQaDispatch
 
   def issue_identifier
     @workstream.metadata["linear_issue_identifier"].to_s.strip.upcase
+  end
+
+  def issue_title
+    AutomationWorkstream.normalize_linear_issue_title(@workstream.metadata["linear_issue_title"])
   end
 
   def repository

@@ -107,7 +107,13 @@ class AutomationInteractionReviewSnapshot
       CentaurSessionRecord.send(
         :sanitize_sql_array,
         [
-          "SELECT source, COUNT(*) AS count FROM user_feedback WHERE created_at >= ? AND created_at <= ? GROUP BY source",
+          <<~SQL.squish,
+            SELECT CASE WHEN source IN ('console', 'slack', 'github', 'linear', 'sentry', 'qa_bot')
+                        THEN source ELSE 'other' END AS source,
+                   COUNT(*) AS count
+            FROM user_feedback WHERE created_at >= ? AND created_at <= ?
+            GROUP BY 1 ORDER BY 1
+          SQL
           @since,
           @now
         ]

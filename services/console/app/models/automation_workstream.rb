@@ -5,6 +5,7 @@ class AutomationWorkstream < ApplicationRecord
 
   STATES = %w[idle active blocked completed].freeze
   GITHUB_PR_SUBJECT_PATTERN = /\Agithub:([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+):pr:([1-9]\d*)\z/.freeze
+  LINEAR_ISSUE_TITLE_MAX_LENGTH = 240
 
   belongs_to :automation_policy, optional: true
   belongs_to :principal, optional: true
@@ -93,6 +94,22 @@ class AutomationWorkstream < ApplicationRecord
     uri.to_s
   rescue URI::InvalidURIError
     nil
+  end
+
+  # A Linear title is useful for concise operator-facing status, but it is
+  # provider content rather than policy input. Normalize it before durable
+  # storage so downstream renderers receive one bounded, single-line value.
+  def self.normalize_linear_issue_title(value)
+    title = value.to_s.encode(
+      Encoding::UTF_8,
+      invalid: :replace,
+      undef: :replace,
+      replace: ""
+    )
+    title = title.gsub(/[[:cntrl:]]+/, " ").squish
+    return if title.blank?
+
+    title.truncate(LINEAR_ISSUE_TITLE_MAX_LENGTH, omission: "…")
   end
 
   private

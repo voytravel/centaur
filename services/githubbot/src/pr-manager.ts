@@ -8,7 +8,12 @@ import {
   type CrossModelReviewOrchestration,
 } from "./review-orchestration";
 import { DEFAULT_REVIEW_PROMPT } from "./review-prompt";
-import { runTurnStream } from "./turn";
+import {
+  EXTERNAL_AI_REVIEWER_GUARD,
+  PR_CHANGE_VERIFICATION_AND_EVIDENCE_GUARD,
+  runTurnStream,
+  type TurnResult,
+} from "./turn";
 import {
   fetchCiEvaluation,
   maybeEmitReviewSubmitted,
@@ -1265,8 +1270,11 @@ export async function handleReviewEvent(
             reviewerRounds >= maxReviewerRounds ||
             epochRounds >= maxEpochRounds
           ) {
+            // This becomes a public GitHub comment. Render a reviewer login as
+            // code rather than a Markdown mention: an external AI reviewer can
+            // treat a literal @-mention as a new work request.
             const reviewerDescription = reviewer
-              ? `@${reviewer}`
+              ? `automated reviewer \`${reviewer}\``
               : "an automated reviewer";
             const limitDescription = reviewerRounds >= maxReviewerRounds
               ? `${maxReviewerRounds} responses to ${reviewerDescription}`
@@ -1662,7 +1670,8 @@ function fireAddressReviewTurn(
     `the reviewer. Resolve the threads you've addressed.\n` +
     `- Run the narrowest relevant verification before pushing. If your change breaks a ` +
     `check, diagnose and fix it; do not declare the review addressed while your revision is red.\n` +
-    `- Re-request review from @${reviewer} once you've pushed.\n` +
+    "- Do not request or re-request any reviewer after pushing. Centaur's configured " +
+    "internal review profiles run through policy; a human controls external reviewer requests.\n" +
     `- If a request is unclear or you can't validate it, say so in the thread and ask.` +
     automatedGuidance;
   fireManagementTurn(
@@ -1674,10 +1683,107 @@ function fireAddressReviewTurn(
     {
       id: `review-resp-${owner}/${repo}#${pr.number}-${reviewId}`,
       label: "address-review",
-      text: `Address the review on ${owner}/${repo}#${pr.number} from @${reviewer}.`,
+      text: `Address the review on ${owner}/${repo}#${pr.number} from GitHub reviewer ${reviewer}.`,
     },
     reviewNodeId,
   );
+}
+
+export function mergeConflictPreamble(input: {
+  baseBranch: string;
+  escalationHandle?: string;
+  headRef: string;
+  owner: string;
+  pullNumber: number;
+  repo: string;
+}): string {
+  const handle = input.escalationHandle?.replace(/^@/, "");
+  const human = handle
+    ? `@-mention @${handle}`
+    : "@-mention a human PR author, maintainer, or CODEOWNER";
+  return [
+    `Pull request ${input.owner}/${input.repo}#${input.pullNumber} has merge conflicts with ` +
+      `its base branch (${input.baseBranch}). This is an explicit, authorized repair request, ` +
+      "not a diagnosis-only task.",
+    "- Fetch the live PR and both sides of every conflict. Only resolve a conflict when the " +
+      "result is mechanical and the intended behavior is unambiguous from the PR, base branch, " +
+      "repository contracts, and available verification.",
+    `- If it is unambiguous, update ${input.headRef} against ${input.baseBranch}, resolve the ` +
+      "conflicts, run the relevant verification, and push the repair. If a rebase requires " +
+      "`--force-with-lease`, use it only after that validation; never force-push a guess.",
+    "- If the resolution is not straightforward — including competing intended behavior, an " +
+      "unclear data/schema/auth/API decision, or missing validation — STOP. Do not push or " +
+      "force-push an uncertain resolution.",
+    `- Immediately post a conspicuous PR comment beginning exactly \`## ⚠️ Human review needed — ` +
+      `merge conflict\`. ${human}. Include the conflicting area, the competing behavior or ` +
+      "decision that needs a human answer, what you tried, and the verification that remains " +
+      "blocked. Do not hide this only in Console or leave a generic blocked message.",
+  ].join("\n");
+}
+
+export function mergeConflictEscalationBody(input: {
+  baseBranch: string;
+  escalationHandle?: string;
+  headRef: string;
+  headSha: string;
+  pullNumber: number;
+}): string {
+  const handle = input.escalationHandle?.replace(/^@/, "");
+  return [
+    "## ⚠️ Human review needed — merge conflict",
+    "",
+    handle
+      ? `@${handle} Centaur could not confirm a safe, complete conflict resolution.`
+      : "Centaur could not confirm a safe, complete conflict resolution.",
+    "",
+    `- **Base branch:** \`${input.baseBranch}\``,
+    `- **PR branch:** \`${input.headRef}\` at \`${input.headSha.slice(0, 12)}\``,
+    "- **Why:** the automated conflict-resolution turn ended before it could verify a safe outcome.",
+    "",
+    "No further automatic conflict-resolution push will be made. Please resolve the conflict or " +
+      "state which behavior should win, then explicitly ask Centaur to resume if desired. Console " +
+      "contains the detailed execution record.",
+  ].join("\n");
+}
+
+async function escalateMergeConflict(
+  ctx: PrManagerContext,
+  owner: string,
+  repo: string,
+  pr: PullRequestSummary,
+): Promise<void> {
+  const claimKey = `${ctx.options.stateKeyPrefix ?? "centaur-githubbot"}:merge-conflict-escalation:` +
+    `${owner}/${repo}#${pr.number}:${pr.headSha}`;
+  if (!(await claim(ctx, claimKey))) return;
+  try {
+    await ctx.octokit.rest.issues.createComment({
+      owner,
+      repo,
+      issue_number: pr.number,
+      body: mergeConflictEscalationBody({
+        baseBranch: pr.baseBranch,
+        escalationHandle: ctx.options.escalationHandle,
+        headRef: pr.headRef,
+        headSha: pr.headSha,
+        pullNumber: pr.number,
+      }),
+    });
+    traceLog(
+      ctx.options,
+      "githubbot_merge_conflict_escalated",
+      makeTrace(
+        managementThreadKey(owner, repo, pr.number),
+        `merge-conflict-escalation-${pr.number}-${pr.headSha}`,
+      ),
+      { pr: `${owner}/${repo}#${pr.number}` },
+    );
+  } catch (error) {
+    await release(ctx, claimKey);
+    logger(ctx).warn("githubbot_merge_conflict_escalation_failed", {
+      error: errorMessage(error),
+      pr: `${owner}/${repo}#${pr.number}`,
+    });
+  }
 }
 
 function fireConflictTurn(
@@ -1686,16 +1792,22 @@ function fireConflictTurn(
   repo: string,
   pr: PullRequestSummary,
 ): void {
-  const preamble =
-    `Pull request ${owner}/${repo}#${pr.number} has merge conflicts with its ` +
-    `base branch. In your sandbox, update ${pr.headRef} against the base (rebase ` +
-    `or merge), resolve the conflicts correctly, and push. If the conflicts are ` +
-    `non-trivial or you're unsure of the right resolution, stop and @-mention a ` +
-    `human instead of force-pushing a guess.`;
+  const preamble = mergeConflictPreamble({
+    baseBranch: pr.baseBranch,
+    escalationHandle: ctx.options.escalationHandle,
+    headRef: pr.headRef,
+    owner,
+    pullNumber: pr.number,
+    repo,
+  });
   fireManagementTurn(ctx, owner, repo, pr, preamble, {
     id: `conflict-${owner}/${repo}#${pr.number}-${pr.headSha}`,
     label: "resolve-conflict",
     text: `Resolve the merge conflicts on ${owner}/${repo}#${pr.number}.`,
+  }, undefined, async (result) => {
+    if (result.failed) {
+      await escalateMergeConflict(ctx, owner, repo, pr);
+    }
   });
 }
 
@@ -1707,13 +1819,17 @@ function fireManagementTurn(
   preamble: string,
   message: { id: string; label: string; text: string },
   reviewNodeId?: string,
+  onComplete?: (result: TurnResult) => Promise<void>,
 ): void {
   const threadKey = managementThreadKey(owner, repo, pr.number);
   const trace = makeTrace(threadKey, message.id);
   // A deployment can prepend its own constraints to the management methodology
-  // (the per-action preamble still rides underneath).
-  const guidance = ctx.options.managementPrompt;
-  const contextPreamble = guidance ? `${guidance}\n\n${preamble}` : preamble;
+  // (the per-action preamble and non-negotiable external-reviewer guard still
+  // ride underneath, so an override cannot accidentally reinstate a loop).
+  const contextPreamble = managementTurnContextPreamble(
+    ctx.options.managementPrompt,
+    preamble,
+  );
   let lastEventId = 0;
   const forwardInput: ForwardSessionInput = {
     afterEventId: 0,
@@ -1757,6 +1873,16 @@ function fireManagementTurn(
             logger(ctx),
           );
         }
+        if (onComplete) {
+          try {
+            await onComplete(result);
+          } catch (error) {
+            logger(ctx).warn("githubbot_management_turn_completion_failed", {
+              error: errorMessage(error),
+              work: message.label,
+            });
+          }
+        }
       })
       .catch(async (error) => {
         logger(ctx).warn("githubbot_management_turn_failed", {
@@ -1766,8 +1892,42 @@ function fireManagementTurn(
         if (reviewNodeId) {
           await settleReviewReaction(ctx.octokit, reviewNodeId, true, logger(ctx));
         }
+        if (onComplete) {
+          try {
+            await onComplete({
+              failed: true,
+              fallbackText: "",
+              failureKind: "unknown",
+            });
+          } catch (completionError) {
+            logger(ctx).warn("githubbot_management_turn_completion_failed", {
+              error: errorMessage(completionError),
+              work: message.label,
+            });
+          }
+        }
       }),
   );
+}
+
+/**
+ * Keeps the non-negotiable PR workflow guards last even when an operator
+ * supplies custom management guidance. The final position makes it less likely
+ * that a generic deployment prompt can revive a GitHub-bot review loop or
+ * weaken validation and visual-evidence expectations.
+ */
+export function managementTurnContextPreamble(
+  guidance: string | undefined,
+  preamble: string,
+): string {
+  return [
+    guidance,
+    preamble,
+    PR_CHANGE_VERIFICATION_AND_EVIDENCE_GUARD,
+    EXTERNAL_AI_REVIEWER_GUARD,
+  ]
+    .filter(Boolean)
+    .join("\n\n");
 }
 
 function managementMessage(

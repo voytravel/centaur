@@ -381,6 +381,25 @@ pub struct ToolHostCallInput {
     pub timeout: Duration,
 }
 
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct ToolHostToolFilter {
+    pub allowlist: Option<String>,
+    pub blocklist: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ToolHostCallPolicy {
+    principal_id: String,
+    tool_filter: ToolHostToolFilter,
+    sandbox_capabilities: centaur_session_core::SandboxCapabilities,
+}
+
+impl ToolHostCallPolicy {
+    pub fn tool_filter(&self) -> &ToolHostToolFilter {
+        &self.tool_filter
+    }
+}
+
 #[derive(Debug)]
 pub struct ToolHostCallOutput {
     pub request_id: String,
@@ -949,6 +968,7 @@ impl SessionRuntime {
     pub async fn run_tool_host_call(
         &self,
         input: ToolHostCallInput,
+        policy: ToolHostCallPolicy,
     ) -> Result<ToolHostCallOutput, SessionRuntimeError> {
         let principal_id = input.principal_id.trim().to_owned();
         let tool_name = input.tool_name.trim().to_owned();
@@ -973,6 +993,11 @@ impl SessionRuntime {
                 "tool host timeout must be non-zero".to_owned(),
             ));
         }
+        if policy.principal_id != principal_id {
+            return Err(SessionRuntimeError::BadRequest(
+                "tool host policy principal does not match the call principal".to_owned(),
+            ));
+        }
 
         let thread_key = tool_host_thread_key(&principal_id)?;
         let input = ToolHostCallInput {
@@ -984,7 +1009,8 @@ impl SessionRuntime {
         let call_lock = self.tool_host_call_lock(&thread_key);
         let result = {
             let _call_guard = call_lock.lock().await;
-            self.locked_tool_host_call(&thread_key, input).await
+            self.locked_tool_host_call(&thread_key, input, policy.sandbox_capabilities)
+                .await
         };
         // Drop our clone so an idle entry is only referenced by the map, then
         // evict it; remove_if holds the shard lock, so no concurrent caller
@@ -993,6 +1019,36 @@ impl SessionRuntime {
         self.tool_host_call_locks
             .remove_if(thread_key.as_str(), |_, lock| Arc::strong_count(lock) == 1);
         result
+    }
+
+    /// Resolve the principal once and return both the tool lists from its
+    /// effective sandbox spec and the capabilities the ensuing call must use.
+    pub async fn resolve_tool_host_call_policy(
+        &self,
+        principal_id: &str,
+    ) -> Result<ToolHostCallPolicy, SessionRuntimeError> {
+        let principal_id = principal_id.trim();
+        if principal_id.is_empty() {
+            return Err(SessionRuntimeError::BadRequest(
+                "tool host principal_id is required".to_owned(),
+            ));
+        }
+        let thread_key = tool_host_thread_key(principal_id)?;
+        let harness = self
+            .sandbox_runtime
+            .warm_harness
+            .clone()
+            .unwrap_or(HarnessType::Codex);
+        let spec =
+            (self.sandbox_runtime.spec_factory)(&thread_key, "mcp-tool-catalog", &harness, None);
+        let capabilities = self
+            .resolve_sandbox_capabilities(Some(principal_id))
+            .await?;
+        Ok(ToolHostCallPolicy {
+            principal_id: principal_id.to_owned(),
+            tool_filter: tool_host_tool_filter_from_spec(spec, &capabilities),
+            sandbox_capabilities: capabilities,
+        })
     }
 
     fn tool_host_call_lock(&self, thread_key: &ThreadKey) -> Arc<Mutex<()>> {
@@ -1006,6 +1062,7 @@ impl SessionRuntime {
         &self,
         thread_key: &ThreadKey,
         input: ToolHostCallInput,
+        sandbox_capabilities: SessionSandboxCapabilities,
     ) -> Result<ToolHostCallOutput, SessionRuntimeError> {
         let ToolHostCallInput {
             principal_id,
@@ -1033,7 +1090,7 @@ impl SessionRuntime {
         })?;
         let response_timeout = timeout.saturating_add(Duration::from_secs(5));
         let execution = self
-            .execute_session(
+            .execute_session_impl(
                 thread_key,
                 ExecuteSessionInput {
                     idempotency_key: Some(request_id.clone()),
@@ -1048,6 +1105,8 @@ impl SessionRuntime {
                     idle_timeout_ms: None,
                     max_duration_ms: Some(duration_millis_u64(response_timeout)),
                 },
+                None,
+                Some(sandbox_capabilities),
             )
             .await?;
         self.wait_for_tool_host_call(
@@ -1860,7 +1919,8 @@ impl SessionRuntime {
         thread_key: &ThreadKey,
         input: ExecuteSessionInput,
     ) -> Result<SessionExecution, SessionRuntimeError> {
-        self.execute_session_impl(thread_key, input, None).await
+        self.execute_session_impl(thread_key, input, None, None)
+            .await
     }
 
     async fn drive_session_execution(
@@ -1869,7 +1929,7 @@ impl SessionRuntime {
         execution_id: &str,
         input: ExecuteSessionInput,
     ) -> Result<SessionExecution, SessionRuntimeError> {
-        self.execute_session_impl(thread_key, input, Some(execution_id))
+        self.execute_session_impl(thread_key, input, Some(execution_id), None)
             .await
     }
 
@@ -1878,6 +1938,9 @@ impl SessionRuntime {
         thread_key: &ThreadKey,
         input: ExecuteSessionInput,
         persisted_execution_id: Option<&str>,
+        // Present only for an immediately dispatched tool-host call. Durable
+        // recovery passes None and resolves the principal's current policy.
+        pre_resolved_sandbox_capabilities: Option<SessionSandboxCapabilities>,
     ) -> Result<SessionExecution, SessionRuntimeError> {
         if self.shutting_down.load(Ordering::SeqCst) {
             return Err(SessionRuntimeError::ShuttingDown);
@@ -2030,9 +2093,13 @@ impl SessionRuntime {
             let requester_principal_id = self
                 .resolve_requester_principal(thread_key, requester_metadata.as_ref())
                 .await;
-            let desired_capabilities = self
-                .resolve_sandbox_capabilities(session.iron_control_principal.as_deref())
-                .await?;
+            let desired_capabilities = match pre_resolved_sandbox_capabilities {
+                Some(capabilities) => capabilities,
+                None => {
+                    self.resolve_sandbox_capabilities(session.iron_control_principal.as_deref())
+                        .await?
+                }
+            };
 
             let sandbox_id = match self
                 .ensure_session_sandbox(EnsureSessionSandboxRequest {
@@ -5907,6 +5974,25 @@ fn apply_sandbox_capabilities(spec: &mut SandboxSpec, capabilities: &SessionSand
     }
 }
 
+fn tool_host_tool_filter_from_spec(
+    mut spec: SandboxSpec,
+    capabilities: &SessionSandboxCapabilities,
+) -> ToolHostToolFilter {
+    apply_sandbox_capabilities(&mut spec, capabilities);
+    ToolHostToolFilter {
+        allowlist: spec
+            .env
+            .iter()
+            .find(|env| env.name == "TOOL_ALLOWLIST")
+            .map(|env| env.value.clone()),
+        blocklist: spec
+            .env
+            .iter()
+            .find(|env| env.name == "TOOL_BLOCKLIST")
+            .map(|env| env.value.clone()),
+    }
+}
+
 fn scope_repo_cache_mounts_to_public(spec: &mut SandboxSpec) {
     for mount in spec
         .mounts
@@ -6163,7 +6249,7 @@ fn completed_turn_terminal_output(value: &Value, prior_final_answer_text: &str) 
                 reason: "turn_interrupted",
             }
         }
-        Some(_status) if !prior_final_answer_text.trim().is_empty() => {
+        Some("interrupted") if !prior_final_answer_text.trim().is_empty() => {
             completed_terminal_output_with_fallback(
                 value,
                 "turn_completed",
@@ -6171,7 +6257,11 @@ fn completed_turn_terminal_output(value: &Value, prior_final_answer_text: &str) 
             )
         }
         Some(status) => TerminalOutput::Failed {
-            error: format!("turn completed with status {status} before final answer"),
+            // An adapter can emit its API/auth error as a final-answer item
+            // before settling the turn. Text is not evidence of success: the
+            // structured terminal status remains authoritative.
+            error: nested_codex_error_text(value)
+                .unwrap_or_else(|| format!("turn completed with status {status}")),
         },
     }
 }
@@ -6333,7 +6423,9 @@ fn error_notification_will_retry(value: &Value) -> bool {
 
 fn nested_codex_error_text(value: &Value) -> Option<String> {
     let error = value
-        .pointer("/params/error")
+        .pointer("/params/turn/error")
+        .or_else(|| value.pointer("/turn/error"))
+        .or_else(|| value.pointer("/params/error"))
         .or_else(|| value.get("error"))?;
     if !error.is_object() {
         return None;
@@ -7361,6 +7453,26 @@ mod tests {
         assert_eq!(env_value(&spec, CENTAUR_PUBLIC_SKILL_DIRS_ENV), None);
     }
 
+    #[test]
+    fn tool_host_tool_filter_uses_effective_capability_scoped_spec() {
+        let spec = SandboxSpec::new("mock")
+            .env("TOOL_ALLOWLIST", "alpha,beta")
+            .env("TOOL_BLOCKLIST", "custom-script");
+        let capabilities = SessionSandboxCapabilities {
+            repo_cache: SessionRepoCacheAccess::None,
+            observability_enabled: false,
+        };
+
+        let filter = tool_host_tool_filter_from_spec(spec, &capabilities);
+
+        assert_eq!(filter.allowlist.as_deref(), Some("alpha,beta"));
+        let blocklist = filter.blocklist.unwrap();
+        assert!(blocklist.split(',').any(|tool| tool == "custom-script"));
+        for tool in OBSERVABILITY_TOOL_BLOCKLIST.split(',') {
+            assert!(blocklist.split(',').any(|blocked| blocked == tool));
+        }
+    }
+
     fn test_principal(
         labels: std::collections::BTreeMap<String, String>,
     ) -> centaur_iron_control::Principal {
@@ -7657,6 +7769,40 @@ mod tests {
             terminal_output(&event, ""),
             Some(TerminalOutput::Cancelled {
                 reason: "turn_interrupted"
+            })
+        );
+    }
+
+    #[test]
+    fn failed_turn_is_not_successful_even_after_final_answer_text() {
+        for event in [
+            json!({"method": "turn/completed", "params": {"turn": {
+                "status": "failed", "error": {"message": "Provider authentication failed"}
+            }}}),
+            json!({"type": "turn.completed", "turn": {
+                "status": "failed", "error": {"message": "Provider authentication failed"}
+            }}),
+        ] {
+            for prior_text in ["", "Provider authentication failed", "Partial answer"] {
+                assert_eq!(
+                    terminal_output(&event, prior_text),
+                    Some(TerminalOutput::Failed {
+                        error: "Provider authentication failed".to_owned(),
+                    })
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn unknown_terminal_status_cannot_be_rescued_by_assistant_text() {
+        let event = json!({"method": "turn/completed", "params": {"turn": {
+            "status": "unexpected_status"
+        }}});
+        assert_eq!(
+            terminal_output(&event, "Partial answer"),
+            Some(TerminalOutput::Failed {
+                error: "turn completed with status unexpected_status".to_owned(),
             })
         );
     }
@@ -8849,6 +8995,7 @@ mod adoption_tests {
         ios: Mutex<VecDeque<SandboxIo>>,
         recorded_output: std::sync::Mutex<Vec<String>>,
         open_count: AtomicUsize,
+        opened_ids: std::sync::Mutex<Vec<String>>,
         create_started: tokio::sync::Notify,
         create_gate: std::sync::Mutex<Option<Arc<tokio::sync::Notify>>>,
         status: std::sync::Mutex<SandboxStatus>,
@@ -8867,6 +9014,7 @@ mod adoption_tests {
                 ios: Mutex::new(VecDeque::new()),
                 recorded_output: std::sync::Mutex::new(recorded_output),
                 open_count: AtomicUsize::new(0),
+                opened_ids: std::sync::Mutex::new(Vec::new()),
                 create_started: tokio::sync::Notify::new(),
                 create_gate: std::sync::Mutex::new(None),
                 status: std::sync::Mutex::new(status),
@@ -8961,8 +9109,9 @@ mod adoption_tests {
             ))
         }
 
-        async fn open_io(&self, _id: &SandboxId) -> SandboxResult<SandboxIo> {
+        async fn open_io(&self, id: &SandboxId) -> SandboxResult<SandboxIo> {
             self.open_count.fetch_add(1, Ordering::SeqCst);
+            self.opened_ids.lock().unwrap().push(id.as_str().to_owned());
             self.ios
                 .lock()
                 .await
@@ -10724,6 +10873,58 @@ mod adoption_tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn failed_turn_with_error_text_persists_failure_not_completion() {
+        let Some(store) = test_store().await else {
+            return;
+        };
+        let _serial = TEST_LOCK.lock().await;
+        let thread_key =
+            ThreadKey::parse(format!("test:provider-failed-{}", uuid::Uuid::new_v4())).unwrap();
+        let execution_id =
+            orphaned_execution(&store, &thread_key, Some("sbx-provider-failed"), true).await;
+        let backend = Arc::new(MockBackend::new(SandboxStatus::Running, Vec::new()));
+        let (io, mut stdout, _stdin) = mock_io();
+        backend.push_io(io).await;
+        let runtime = runtime_with(&store, backend);
+        runtime.claim_stdout_owner(&execution_id).await.unwrap();
+        runtime
+            .ensure_session_pipe(&thread_key, "sbx-provider-failed")
+            .await
+            .unwrap();
+        let lines = [
+            json!({"method": "item/completed", "params": {"item": {
+                "type": "agentMessage", "phase": "final_answer", "text": "Provider authentication failed"
+            }}}),
+            json!({"method": "turn/completed", "params": {"turn": {
+                "status": "failed", "error": {"message": "Provider authentication failed"}
+            }}}),
+        ];
+        for line in lines {
+            stdout
+                .write_all(format!("{line}\n").as_bytes())
+                .await
+                .unwrap();
+        }
+        wait_for_event(&store, &thread_key, "session.execution_failed").await;
+        let execution = store
+            .latest_execution_for_thread(&thread_key)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(execution.execution_id, execution_id);
+        assert_eq!(execution.status, ExecutionStatus::Failed);
+        assert_eq!(
+            execution.error.as_deref(),
+            Some("Provider authentication failed")
+        );
+        let all = events(&store, &thread_key).await;
+        assert!(
+            !all.iter()
+                .any(|event| event.event_type == "session.execution_completed")
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn stdout_eof_recovers_terminal_output_from_recorded_logs() {
         let Some(store) = test_store().await else {
             return;
@@ -10731,13 +10932,15 @@ mod adoption_tests {
         let _serial = TEST_LOCK.lock().await;
         let thread_key =
             ThreadKey::parse(format!("test:eof-recorded-{}", uuid::Uuid::new_v4())).unwrap();
-        orphaned_execution(&store, &thread_key, Some("sbx-recorded"), true).await;
+        let execution_id =
+            orphaned_execution(&store, &thread_key, Some("sbx-recorded"), true).await;
 
         let backend = Arc::new(MockBackend::new(SandboxStatus::Running, Vec::new()));
         let (io, stdout, _stdin) = mock_io();
         backend.push_io(io).await;
 
         let runtime = runtime_with(&store, backend.clone());
+        runtime.claim_stdout_owner(&execution_id).await.unwrap();
         runtime
             .ensure_session_pipe(&thread_key, "sbx-recorded")
             .await
@@ -10781,7 +10984,8 @@ mod adoption_tests {
         let _serial = TEST_LOCK.lock().await;
         let thread_key =
             ThreadKey::parse(format!("test:eof-reattach-{}", uuid::Uuid::new_v4())).unwrap();
-        orphaned_execution(&store, &thread_key, Some("sbx-reattach"), true).await;
+        let execution_id =
+            orphaned_execution(&store, &thread_key, Some("sbx-reattach"), true).await;
 
         let backend = Arc::new(MockBackend::new(SandboxStatus::Running, Vec::new()));
         let (first_io, mut first_stdout, _first_stdin) = mock_io();
@@ -10790,6 +10994,7 @@ mod adoption_tests {
         backend.push_io(second_io).await;
 
         let runtime = runtime_with(&store, backend.clone());
+        runtime.claim_stdout_owner(&execution_id).await.unwrap();
         runtime
             .ensure_session_pipe(&thread_key, "sbx-reattach")
             .await
@@ -10902,13 +11107,14 @@ mod adoption_tests {
         let _serial = TEST_LOCK.lock().await;
         let thread_key =
             ThreadKey::parse(format!("test:eof-gone-{}", uuid::Uuid::new_v4())).unwrap();
-        orphaned_execution(&store, &thread_key, Some("sbx-gone"), true).await;
+        let execution_id = orphaned_execution(&store, &thread_key, Some("sbx-gone"), true).await;
 
         let backend = Arc::new(MockBackend::new(SandboxStatus::Running, Vec::new()));
         let (io, stdout, _stdin) = mock_io();
         backend.push_io(io).await;
 
         let runtime = runtime_with(&store, backend.clone());
+        runtime.claim_stdout_owner(&execution_id).await.unwrap();
         runtime
             .ensure_session_pipe(&thread_key, "sbx-gone")
             .await
@@ -11044,7 +11250,17 @@ mod adoption_tests {
             error.contains("sandbox no longer accepts io"),
             "expected status detail: {error}"
         );
-        assert_eq!(backend.opens(), 0);
+        // The adoption scan is database-wide and can also start another
+        // test's deliberately queued request. Assert this gone sandbox was
+        // never attached, not that no unrelated sandbox was ever opened.
+        assert!(
+            !backend
+                .opened_ids
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|id| id == "sbx-mock")
+        );
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

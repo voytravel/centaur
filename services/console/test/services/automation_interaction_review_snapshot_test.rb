@@ -57,4 +57,30 @@ class AutomationInteractionReviewSnapshotTest < ActiveSupport::TestCase
       end
     end
   end
+
+  test "feedback aggregation bounds arbitrary sources in SQL and preserves overflow count" do
+    # Execute the production aggregate query against a disposable SQL table.
+    # Source values are free-form at ingress, not a bounded enum.
+    connection = CentaurSessionRecord.connection
+    connection.execute("CREATE TEMP TABLE user_feedback (source text, message text, created_at timestamp)")
+    begin
+      now = Time.current
+      quoted_time = connection.quote(now)
+      connection.execute("INSERT INTO user_feedback SELECT 'custom-' || n, 'never select this content', #{quoted_time} FROM generate_series(1, 300) AS n")
+      connection.execute("INSERT INTO user_feedback VALUES ('slack', 'private body', #{quoted_time})")
+      # Rails's schema query excludes temporary tables, although the query
+      # itself correctly resolves pg_temp first on this connection.
+      rows, availability = connection.stub(:data_source_exists?, true) do
+        AutomationInteractionReviewSnapshot.new(now: now + 1.second).send(:feedback_evidence)
+      end
+      assert_equal "available", availability
+      assert_equal 2, rows.length
+      assert_equal 301, rows.sum { |row| row.fetch("count") }
+      assert_equal 300, rows.find { |row| row["id"] == "feedback:other" }.fetch("count")
+      refute_includes rows.to_json, "custom-"
+      refute_includes rows.to_json, "private body"
+    ensure
+      connection.execute("DROP TABLE pg_temp.user_feedback")
+    end
+  end
 end

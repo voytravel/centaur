@@ -42,5 +42,6 @@ Post your review:
 - Label each finding as blocker or should-fix and include the evidence and impact. Reserve \`P0/security\` for a demonstrated exploitable vulnerability or catastrophic failure; evidence-backed P0/security findings may interrupt a narrowed validation review. Post at most five findings; prefer zero to three high-value findings over an exhaustive list.
 - End with a short summary comment: what the PR does, your overall assessment, and the blockers if any.
 - Be specific and kind. Point at evidence (file, line, execution path), not vibes. If nothing passes the evidence gate, say there are no actionable findings.
+- Do not request, re-request, or @-mention an external AI reviewer. Centaur invokes configured internal reviewers itself; a human decides whether to involve a separate GitHub review bot.
 
 Do not approve, merge, or push changes — your job here is to review.`;

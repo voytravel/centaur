@@ -679,6 +679,15 @@ struct SandboxArgs {
         env = "SESSION_SANDBOX_RUNTIME_CLASS_NAME"
     )]
     runtime_class_name: Option<String>,
+    /// `priorityClassName` for sandbox and iron-proxy pods. Giving sandbox
+    /// workloads a dedicated (low) PriorityClass lets the cluster scope a
+    /// ResourceQuota to them and evict/preempt them before the control plane.
+    /// The chart renders `sandbox.priorityClassName` into this.
+    #[arg(
+        long = "session-sandbox-priority-class-name",
+        env = "SESSION_SANDBOX_PRIORITY_CLASS_NAME"
+    )]
+    priority_class_name: Option<String>,
     #[command(flatten)]
     tools: ToolDiscoveryArgs,
     #[command(flatten)]
@@ -1455,6 +1464,12 @@ impl TryFrom<&SandboxArgs> for AgentSandboxConfig {
             .map(str::trim)
             .filter(|name| !name.is_empty())
             .map(str::to_owned);
+        config.priority_class_name = args
+            .priority_class_name
+            .as_deref()
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .map(str::to_owned);
         config.ready_timeout = Duration::from_secs(args.ready_timeout_secs);
         let mut proxy = args.iron_proxy.to_config()?;
         let mut fragments = vec![args.iron_proxy.infra_fragment()?];
@@ -1670,6 +1685,14 @@ struct IronProxyArgs {
         value_delimiter = ','
     )]
     upstream_deny_cidrs: Vec<String>,
+    /// Optional public Console URL used only by sandbox entitlement tools.
+    /// Keep iron-control on its private URL; a sandbox request is routed through
+    /// iron-proxy, which intentionally denies private Kubernetes CIDRs.
+    #[arg(
+        long = "kubernetes-iron-proxy-sandbox-console-url",
+        env = "KUBERNETES_IRON_PROXY_SANDBOX_CONSOLE_URL"
+    )]
+    sandbox_console_url: Option<String>,
     /// Per-sandbox iron-proxy container resources as a JSON Kubernetes
     /// `ResourceRequirements` object.
     #[arg(
@@ -1715,6 +1738,7 @@ impl IronProxyArgs {
             .filter_map(|cidr| non_empty(Some(cidr.as_str())))
             .map(ToOwned::to_owned)
             .collect();
+        config.sandbox_console_url = clean_optional_value(self.sandbox_console_url.as_deref());
         self.source.apply_to_config(&mut config);
         config.fragments = harness_fragments;
         config.env_from_secret_names = self.env_from_secret_names();
@@ -2709,6 +2733,7 @@ mod tests {
                 {"name":"OTEL_EXPORTER_OTLP_TRACES_ENDPOINT","value":"http://laminar-app-server.laminar.svc.cluster.local:8000/v1/traces"},
                 {"name":"OTEL_SERVICE_NAME","value":"codex"},
                 {"name":"CODEX_AUTH_MODE","value":"chatgpt"},
+                {"name":" TOOL_ALLOWLIST ","value":123},
                 {"name":"NULL_VALUE"},
                 {"name":"  ","value":"skipped"},
                 {"name":"BAD=NAME","value":"skipped"}
@@ -2730,6 +2755,8 @@ mod tests {
         assert_eq!(value("OTEL_SERVICE_NAME"), Some("codex"));
         // Operator extra env overrides template defaults.
         assert_eq!(value("CODEX_AUTH_MODE"), Some("chatgpt"));
+        // Names are trimmed and non-string values use their JSON representation.
+        assert_eq!(value("TOOL_ALLOWLIST"), Some("123"));
         // Null values become empty strings; invalid names are dropped.
         assert_eq!(value("NULL_VALUE"), Some(""));
         assert!(!env.iter().any(|(name, _)| name == "BAD=NAME"));
@@ -2803,6 +2830,8 @@ mod tests {
             r#"[{"key":"example.com/sandbox","operator":"Exists","effect":"NoSchedule"}]"#,
             "--session-sandbox-runtime-class-name",
             "gvisor",
+            "--session-sandbox-priority-class-name",
+            "centaur-sandbox",
         ])
         .unwrap();
 
@@ -2812,6 +2841,10 @@ mod tests {
         );
         assert_eq!(args.sandbox.tolerations().unwrap().len(), 1);
         assert_eq!(args.sandbox.runtime_class_name.as_deref(), Some("gvisor"));
+        assert_eq!(
+            args.sandbox.priority_class_name.as_deref(),
+            Some("centaur-sandbox")
+        );
     }
 
     #[test]
@@ -2825,6 +2858,7 @@ mod tests {
 
         assert!(args.sandbox.node_selector().unwrap().is_empty());
         assert!(args.sandbox.tolerations().unwrap().is_empty());
+        assert!(args.sandbox.priority_class_name.is_none());
     }
 
     /// Unlike `SESSION_SANDBOX_EXTRA_ENV`, bad node steering fails startup:
@@ -3006,6 +3040,8 @@ mod tests {
             "centaur-firewall-ca-key",
             "--kubernetes-iron-proxy-upstream-deny-cidrs",
             "127.0.0.0/8,10.42.0.0/16,10.43.0.0/16",
+            "--kubernetes-iron-proxy-sandbox-console-url",
+            "https://console.example.test",
         ])
         .unwrap();
 
@@ -3017,6 +3053,10 @@ mod tests {
                 "10.42.0.0/16".to_owned(),
                 "10.43.0.0/16".to_owned(),
             ]
+        );
+        assert_eq!(
+            config.sandbox_console_url.as_deref(),
+            Some("https://console.example.test")
         );
     }
 

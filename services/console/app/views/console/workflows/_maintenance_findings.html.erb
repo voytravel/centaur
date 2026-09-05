@@ -33,6 +33,8 @@
                           run_id: action_run["run_id"]
                         ),
                         class: "console-link text-xs" %>
+          <% elsif @maintenance_action_lookup_failures.include?(finding.idempotency_key) %>
+            <span class="text-xs text-amber-200" role="status">Action status unavailable. Reload before approving; this may already be queued.</span>
           <% else %>
             <%= button_to "Approve scoped action",
                           approve_finding_console_workflow_path(GithubDependencyMaintenanceFinding::WORKFLOW_NAME),
