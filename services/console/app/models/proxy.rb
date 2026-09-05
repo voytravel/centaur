@@ -60,10 +60,12 @@ class Proxy < ApplicationRecord
     # so deployments may send the sandbox entitlement client through the
     # Console's public origin while the proxy itself continues to sync against
     # the private control-plane URL.  Issue the same tightly path-scoped token
-    # for both configured origins; the token is never a general Console bearer.
+    # for the private and sandbox origins; an explicit sandbox origin avoids
+    # sending machine clients through the operator login/SSO origin.
+    sandbox_url = ConsoleEnv["SANDBOX_URL"].presence || ConsoleEnv["PUBLIC_URL"]
     [
       Principal.host_from_url(ConsoleEnv["URL"]),
-      Principal.host_from_url(ConsoleEnv["PUBLIC_URL"])
+      Principal.host_from_url(sandbox_url)
     ].compact.uniq
   end
 

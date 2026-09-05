@@ -121,6 +121,25 @@ class ProxySyncControllerTest < ActionDispatch::IntegrationTest
     assert_nil entry
   end
 
+  test "explicit sandbox origin replaces the operator origin for scoped token injection" do
+    with_env(
+      "CENTAUR_JWT_SIGNING_SECRET" => "test-secret",
+      "CENTAUR_CONSOLE_URL" => "http://centaur-console:3000",
+      "CENTAUR_CONSOLE_PUBLIC_URL" => "https://operators.example.test",
+      "CENTAUR_CONSOLE_SANDBOX_URL" => "https://sandbox.example.test"
+    ) do
+      post api_v1_proxy_sync_url, params: {}.to_json, headers: auth_headers
+    end
+    assert_response :ok
+    entry = json_body.fetch("secrets").find do |secret|
+      secret.dig("inject", "header") == "Authorization" &&
+        secret.fetch("rules").any? { |rule| rule["paths"] == [ Proxy::SANDBOX_ENTITLEMENTS_PATH_PATTERN ] }
+    end
+    refute_nil entry
+    assert_equal [ "centaur-console", "sandbox.example.test" ],
+                 entry.fetch("rules").map { |rule| rule.fetch("host") }
+  end
+
   test "cold sync stores an encrypted principal snapshot" do
     assert_difference -> { PrincipalSyncConfigSnapshot.count }, 1 do
       post api_v1_proxy_sync_url, params: {}.to_json, headers: auth_headers
