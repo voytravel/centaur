@@ -40,6 +40,7 @@ import {
   type PolicyPrAutomation,
   type PrManagerContext,
 } from "./pr-manager";
+import { parseCrossModelReviewOrchestration } from "./review-orchestration";
 import { handleReviewRequest, isReviewRequestedForBot } from "./review";
 import {
   forwardToSessionApi,
@@ -48,6 +49,7 @@ import {
 } from "./session-api";
 import {
   githubContextPreamble,
+  type GithubPrExecutionIntent,
   parseGithubThreadKey,
   reactSafe,
   reviewCommentContextFromRaw,
@@ -79,6 +81,32 @@ export type {
 const POSTGRES_CONNECT_INITIAL_DELAY_MS = 250;
 const POSTGRES_CONNECT_MAX_DELAY_MS = 10_000;
 const DEDUP_WINDOW = 200;
+
+type ManualMentionAuthorization = {
+  executionIntent?: GithubPrExecutionIntent;
+  sessionKey: string;
+};
+
+const EXPLICIT_CONFLICT_REPAIR =
+  /\b(?:fix|resolve|repair|unblock|rebase)\b[\s\S]{0,80}\b(?:merge\s+)?conflicts?\b|\b(?:merge\s+)?conflicts?\b[\s\S]{0,80}\b(?:fix|resolve|repair|unblock|rebase)\b/i;
+
+/**
+ * A trusted direct mention remains conversational by default. When it names a
+ * concrete merge-conflict repair on a currently dirty PR, make the execution
+ * contract explicit so a sandbox is expected to repair and push—not merely
+ * investigate or propose a patch. This is deliberately narrower than a
+ * generic "fix it" classifier: policy authorization and a current conflict
+ * are both required.
+ */
+export function manualPrExecutionIntent(input: {
+  messageText: string;
+  mergeableState: string;
+}): GithubPrExecutionIntent | undefined {
+  if (input.mergeableState.toLowerCase() !== "dirty") return undefined;
+  return EXPLICIT_CONFLICT_REPAIR.test(input.messageText)
+    ? "resolve_conflict"
+    : undefined;
+}
 
 export function createGithubbot(options: GithubbotOptions): Githubbot {
   // Keep GitHub's complete App actor login for lifecycle ownership/reviewer
@@ -322,21 +350,22 @@ async function handleMessage(
         });
       }
     }
-    const policySessionKey = await authorizeManualMention(
+    const serialized = await serializeMessage(message);
+    const overrides = extractMessageOverrides(serialized.text);
+    serialized.text = overrides.cleanedText;
+    const manualAuthorization = await authorizeManualMention(
       thread,
       message,
       threadKey,
       input,
+      serialized.text,
     );
-    if (policySessionKey === null) return;
-    const sessionThreadKey = policySessionKey ?? await resolveManagementSession(
+    if (manualAuthorization === null) return;
+    const sessionThreadKey = manualAuthorization?.sessionKey ?? await resolveManagementSession(
       thread,
       threadKey,
       input,
     );
-    const serialized = await serializeMessage(message);
-    const overrides = extractMessageOverrides(serialized.text);
-    serialized.text = overrides.cleanedText;
     const trace: GithubbotTrace = {
       includeContext: false,
       messageId: message.id,
@@ -349,7 +378,11 @@ async function handleMessage(
     backgroundWaitUntil(
       runSessionTurn({
         adapter,
-        contextPreamble: githubContextPreamble(threadKey, reviewComment),
+        contextPreamble: githubContextPreamble(
+          threadKey,
+          reviewComment,
+          manualAuthorization?.executionIntent,
+        ),
         executeMessage: serialized,
         options,
         overrides: {
@@ -362,6 +395,9 @@ async function handleMessage(
         thread,
         threadKey,
         trace,
+        workingReplyKind: manualAuthorization?.executionIntent === "resolve_conflict"
+          ? "repair"
+          : undefined,
       }).catch((error) => {
         logger.warn("githubbot_turn_failed", { error: errorMessage(error) });
       }),
@@ -422,7 +458,8 @@ async function authorizeManualMention(
   message: ChatMessage,
   threadKey: string,
   input: MessageHandlerInput,
-): Promise<string | undefined | null> {
+  messageText: string,
+): Promise<ManualMentionAuthorization | undefined | null> {
   const { adapter, options, prManagerCtx } = input;
   const logger = options.logger ?? noopLogger;
   if (!options.automationApiUrl || !options.automationIngressToken) return undefined;
@@ -502,7 +539,13 @@ async function authorizeManualMention(
   } catch {
     // Best-effort cache only. The current turn still uses the authorized key.
   }
-  return decision.sessionKey;
+  return {
+    executionIntent: manualPrExecutionIntent({
+      messageText,
+      mergeableState: pr.mergeableState,
+    }),
+    sessionKey: decision.sessionKey,
+  };
 }
 
 async function refuseManualMention(
@@ -804,11 +847,21 @@ function routePolicyLifecycleEvent(
     conflicts: actions.has("resolve_conflict"),
     feedback: actions.has("address_feedback"),
   };
+  const reviewDecision = active.find((decision) => decision.actions.includes("review"));
+  const reviewOrchestration = parseCrossModelReviewOrchestration(
+    reviewDecision?.reviewOrchestration,
+  );
+  if (reviewOrchestration) automation.reviewOrchestration = reviewOrchestration;
 
   if (eventType === "pull_request") {
     const work: Promise<void>[] = [];
     if (actions.has("review")) {
-      work.push(handleAutomaticReview(input.prManagerCtx, rawBody, input.deliveryId));
+      work.push(handleAutomaticReview(
+        input.prManagerCtx,
+        rawBody,
+        input.deliveryId,
+        automation,
+      ));
     }
     if (automation.conflicts || automation.autoMerge) {
       work.push(handlePullRequestEvent(input.prManagerCtx, rawBody, automation));

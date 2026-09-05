@@ -84,6 +84,22 @@ spec:
               value: {{ .Values.slackbotv2.autoJoinCreatedChannels | quote }}
             - name: SLACKBOTV2_CONTINUE_THREAD_REPLIES
               value: {{ .Values.slackbotv2.continueThreadReplies | quote }}
+{{- if .Values.slackbotv2.threadReplyMode }}
+            - name: SLACKBOTV2_THREAD_REPLY_MODE
+              value: {{ .Values.slackbotv2.threadReplyMode | quote }}
+{{- end }}
+{{- if .Values.slackbotv2.streamTaskDisplayMode }}
+            - name: SLACKBOTV2_STREAM_TASK_DISPLAY_MODE
+              value: {{ .Values.slackbotv2.streamTaskDisplayMode | quote }}
+{{- end }}
+{{- if .Values.slackbotv2.visionModel }}
+            - name: SLACKBOTV2_VISION_MODEL
+              value: {{ .Values.slackbotv2.visionModel | quote }}
+{{- end }}
+{{- if .Values.slackbotv2.visionHarness }}
+            - name: SLACKBOTV2_VISION_HARNESS
+              value: {{ .Values.slackbotv2.visionHarness | quote }}
+{{- end }}
             - name: SLACKBOTV2_RESPONSE_METADATA_MODE
               value: {{ .Values.slackbotv2.responseMetadataMode | quote }}
             - name: SLACKBOTV2_RESPONSE_SERVICE_TIER_ENABLED

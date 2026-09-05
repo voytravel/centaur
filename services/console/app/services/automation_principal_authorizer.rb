@@ -49,7 +49,23 @@ class AutomationPrincipalAuthorizer
       # policy-safety rejection. Checking only the latest event decision would
       # revoke a valid PR's role before its next feedback/check/conflict event
       # could reuse the same authorized workspace.
-      workstream.state == "active"
+      return false unless workstream.state == "active"
+
+      # A policy can combine ready-issue coding with the deterministic QA
+      # bridge. `run_qa` is a fixed workflow dispatch, not an agent turn, so a
+      # QA transition must never attach the policy's model/repository role to
+      # the Linear issue principal. Look at the last authorized action rather
+      # than the latest event: ignored lifecycle noise is allowed to preserve a
+      # preceding coding authorization, while a later QA transition revokes it.
+      !latest_authorized_actions(workstream).include?("run_qa")
+    end
+
+    def latest_authorized_actions(workstream)
+      record = workstream.automation_events
+        .where(decision: "act")
+        .order(received_at: :desc, id: :desc)
+        .first
+      record&.action_kind.to_s.split(",").map(&:strip).reject(&:blank?) || []
     end
 
     def workstreams_for(principal)

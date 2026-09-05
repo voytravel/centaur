@@ -1,5 +1,26 @@
 import { describe, expect, test } from "bun:test";
-import { parseSessionEventStream } from "../src/session-api";
+import {
+  DEFAULT_SESSION_IDLE_TIMEOUT_MS,
+  DEFAULT_SESSION_MAX_DURATION_MS,
+  parseSessionEventStream,
+  sessionTimeouts,
+} from "../src/session-api";
+
+describe("GitHub session timeouts", () => {
+  test("bounds a turn even when deployment options are omitted", () => {
+    expect(sessionTimeouts({})).toEqual({
+      idleTimeoutMs: DEFAULT_SESSION_IDLE_TIMEOUT_MS,
+      maxDurationMs: DEFAULT_SESSION_MAX_DURATION_MS,
+    });
+  });
+
+  test("honors a configured bound and keeps idle within it", () => {
+    expect(sessionTimeouts({ idleTimeoutMs: 90_000, maxDurationMs: 60_000 })).toEqual({
+      idleTimeoutMs: 60_000,
+      maxDurationMs: 60_000,
+    });
+  });
+});
 
 describe("parseSessionEventStream", () => {
   test("waits for structured completion after a raw terminal provider record", async () => {

@@ -62,6 +62,7 @@ class AutomationEventIngestor
     end
     AutomationPrincipalAuthorizer.reconcile_workstream(workstream)
     enqueue_activity_report(record) if activity_report
+    enqueue_qa_dispatch(record) if outcome["decision"] == "act" && outcome.fetch("actions").include?("run_qa")
 
     response_for(record, workstream, nil, policy)
   rescue ActiveRecord::RecordNotUnique
@@ -125,7 +126,8 @@ class AutomationEventIngestor
       "linear_team_id" => @event["linear_team_id"],
       "linear_project_id" => @event["linear_project_id"],
       "linear_issue_identifier" => @event["linear_issue_identifier"].to_s.strip.presence,
-      "linear_issue_url" => AutomationWorkstream.normalize_linear_issue_url(@event["linear_issue_url"])
+      "linear_issue_url" => AutomationWorkstream.normalize_linear_issue_url(@event["linear_issue_url"]),
+      "linear_issue_title" => AutomationWorkstream.normalize_linear_issue_title(@event["title"])
     }.compact
   end
 
@@ -177,9 +179,12 @@ class AutomationEventIngestor
       "result" => {
         "actions" => outcome.fetch("actions"),
         "auto_merge" => outcome["auto_merge"] == true,
+        "review_orchestration" => outcome["review_orchestration"],
         "github_repository" => outcome["github_repository"],
         "move_to_in_progress" => outcome["move_to_in_progress"] != false,
         "preview_label" => outcome["preview_label"],
+        "qa_profiles" => Array(outcome["qa_profiles"]),
+        "qa_target" => outcome["qa_target"],
         "reason" => outcome.fetch("reason"),
         "reviewer_logins" => Array(outcome["reviewer_logins"]),
         "reviewer_team_slugs" => Array(outcome["reviewer_team_slugs"])
@@ -192,6 +197,10 @@ class AutomationEventIngestor
       "title_present" => @event["title"].to_s.strip.present?,
       "description_present" => @event["description"].to_s.strip.present?
     }.compact.tap do |metadata|
+      updated_fields = Array(@event["updated_fields"])
+        .filter_map { |field| field.to_s.match?(/\A[A-Za-z][A-Za-z0-9_]{0,99}\z/) ? field.to_s : nil }
+        .first(50)
+      metadata["updated_fields"] = updated_fields if updated_fields.any?
       metadata["created_by_bot"] = true if @event["created_by_bot"] == true
       metadata["mentioned_bot"] = true if @event["mentioned_bot"] == true
       metadata["activity_report"] = activity_report if activity_report
@@ -241,6 +250,16 @@ class AutomationEventIngestor
     )
   end
 
+  def enqueue_qa_dispatch(record)
+    AutomationQaDispatchJob.perform_later(record.id)
+  rescue StandardError => e
+    # The normalized event remains durable and the job uses a stable
+    # idempotency key, so operators can retry without dispatching twice.
+    Rails.logger.warn(
+      "automation_qa_dispatch_enqueue_failed event_id=#{record.id} error=#{e.class}: #{e.message}"
+    )
+  end
+
   # GitHub repair policies can continue only a PR that this same durable
   # workstream previously authorized. The fact is derived in Console, after
   # matching the scope and before evaluating the next event; Githubbot cannot
@@ -286,9 +305,12 @@ class AutomationEventIngestor
       "reason" => result["reason"] || "previously recorded event",
       "actions" => Array(result["actions"]),
       "auto_merge" => result["auto_merge"] == true,
+      "review_orchestration" => result["review_orchestration"],
       "github_repository" => result["github_repository"],
       "move_to_in_progress" => result["move_to_in_progress"] != false,
       "preview_label" => result["preview_label"],
+      "qa_profiles" => Array(result["qa_profiles"]),
+      "qa_target" => result["qa_target"],
       "policy_id" => resolved_policy&.oid,
       "reviewer_logins" => Array(result["reviewer_logins"]),
       "reviewer_team_slugs" => Array(result["reviewer_team_slugs"])
@@ -316,6 +338,8 @@ class AutomationEventIngestor
       "github_repository" => nil,
       "move_to_in_progress" => true,
       "preview_label" => nil,
+      "qa_profiles" => [],
+      "qa_target" => nil,
       "policy_id" => nil,
       "reviewer_logins" => [],
       "reviewer_team_slugs" => []

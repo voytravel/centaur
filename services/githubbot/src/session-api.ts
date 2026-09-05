@@ -54,6 +54,24 @@ export class SessionApiError extends Error {
   }
 }
 
+// GitHub repair and review turns must eventually settle. A bounded default
+// prevents a stuck provider/tool call from holding a management session (and
+// blocking the next explicit repair) indefinitely. Deployments can extend or
+// shorten either bound through the existing environment options.
+export const DEFAULT_SESSION_IDLE_TIMEOUT_MS = 15 * 60 * 1000;
+export const DEFAULT_SESSION_MAX_DURATION_MS = 60 * 60 * 1000;
+
+export function sessionTimeouts(
+  options: Pick<GithubbotOptions, "idleTimeoutMs" | "maxDurationMs">,
+): { idleTimeoutMs: number; maxDurationMs: number } {
+  const maxDurationMs = options.maxDurationMs ?? DEFAULT_SESSION_MAX_DURATION_MS;
+  const idleTimeoutMs = Math.min(
+    options.idleTimeoutMs ?? DEFAULT_SESSION_IDLE_TIMEOUT_MS,
+    maxDurationMs,
+  );
+  return { idleTimeoutMs, maxDurationMs };
+}
+
 export function isRetryableSessionApiError(error: unknown): boolean {
   if (error instanceof SessionApiError) return error.retryable;
   if (!(error instanceof Error)) return false;
@@ -191,7 +209,9 @@ export async function forwardToSessionApi(
     input.executeMessage,
     input.model,
     input.provider,
+    input.reasoning,
     input.contextPreamble,
+    input.executionMetadata,
   );
   traceLog(options, "githubbot_session_execute_complete", input.trace, {
     execution_id: execution.execution_id,
@@ -222,7 +242,9 @@ export async function executeSessionTurn(
     input.executeMessage,
     input.model,
     input.provider,
+    input.reasoning,
     input.contextPreamble,
+    input.executionMetadata,
   );
   traceLog(options, "githubbot_session_execute_complete", input.trace, {
     execution_id: execution.execution_id,
@@ -512,19 +534,26 @@ async function executeSession(
   message: GithubbotApiMessage,
   model?: string,
   provider?: string,
+  reasoning?: string,
   contextPreamble?: string,
+  executionMetadata?: JsonObject,
 ): Promise<GithubbotExecuteSessionResponse> {
   const fetchFn = options.fetch ?? fetch;
+  const timeouts = sessionTimeouts(options);
   const body: GithubbotExecuteSessionRequest = {
     idempotency_key: message.id,
-    metadata: sessionMetadata(message, { action: "execute" }),
-    input_lines: toCodexInputLines(message, threadId, model, provider, contextPreamble),
-    ...(options.idleTimeoutMs === undefined
-      ? {}
-      : { idle_timeout_ms: options.idleTimeoutMs }),
-    ...(options.maxDurationMs === undefined
-      ? {}
-      : { max_duration_ms: options.maxDurationMs }),
+    metadata: sessionMetadata(message, { ...executionMetadata, action: "execute" }),
+    input_lines: toCodexInputLines(
+      message,
+      threadId,
+      model,
+      provider,
+      reasoning,
+      contextPreamble,
+      executionMetadata,
+    ),
+    idle_timeout_ms: timeouts.idleTimeoutMs,
+    max_duration_ms: timeouts.maxDurationMs,
   };
   const response = await fetchFn(
     apiSessionUrl(options.apiUrl, threadId, "execute"),
@@ -745,7 +774,9 @@ function toCodexInputLines(
   threadId: string,
   model?: string,
   provider?: string,
+  reasoning?: string,
   contextPreamble?: string,
+  executionMetadata?: JsonObject,
 ): string[] {
   const staged = new Map<GithubbotApiAttachment, string>();
   const lines: string[] = [];
@@ -779,7 +810,9 @@ function toCodexInputLines(
     staged,
     model,
     provider,
+    reasoning,
     contextPreamble,
+    executionMetadata,
   );
   if (inlineLine.length > MAX_CODEX_INPUT_LINE_CHARS) {
     const remaining = message.attachments
@@ -793,7 +826,9 @@ function toCodexInputLines(
         staged,
         model,
         provider,
+        reasoning,
         contextPreamble,
+        executionMetadata,
       );
       if (inlineLine.length <= MAX_CODEX_INPUT_LINE_CHARS) break;
     }
@@ -808,14 +843,17 @@ function toCodexInputLineWithStaged(
   staged: Map<GithubbotApiAttachment, string>,
   model?: string,
   provider?: string,
+  reasoning?: string,
   contextPreamble?: string,
+  executionMetadata?: JsonObject,
 ): string {
   return JSON.stringify({
     type: "user",
     thread_key: threadId,
-    trace_metadata: sessionMetadata(message, { action: "execute" }),
+    trace_metadata: sessionMetadata(message, { ...executionMetadata, action: "execute" }),
     ...(model ? { model } : {}),
     ...(provider ? { provider } : {}),
+    ...(reasoning ? { reasoning } : {}),
     message: {
       role: "user",
       content: codexInputContent(message, staged, contextPreamble),

@@ -11,6 +11,7 @@ import {
   buildWorkingReplyBody,
   CommentReplyCollector,
   type GithubPublicReply,
+  type GithubWorkingReplyKind,
 } from "./comment-bot";
 import { runExclusive } from "./context";
 import { resolveStickyProvider } from "./overrides";
@@ -38,6 +39,31 @@ const RENDER_RETRY_INITIAL_DELAY_MS = 250;
 const RENDER_RETRY_MAX_DELAY_MS = 5_000;
 const REVIEW_HUNK_MAX_CHARS = 4_000;
 
+/**
+ * Internal review profiles are started by Githubbot's policy orchestration,
+ * never by asking another GitHub bot to review. Keep this guard in the prompt
+ * that every conversational and management turn receives: a literal mention
+ * such as `@codex review` can trigger an unrelated third-party automation and
+ * create a repair/review loop outside Centaur's bounded epoch state.
+ */
+export const EXTERNAL_AI_REVIEWER_GUARD = [
+  "External GitHub AI reviewer guard:",
+  "- Centaur invokes its configured internal Codex and Claude reviewer profiles itself. Do not request, re-request, @-mention, or otherwise trigger an external AI reviewer through a GitHub comment, review request, or `gh pr edit --add-reviewer`. A human must explicitly choose and invoke any external reviewer.",
+].join("\n");
+
+/**
+ * A non-negotiable evidence contract for code-changing PR work. It is shared
+ * by direct PR conversations and lifecycle-managed PR work, so a custom
+ * management prompt cannot reduce validation to a narrow test or turn a
+ * screenshot into an unrendered artifact.
+ */
+export const PR_CHANGE_VERIFICATION_AND_EVIDENCE_GUARD = [
+  "PR change verification and visual evidence:",
+  "- Before pushing a code change, inspect the repository's documented development path and CI workflows. Try the documented whole-stack or local-application flow needed to exercise the affected behavior, rather than relying only on a narrow test. Follow existing scripts and setup instructions; do not invent a stack command or claim a full-stack result that did not run.",
+  "- Run focused tests too. In the PR, distinguish a completed stack/preview check from focused checks and from anything blocked by missing dependencies, credentials, or environment access.",
+  "- For a user-visible UI change, capture a real screenshot from the verified local or preview flow. Put it inline in the PR description or a PR comment as rendered Markdown (for example `![Verified flow](https://...)`). Do not leave it only as an attachment, local file, artifact, or bare link. Never fabricate a screenshot; if it cannot be safely published inline, say why in the PR.",
+].join("\n");
+
 /** Decoded GitHub thread key (mirrors the adapter's encodeThreadId formats). */
 export type GithubThreadRef = {
   owner: string;
@@ -54,11 +80,27 @@ export type ReviewCommentContext = {
   diffHunk?: string;
 };
 
+/** A policy-authorized instruction that changes the PR turn from discussion to execution. */
+export type GithubPrExecutionIntent = "resolve_conflict";
+
 /** Accumulated result of one streamed agent turn. */
 export type TurnResult = {
   failed: boolean;
   fallbackText: string;
+  /**
+   * A deliberately coarse failure category. It is safe to use for a bounded
+   * model fallback decision, unlike raw provider error text which remains in
+   * the durable Console execution record only.
+   */
+  failureKind?: TurnFailureKind;
 };
+
+export type TurnFailureKind =
+  | "cancelled"
+  | "credential"
+  | "provider_unavailable"
+  | "unsupported_capability"
+  | "unknown";
 
 /**
  * Builds the only public reply path shared by comment and body-mention turns.
@@ -139,6 +181,7 @@ export function reviewCommentContextFromRaw(
 export function githubContextPreamble(
   threadKey: string,
   reviewComment?: ReviewCommentContext,
+  executionIntent?: GithubPrExecutionIntent,
 ): string | undefined {
   const ref = parseGithubThreadKey(threadKey);
   if (!ref) return undefined;
@@ -169,12 +212,24 @@ export function githubContextPreamble(
     );
   }
 
+  const repairDirective = executionIntent === "resolve_conflict"
+    ? "\n\nThis is an explicit, authorized repair request. The PR is currently conflicted. " +
+      "Resolve the merge conflict in the existing PR branch, validate it, then commit and push " +
+      "the repair. Do not stop at diagnosis or merely describe a fix. Do not merge or deploy. " +
+      "Only resolve it when the intended behavior is clear from both sides of the conflict, the " +
+      "PR context, and verification. If the resolution is not straightforward — for example, " +
+      "the two sides represent competing behavior or you cannot validate the result — do NOT " +
+      "push or force-push a guess. Make the handoff conspicuous in the final `GITHUB_SUMMARY`: " +
+      "set `Outcome: ⚠️ Human review needed — merge conflict`, name the affected area and the " +
+      "decision a human must make, state what you tried, and @-mention a human maintainer when " +
+      "one is known. Do not leave only a generic blocked message."
+    : "";
   return (
     `You are responding in the main conversation thread of GitHub pull request ` +
     `${subject}. The comment alone may not be enough context, so fetch the PR ` +
     `before replying — use the gh CLI in your sandbox (e.g. \`gh pr view ` +
     `${ref.number}\`, \`gh pr diff ${ref.number}\`). Your turn's final message ` +
-    `is posted back as your reply in this thread.`
+    `is posted back as your reply in this thread.${repairDirective}`
   );
 }
 
@@ -190,6 +245,8 @@ export function githubTurnPreamble(preamble?: string): string {
     "- Keep detailed execution evidence in Console. Your terminal text must be exactly one concise block in this form (use one short factual sentence or phrase per field; use `None.` for a field with no relevant value):\nGITHUB_SUMMARY:\nOutcome: ...\nChanges: ...\nVerification: ...\nCI: ...\nNext: ...\nThe GitHub renderer turns a complete block into a compact Markdown update. For reviews, report the verdict and high-level next step only; keep code walkthroughs, command lines, hashes, timings, detailed nit lists, and baseline diagnosis in Console.",
     "- If you change code, inspect the repository CI workflow and run the closest local equivalent before pushing. Do not call CI green based only on a narrow test subset when a broader local equivalent is available.",
     "- When relevant and feasible, start the local app or preview needed to validate the change. After pushing, monitor checks for the new head; if a check fails because of your change, diagnose, fix, and verify it before finalizing. If you cannot run a check, name it and explain why.",
+    PR_CHANGE_VERIFICATION_AND_EVIDENCE_GUARD,
+    EXTERNAL_AI_REVIEWER_GUARD,
   ].join("\n");
   return [preamble, publicReplyContract].filter(Boolean).join("\n\n");
 }
@@ -252,8 +309,11 @@ async function runTurnStreamInner(
         collector.update(chunk);
       }
       return {
-        failed: collector.failed,
+        failed: collector.failed || Boolean(fallback.error()),
         fallbackText: fallback.text(),
+        ...(collector.failed || fallback.error()
+          ? { failureKind: classifyTurnFailure(fallback.error()) }
+          : {}),
       };
     } catch (error) {
       if (
@@ -272,12 +332,14 @@ async function runTurnStreamInner(
       return {
         failed: true,
         fallbackText: "",
+        failureKind: classifyTurnFailure(errorMessage(error)),
       };
     }
   }
   return {
     failed: true,
     fallbackText: "",
+    failureKind: "unknown",
   };
 }
 
@@ -307,6 +369,8 @@ export async function runSessionTurn(input: {
   thread: Thread<GithubbotThreadState>;
   threadKey: string;
   trace: GithubbotTrace;
+  /** Make an authorized repair acknowledgement explicit without exposing work logs. */
+  workingReplyKind?: GithubWorkingReplyKind;
 }): Promise<void> {
   const {
     adapter,
@@ -321,7 +385,7 @@ export async function runSessionTurn(input: {
   } = input;
   const logger = options.logger ?? noopLogger;
   try {
-    await thread.post(buildWorkingReplyBody());
+    await thread.post(buildWorkingReplyBody(input.workingReplyKind));
   } catch (error) {
     logger.warn("githubbot_thread_acknowledgement_failed", {
       error: errorMessage(error),
@@ -395,6 +459,7 @@ export async function runSessionTurn(input: {
  */
 export class GithubRenderFallback {
   private terminalText = "";
+  private terminalError = "";
 
   async *collectSource(
     stream: AsyncIterable<GithubbotRendererSource>,
@@ -409,6 +474,10 @@ export class GithubRenderFallback {
     return this.terminalText.trim();
   }
 
+  error(): string {
+    return this.terminalError.trim();
+  }
+
   private captureTerminalText(event: GithubbotRendererSource): void {
     if (!event || typeof event !== "object") return;
     const eventKind = String(
@@ -418,16 +487,19 @@ export class GithubRenderFallback {
           ? event.event
           : "",
     );
-    if (
-      eventKind !== "session.execution_completed" &&
-      eventKind !== "session.execution_cancelled"
-    ) {
-      return;
-    }
     const data =
       "data" in event && event.data && typeof event.data === "object"
         ? event.data
         : event;
+    if (
+      eventKind === "session.execution_failed" ||
+      eventKind === "session.stream_error" ||
+      eventKind === "session.execution_cancelled"
+    ) {
+      this.terminalError = terminalErrorText(data);
+      return;
+    }
+    if (eventKind !== "session.execution_completed") return;
     const text = terminalResultText(data);
     if (text) this.terminalText = text;
   }
@@ -442,6 +514,44 @@ function terminalResultText(event: unknown): string {
     if (resultText) return resultText;
   }
   return "";
+}
+
+function terminalErrorText(event: unknown): string {
+  if (!event || typeof event !== "object") return "Execution failed";
+  const error = (event as Record<string, unknown>).error;
+  return typeof error === "string" && error.trim()
+    ? error.trim()
+    : "Execution failed";
+}
+
+/**
+ * Permit automatic model fallback only for an exhausted provider transport or
+ * an explicitly unsupported model/capability. Authentication failures,
+ * cancellations, and all ambiguous failures remain visible for operators and
+ * never silently change the reviewing identity.
+ */
+export function classifyTurnFailure(value: string | undefined): TurnFailureKind {
+  const text = value?.toLowerCase() ?? "";
+  if (!text) return "unknown";
+  if (text.includes("cancelled")) return "cancelled";
+  if (
+    /\b(?:401|403)\b/.test(text) ||
+    /(?:unauthori[sz]ed|forbidden|invalid api key|invalid token|credential)/.test(text)
+  ) {
+    return "credential";
+  }
+  if (
+    /(?:not a multimodal model|unsupported (?:model|capability)|no endpoints? found|model .* not found|unknown model)/.test(text)
+  ) {
+    return "unsupported_capability";
+  }
+  if (
+    /\b(?:408|425|429|500|502|503|504)\b/.test(text) ||
+    /(?:timeout|timed out|overloaded|rate limit|temporarily unavailable|service unavailable|connection (?:reset|refused)|network error|fetch failed|econn(?:reset|refused)|dns|socket hang up)/.test(text)
+  ) {
+    return "provider_unavailable";
+  }
+  return "unknown";
 }
 
 async function* streamSessionAfterHandoff(

@@ -303,6 +303,11 @@ sandbox:
   #   effect: NoSchedule
   # RuntimeClass for sandbox + iron-proxy pods, e.g. gVisor.
   runtimeClassName: ""
+  # PriorityClass for sandbox + iron-proxy pods. Point this at a dedicated
+  # (low-priority) PriorityClass to scope a ResourceQuota to sandbox
+  # workloads and let the kubelet/scheduler sacrifice them before the
+  # control plane under node pressure.
+  priorityClassName: ""
   reposPath: ""
   # How the in-sandbox harness authenticates upstream. Single source of truth:
   # the control plane reads it to register the matching iron-proxy credential
@@ -526,6 +531,10 @@ apiRs:
   terminationGracePeriodSeconds: 35
   extraEnv: {}
   resources: {}
+  # PriorityClass for the api-rs control plane pod itself. Pair with
+  # Guaranteed-QoS resources so runaway sandboxes are evicted before the
+  # control plane.
+  priorityClassName: ""
 
 # Chat SDK Slackbot v2. Forwards Slack events to the api-rs control plane
 # (:8080) and streams responses back. Listens on :3001.
@@ -546,6 +555,20 @@ slackbotv2:
   # mention. Unmentioned replies remain unable to issue the deterministic stop
   # command or acquire requester credential context.
   continueThreadReplies: false
+  # Explicit policy for unmentioned replies in subscribed threads. Leave empty
+  # to retain the legacy continueThreadReplies behavior; new deployments
+  # should use mentions_only, actionable, or all.
+  threadReplyMode: ""
+  # Controls structured task rendering in Slack. Leave empty to retain the
+  # runtime default (plan, or none when activity summaries are enabled).
+  streamTaskDisplayMode: ""
+  # Optional paired harness/model selected for the first execution in a new
+  # Slack thread containing an image. Use the same harness vocabulary as
+  # channelDefaults (claude, codex, or nanocodex). Explicit/sticky thread
+  # selections always win, and an existing thread is never restarted just to
+  # switch to vision. Leave both empty to keep normal model selection.
+  visionHarness: ""
+  visionModel: ""
   # Sticky percentage of otherwise-default Codex Slack threads assigned to
   # Nanocodex. A non-default model selection bypasses the rollout.
   codexNanocodexRolloutPercent: 0
@@ -657,6 +680,18 @@ githubbot:
   # / draft status.
   autoMerge: true
   mergeMethod: squash
+  # One broad review plus two repair-validation passes per review epoch.
+  reviewMaxRoundsPerEpoch: 3
+  # Each automated reviewer gets a bounded response budget, while this aggregate
+  # ceiling prevents adding reviewers from creating an unbounded repair loop.
+  reviewMaxBotFeedbackRoundsPerReviewer: 3
+  reviewMaxBotFeedbackRoundsPerEpoch: 6
+  # Materially changed risk surfaces can start this many epochs automatically.
+  # Later epochs require an explicit human review request or a split PR.
+  reviewMaxEpochs: 3
+  # Non-generated diff growth that starts a new epoch. New production files and
+  # dependency/auth/data/API/infra surfaces can start one below this threshold.
+  reviewEpochMinChangedLines: 50
   # Emit CI and review workflow events to api-rs.
   workflowEvents: false
   # Fallback @handle (no leading @) the bot tags when it gives up; empty = none.

@@ -35,6 +35,8 @@ export type LinearAutomationEvent = {
   provider: "linear";
   status?: string;
   title?: string;
+  /** Provider-verified fields present in Linear's `updatedFrom` delta. */
+  updated_fields?: string[];
 };
 
 export async function evaluateLinearAutomation(
@@ -98,6 +100,8 @@ export type LinearIssueWebhook = {
   action: "create" | "update";
   issueId: string;
   trigger: string;
+  /** Keys Linear says changed; absent when an older payload has no delta. */
+  updatedFields?: string[];
 };
 
 /**
@@ -134,7 +138,18 @@ export function parseLinearIssueAutomationWebhook(
     stringValue(data?.updatedAt) ??
     stringValue(data?.createdAt) ??
     action;
-  return { action, issueId, trigger };
+  const updatedFrom = isRecord(payload.updatedFrom)
+    ? payload.updatedFrom
+    : isRecord(data?.updatedFrom)
+      ? data.updatedFrom
+      : undefined;
+  const result: LinearIssueWebhook = {
+    action,
+    issueId,
+    trigger,
+  };
+  if (updatedFrom) result.updatedFields = Object.keys(updatedFrom);
+  return result;
 }
 
 function stringArray(value: unknown): string[] {

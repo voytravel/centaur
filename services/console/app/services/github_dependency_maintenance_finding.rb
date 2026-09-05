@@ -5,15 +5,49 @@
 class GithubDependencyMaintenanceFinding
   WORKFLOW_NAME = "github_dependency_maintenance"
   ACTION_WORKFLOW_NAME = "github_dependency_maintenance_action"
-  SCHEMA_VERSION = "2"
+  SCHEMA_VERSIONS = %w[2 3].freeze
 
   REPOSITORY_PATTERN = /\A[A-Za-z0-9][A-Za-z0-9_.-]*\/[A-Za-z0-9][A-Za-z0-9_.-]*\z/.freeze
   BRANCH_PATTERN = /\A[A-Za-z0-9][A-Za-z0-9._\/-]{0,199}\z/.freeze
   RUN_ID_PATTERN = /\A[A-Za-z0-9_-]{1,200}\z/.freeze
   FINDING_KINDS = %w[security_advisory dependabot_pull_request dependabot_consolidation].freeze
-  ACTIONS = %w[draft_pr repair consolidate].freeze
+  ACTIONS = %w[draft_pr repair consolidate merge].freeze
+  DIAGNOSTICS = {
+    "obsolete_proposal_shape" => {
+      title: "Observer result rejected",
+      detail: "The observer used an obsolete proposal shape. No repository action was authorized."
+    },
+    "unsupported_result_schema" => {
+      title: "Observer result rejected",
+      detail: "The observer used an unsupported result schema. No repository action was authorized."
+    },
+    "selection_count_contract" => {
+      title: "Observer result rejected",
+      detail: "The observer mixed observed totals and selected candidates. No repository action was authorized."
+    },
+    "missing_structured_result" => {
+      title: "Observer result rejected",
+      detail: "The observer did not return the required structured result. No repository action was authorized."
+    },
+    "invalid_structured_result" => {
+      title: "Observer result rejected",
+      detail: "The observer result failed the reviewed contract. No repository action was authorized."
+    },
+    "agent_turn_unavailable" => {
+      title: "Observer unavailable",
+      detail: "The scheduled observer did not complete after its bounded retry. No repository action was authorized."
+    },
+    "legacy_contract_rejection" => {
+      title: "Observer result rejected",
+      detail: "The observer result was rejected by the workflow contract. No repository action was authorized."
+    }
+  }.freeze
+  DIAGNOSTIC_KINDS = {
+    "agent_turn_unavailable" => "observer_unavailable"
+  }.freeze
 
   Invalid = Class.new(StandardError)
+  Diagnostic = Struct.new(:repository, :code, :title, :detail, keyword_init: true)
 
   attr_reader :source_run_id, :repository, :base_branch, :kind, :action, :source_numbers
 
@@ -28,6 +62,12 @@ class GithubDependencyMaintenanceFinding
 
   def self.for_run(run)
     Parser.new(run).findings
+  rescue Invalid
+    []
+  end
+
+  def self.diagnostics_for_run(run)
+    Parser.new(run).diagnostics
   rescue Invalid
     []
   end
@@ -68,8 +108,42 @@ class GithubDependencyMaintenanceFinding
   def action_label
     case action
     when "draft_pr" then "Create a scoped Draft PR"
-    when "repair" then "Repair through a scoped Draft PR"
+    when "repair" then "Repair the existing Dependabot PR"
     when "consolidate" then "Create a scoped consolidation Draft PR"
+    when "merge" then "Merge the ready Dependabot PR"
+    end
+  end
+
+  def action_explanation
+    case action
+    when "repair"
+      "The action agent re-checks the exact Dependabot PR, then may make one ordinary non-force update to its existing branch. It cannot merge or deploy."
+    when "merge"
+      "The action agent re-checks that exact PR is still green and clean, then may squash-merge it through GitHub's normal protections. It cannot deploy."
+    else
+      "The action agent must re-check this target, stay within the reviewed route, and open a Draft PR only if it remains valid."
+    end
+  end
+
+  def approval_confirmation
+    case action
+    when "repair"
+      "Approve repair of the existing Dependabot PR for #{repository} (#{source_label})? This can update only that branch; it cannot merge or deploy."
+    when "merge"
+      "Approve a revalidated squash merge for #{repository} (#{source_label})? This can merge only if GitHub still accepts the exact ready PR; it cannot deploy."
+    else
+      "Approve #{action_label.downcase} for #{repository} (#{source_label})? This can create a Draft PR, but cannot merge or deploy."
+    end
+  end
+
+  def queued_notice
+    case action
+    when "repair"
+      "It may update only the existing Dependabot PR after revalidation; it cannot merge or deploy."
+    when "merge"
+      "It may squash-merge only the revalidated ready Dependabot PR through GitHub's normal protections; it cannot deploy."
+    else
+      "It may create only a Draft PR; it cannot merge or deploy."
     end
   end
 
@@ -108,7 +182,7 @@ class GithubDependencyMaintenanceFinding
 
     def findings
       ensure_workflow!
-      result = hash(@run["result"], "workflow result")
+      result = workflow_result(@run["result"])
       return [] unless result["status"] == "completed"
 
       source_run_id = required_string(@run["run_id"], "workflow run id")
@@ -121,7 +195,32 @@ class GithubDependencyMaintenanceFinding
       routes.flat_map { |route| parse_route(route, source_run_id) }
     end
 
+    def diagnostics
+      ensure_workflow!
+      result = workflow_result(@run["result"])
+      return [] unless result["status"] == "completed"
+
+      routes = result["routes"]
+      unless routes.is_a?(Array) && routes.length <= 100
+        raise Invalid, "workflow result routes must be an array"
+      end
+
+      routes.filter_map { |route| parse_diagnostic(route) }
+    end
+
     private
+
+    # Python-hosted workflows return their own payload under `result.output`,
+    # alongside run/task metadata. Native workflows return the payload directly
+    # as `result`. Normalize only the known wrapper shape so both paths use the
+    # same strict finding parser below; a malformed wrapper remains no-action.
+    def workflow_result(value)
+      result = hash(value, "workflow result")
+      return result if result.key?("status")
+      return result unless result["output"].is_a?(Hash)
+
+      hash(result["output"], "workflow result output")
+    end
 
     def ensure_workflow!
       unless @run.is_a?(Hash) && @run["workflow_name"] == WORKFLOW_NAME
@@ -131,7 +230,7 @@ class GithubDependencyMaintenanceFinding
 
     def parse_route(value, source_run_id)
       route = hash(value, "workflow route")
-      return [] unless route["schema_version"] == SCHEMA_VERSION
+      return [] unless SCHEMA_VERSIONS.include?(route["schema_version"])
 
       repository = required_string(route["repository"], "repository")
       raise Invalid, "workflow route repository is invalid" unless REPOSITORY_PATTERN.match?(repository)
@@ -162,6 +261,54 @@ class GithubDependencyMaintenanceFinding
       findings
     end
 
+    def parse_diagnostic(value)
+      route = hash(value, "workflow route")
+      return unless SCHEMA_VERSIONS.include?(route["schema_version"])
+
+      repository = required_string(route["repository"], "repository")
+      raise Invalid, "workflow route repository is invalid" unless REPOSITORY_PATTERN.match?(repository)
+
+      code = diagnostic_code(route)
+      return unless code
+
+      presentation = DIAGNOSTICS.fetch(code)
+      Diagnostic.new(
+        repository: repository,
+        code: code,
+        title: presentation.fetch(:title),
+        detail: presentation.fetch(:detail)
+      )
+    end
+
+    def diagnostic_code(route)
+      diagnostic = route["diagnostic"]
+      if diagnostic.is_a?(Hash)
+        source = diagnostic.deep_stringify_keys
+        return unless source.keys.sort == %w[code kind summary]
+        code = source["code"]
+        return unless DIAGNOSTICS.key?(code)
+
+        expected_kind = DIAGNOSTIC_KINDS.fetch(code, "observer_result_rejected")
+        return code if source["kind"] == expected_kind
+      end
+
+      return "legacy_contract_rejection" if legacy_contract_rejection?(route)
+
+      nil
+    end
+
+    def legacy_contract_rejection?(route)
+      security = route["security_advisories"]
+      dependabot = route["dependabot"]
+      return false unless security.is_a?(Hash) && dependabot.is_a?(Hash)
+      return false unless security["outcome"] == "blocked" && dependabot["outcome"] == "blocked"
+      return false unless route["proposals"] == []
+
+      Array(route["validation"]).any? do |entry|
+        entry.is_a?(Hash) && entry["command"] == "structured workflow result" && entry["status"] == "failed"
+      end
+    end
+
     def parse_proposal(value, source_run_id:, repository:, base_branch:, security:, dependabot:)
       proposal = hash(value, "workflow proposal")
       unknown = proposal.keys - %w[kind action source_numbers]
@@ -177,7 +324,7 @@ class GithubDependencyMaintenanceFinding
       when "security_advisory"
         validate_security_proposal!(security, action, numbers)
       when "dependabot_pull_request"
-        validate_dependabot_repair_proposal!(dependabot, action, numbers)
+        validate_dependabot_pull_request_proposal!(dependabot, action, numbers)
       when "dependabot_consolidation"
         validate_dependabot_consolidation_proposal!(dependabot, action, numbers)
       end
@@ -208,19 +355,20 @@ class GithubDependencyMaintenanceFinding
       end
     end
 
-    def validate_dependabot_repair_proposal!(dependabot, action, numbers)
-      unless action == "repair" && numbers.one?
-        raise Invalid, "Dependabot repair proposal is invalid"
+    def validate_dependabot_pull_request_proposal!(dependabot, action, numbers)
+      unless %w[repair merge].include?(action) && numbers.one?
+        raise Invalid, "Dependabot pull-request proposal is invalid"
       end
       unless dependabot["mode"] == "approval_required"
-        raise Invalid, "Dependabot repair needs approval-required mode"
+        raise Invalid, "Dependabot pull-request proposal needs approval-required mode"
       end
-      unless dependabot["outcome"] == "repair_needed"
-        raise Invalid, "Dependabot repair does not match the observed outcome"
+      expected_outcome = action == "repair" ? "repair_needed" : "direct_ready"
+      unless dependabot["outcome"] == expected_outcome
+        raise Invalid, "Dependabot #{action} does not match the observed outcome"
       end
       source_numbers = positive_numbers(dependabot["source_pr_numbers"])
       unless source_numbers.include?(numbers.first)
-        raise Invalid, "Dependabot repair does not match an observed pull request"
+        raise Invalid, "Dependabot #{action} does not match an observed pull request"
       end
     end
 

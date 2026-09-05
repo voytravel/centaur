@@ -91,6 +91,10 @@ describe("evaluateGithubAutomation", () => {
                 auto_merge: false,
                 decision: "act",
                 reason: "policy authorizes automation",
+                review_orchestration: {
+                  max_concurrency: 2,
+                  mode: "cross_model",
+                },
                 session_key: "github-manage:acme/widgets:9",
               },
             }),
@@ -116,6 +120,7 @@ describe("evaluateGithubAutomation", () => {
       expect.objectContaining({
         actions: [ "review" ],
         decision: "act",
+        reviewOrchestration: { max_concurrency: 2, mode: "cross_model" },
         sessionKey: "github-manage:acme/widgets:9",
       }),
     ]);

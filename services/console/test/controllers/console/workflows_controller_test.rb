@@ -36,14 +36,16 @@ class Console::WorkflowsControllerTest < ActionDispatch::IntegrationTest
   # Stands in for CentaurApiClient: schedules/run details for show-page
   # enrichment, plus a capture of force-started runs.
   class FakeApiClient
-    attr_reader :created_runs
+    attr_reader :created_runs, :idempotency_lookups
 
-    def initialize(schedules: [], run_details: {}, create_result: nil, create_error: nil)
+    def initialize(schedules: [], run_details: {}, action_runs: {}, create_result: nil, create_error: nil)
       @schedules = schedules
       @run_details = run_details
+      @action_runs = action_runs
       @create_result = create_result || { "ok" => true, "run_id" => "run-new", "created" => true }
       @create_error = create_error
       @created_runs = []
+      @idempotency_lookups = []
     end
 
     def list_workflow_schedules
@@ -55,6 +57,11 @@ class Console::WorkflowsControllerTest < ActionDispatch::IntegrationTest
       raise CentaurApiClient::Error, "run not found" unless detail
 
       { "ok" => true, "run" => detail }
+    end
+
+    def find_workflow_run_by_idempotency_key(workflow_name:, idempotency_key:)
+      @idempotency_lookups << { workflow_name: workflow_name, idempotency_key: idempotency_key }
+      @action_runs[idempotency_key]
     end
 
     def create_workflow_run(workflow_name:, input: nil, idempotency_key: nil, max_attempts: nil)
@@ -198,6 +205,60 @@ class Console::WorkflowsControllerTest < ActionDispatch::IntegrationTest
     assert_select "button", text: "Approve scoped action"
   end
 
+  test "renders an approval-required finding from a Python workflow-host result envelope" do
+    run = fake_run(workflow_name: "github_dependency_maintenance")
+    detail = maintenance_run_detail(run.run_id)
+    payload = detail.fetch("result")
+    detail["result"] = {
+      "output" => payload,
+      "run_id" => run.run_id,
+      "steps" => [ "python_host" ],
+      "task_id" => run.task_id,
+      "workflow_name" => "github_dependency_maintenance"
+    }
+    with_api_client(FakeApiClient.new(run_details: { run.run_id => detail }))
+
+    with_workflow_history("github_dependency_maintenance", runs: [ run ]) do
+      get console_workflow_url("github_dependency_maintenance", run_id: run.run_id)
+    end
+
+    assert_response :ok
+    assert_select "h2", text: "Approval-required findings"
+    assert_select "button", text: "Approve scoped action"
+  end
+
+  test "links an already queued scoped action instead of offering a second approval" do
+    run = fake_run(workflow_name: "github_dependency_maintenance")
+    finding_key = "github-dependency-maintenance-action:#{run.run_id}:security:19"
+    client = FakeApiClient.new(
+      run_details: { run.run_id => maintenance_run_detail(run.run_id) },
+      action_runs: {
+        finding_key => { "run_id" => "action-run-1", "status" => "queued" }
+      }
+    )
+    with_api_client(client)
+
+    with_workflow_history("github_dependency_maintenance", runs: [ run ]) do
+      get console_workflow_url("github_dependency_maintenance", run_id: run.run_id)
+    end
+
+    assert_response :ok
+    assert_select "button", text: "Approve scoped action", count: 0
+    assert_select "span", text: "Action queued"
+    assert_select(
+      "a[href=?]",
+      console_workflow_path("github_dependency_maintenance_action", run_id: "action-run-1"),
+      text: "Open action ↗"
+    )
+    assert_empty client.created_runs
+    assert_equal [
+      {
+        workflow_name: "github_dependency_maintenance_action",
+        idempotency_key: finding_key
+      }
+    ], client.idempotency_lookups
+  end
+
   test "approving a validated dependency finding queues one scoped action with a durable idempotency key" do
     source_run_id = "run-observation-1"
     client = FakeApiClient.new(run_details: { source_run_id => maintenance_run_detail(source_run_id) })
@@ -230,6 +291,39 @@ class Console::WorkflowsControllerTest < ActionDispatch::IntegrationTest
         max_attempts: nil
       }
     ], client.created_runs
+  end
+
+  test "renders a ready Dependabot merge as a distinct, revalidated approval" do
+    run = fake_run(workflow_name: "github_dependency_maintenance")
+    detail = maintenance_run_detail(run.run_id)
+    route = detail.fetch("result").fetch("routes").first
+    route["security_advisories"] = {
+      "mode" => "approval_required",
+      "outcome" => "none",
+      "alert_numbers" => []
+    }
+    route["dependabot"] = {
+      "mode" => "approval_required",
+      "outcome" => "direct_ready",
+      "source_pr_numbers" => [ 42 ]
+    }
+    route["proposals"] = [
+      {
+        "kind" => "dependabot_pull_request",
+        "action" => "merge",
+        "source_numbers" => [ 42 ]
+      }
+    ]
+    with_api_client(FakeApiClient.new(run_details: { run.run_id => detail }))
+
+    with_workflow_history("github_dependency_maintenance", runs: [ run ]) do
+      get console_workflow_url("github_dependency_maintenance", run_id: run.run_id)
+    end
+
+    assert_response :ok
+    assert_select "p", text: /Merge the ready Dependabot PR/
+    assert_select "p", text: /squash-merge it through GitHub's normal protections/
+    assert_select "button", text: "Approve scoped action"
   end
 
   test "does not queue an action when a proposal fails the approval-required contract" do

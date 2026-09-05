@@ -5,11 +5,21 @@ class AutomationPolicy < ApplicationRecord
   MODES = %w[observe act].freeze
   GITHUB_REVIEW_MODES = %w[off assigned_or_mentioned all_eligible].freeze
   GITHUB_REPAIR_MODES = %w[off observe bot_owned explicit eligible].freeze
+  GITHUB_REVIEW_ORCHESTRATION_MODES = %w[single cross_model].freeze
+  GITHUB_REVIEW_HARNESSES = %w[codex claudecode].freeze
+  GITHUB_REVIEW_REASONING = %w[none minimal low medium high xhigh max].freeze
+  GITHUB_REVIEW_FOCUS = %w[
+    correctness dependencies integration maintainability security tests
+  ].freeze
   LINEAR_ISSUE_MODES = %w[off ready_issues].freeze
+  LINEAR_QA_MODES = %w[off status_transition].freeze
   ACTIVITY_REPORT_KINDS = %w[accepted pr_created].freeze
   LINEAR_REPOSITORY_ROUTE_KEYS = %w[
     repository
+    linear_project_ids
     required_labels
+    label_project_ids
+    qa_enabled
     reviewer_logins
     reviewer_team_slugs
     preview_label
@@ -18,6 +28,10 @@ class AutomationPolicy < ApplicationRecord
   MANAGED_SOURCE_FIELDS = %w[kind repository path revision content_sha256].freeze
   GITHUB_REPOSITORY_PATTERN = /\A[A-Za-z0-9][A-Za-z0-9_.-]*\/[A-Za-z0-9][A-Za-z0-9_.-]*\z/.freeze
   SLACK_CHANNEL_ID_PATTERN = /\A[CG][A-Z0-9]{8,}\z/.freeze
+  LINEAR_PROJECT_ID_PATTERN = /\A[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\z/i.freeze
+  QA_ID_PATTERN = /\A[a-z][a-z0-9_-]{0,63}\z/.freeze
+  GITHUB_REVIEW_PROFILE_ID_PATTERN = /\A[a-z][a-z0-9_-]{0,31}\z/.freeze
+  GITHUB_REVIEW_MODEL_PATTERN = /\A[A-Za-z0-9][A-Za-z0-9._\/-]{0,127}\z/.freeze
 
   GITHUB_REVIEW_ACTIONS = %w[opened reopened ready_for_review synchronize].freeze
   GITHUB_CONFLICT_ACTIONS = %w[synchronize edited ready_for_review].freeze
@@ -38,7 +52,7 @@ class AutomationPolicy < ApplicationRecord
   validates :name, presence: true, length: { maximum: 120 }
   validates :provider, inclusion: { in: PROVIDERS }
   validates :mode, inclusion: { in: MODES }
-  validates :execution_role, presence: true, if: :act?
+  validates :execution_role, presence: true, if: :requires_execution_role?
   validates :repository, format: {
     with: %r{\A[^/\s]+/[^/\s]+\z},
     message: "must be an owner/repository name"
@@ -65,6 +79,17 @@ class AutomationPolicy < ApplicationRecord
 
   def act?
     mode == "act"
+  end
+
+  # GitHub and Linear coding actions create agent sandboxes and therefore need
+  # a policy-owned execution role. A QA-only Linear policy starts an isolated
+  # workflow principal instead; granting the issue principal a coding role
+  # would be unnecessary ambient authority.
+  def requires_execution_role?
+    return false unless act?
+    return true if github?
+
+    linear_settings["issue"] == "ready_issues"
   end
 
   def github_settings
@@ -104,13 +129,16 @@ class AutomationPolicy < ApplicationRecord
     if github?
       config = github_settings
       manual_mentions = config["manual_mentions"] ? " · manual mentions: enabled" : ""
-      "review: #{config["review"].tr("_", " ")} · feedback: #{config["feedback"].tr("_", " ")} · checks: #{config["checks"].tr("_", " ")}#{manual_mentions}#{activity_reporting_summary}"
+      review_group = config.dig("review_orchestration", "mode") == "cross_model" ?
+        " · review group: cross model" : ""
+      "review: #{config["review"].tr("_", " ")} · feedback: #{config["feedback"].tr("_", " ")} · checks: #{config["checks"].tr("_", " ")}#{review_group}#{manual_mentions}#{activity_reporting_summary}"
     else
       config = linear_settings
       required_labels = Array(config["required_labels"])
       label_summary = required_labels.any? ? required_labels.join(", ") : "none"
       manual_mentions = config["manual_mentions"] ? " · manual mentions: enabled" : ""
-      "issues: #{config["issue"].tr("_", " ")} · repo: #{linear_repository_summary(config)} · required labels: #{label_summary}#{manual_mentions}#{activity_reporting_summary}"
+      qa_summary = config["qa"] == "status_transition" ? " · QA: #{Array(config["qa_statuses"]).join(", ")}" : ""
+      "issues: #{config["issue"].tr("_", " ")}#{qa_summary} · repo: #{linear_repository_summary(config)} · required labels: #{label_summary}#{manual_mentions}#{activity_reporting_summary}"
     end
   end
 
@@ -185,13 +213,20 @@ class AutomationPolicy < ApplicationRecord
       "auto_merge" => false,
       "base_branches" => [],
       "required_labels" => [],
-      "excluded_labels" => []
+      "excluded_labels" => [],
+      # Kept opt-in: existing policies preserve their established single-review
+      # behavior until a reviewed source policy explicitly chooses a group.
+      "review_orchestration" => { "mode" => "single" }
     }
   end
 
   def linear_defaults
     {
       "issue" => "off",
+      "qa" => "off",
+      "qa_target" => "auto",
+      "qa_statuses" => [],
+      "qa_profiles" => [],
       "ready_statuses" => [],
       "required_fields" => [ "description" ],
       "required_labels" => [],
@@ -260,7 +295,7 @@ class AutomationPolicy < ApplicationRecord
     normalized["repository_routes"] = Array(config["repository_routes"]).map do |route|
       next route unless route.is_a?(Hash)
 
-      route.deep_stringify_keys.transform_values do |value|
+      normalized_route = route.deep_stringify_keys.transform_values do |value|
         case value
         when Array
           value.filter_map { |item| item.to_s.strip.presence }.uniq
@@ -270,6 +305,13 @@ class AutomationPolicy < ApplicationRecord
           value
         end
       end
+      if normalized_route["linear_project_ids"].is_a?(Array)
+        normalized_route["linear_project_ids"] = normalized_route["linear_project_ids"].map(&:downcase)
+      end
+      if normalized_route["label_project_ids"].is_a?(Array)
+        normalized_route["label_project_ids"] = normalized_route["label_project_ids"].map(&:downcase)
+      end
+      normalized_route
     end
     normalized
   end
@@ -301,13 +343,154 @@ class AutomationPolicy < ApplicationRecord
         errors.add(:settings, "has an invalid #{key} mode") unless GITHUB_REPAIR_MODES.include?(config[key])
       end
       errors.add(:settings, "manual mentions must be true or false") unless boolean?(config["manual_mentions"])
+      validate_github_review_orchestration(config)
     elsif linear?
       config = linear_settings
       errors.add(:settings, "has an invalid issue mode") unless LINEAR_ISSUE_MODES.include?(config["issue"])
+      errors.add(:settings, "has an invalid QA mode") unless LINEAR_QA_MODES.include?(config["qa"])
       errors.add(:settings, "manual mentions must be true or false") unless boolean?(config["manual_mentions"])
+      if config["qa"] == "status_transition" && Array(config["qa_statuses"]).empty?
+        errors.add(:settings, "needs at least one QA status when QA automation is enabled")
+      end
+      qa_statuses = config["qa_statuses"]
+      unless qa_statuses.is_a?(Array) && qa_statuses.length <= 20 &&
+          qa_statuses.all? { |status| status.is_a?(String) && status.present? && status.length <= 100 }
+        errors.add(:settings, "has invalid QA statuses")
+      end
+      qa_profiles = config["qa_profiles"]
+      unless qa_profiles.is_a?(Array) && qa_profiles.length <= 20 &&
+          qa_profiles.all? { |profile| profile.is_a?(String) && QA_ID_PATTERN.match?(profile) }
+        errors.add(:settings, "has invalid QA profiles")
+      end
+      if config["qa"] == "status_transition" && !QA_ID_PATTERN.match?(config["qa_target"].to_s)
+        errors.add(:settings, "has an invalid QA target")
+      end
       validate_linear_repository_routes(config)
     end
     validate_activity_reporting
+  end
+
+  # Cross-model review is a compact source-managed policy surface, not arbitrary
+  # prompt/configuration JSON. The Githubbot validates it again at execution
+  # ingress; keeping the two independently bounded protects both stale workers
+  # and direct API callers.
+  def validate_github_review_orchestration(config)
+    raw = config["review_orchestration"]
+    unless raw.is_a?(Hash)
+      errors.add(:settings, "review orchestration must be an object")
+      return
+    end
+
+    orchestration = raw.deep_stringify_keys
+    unsupported = orchestration.keys - %w[mode reviewers synthesizer max_concurrency]
+    errors.add(:settings, "review orchestration has unsupported fields") if unsupported.any?
+    mode = orchestration["mode"]
+    unless GITHUB_REVIEW_ORCHESTRATION_MODES.include?(mode)
+      errors.add(:settings, "has an invalid review orchestration mode")
+      return
+    end
+    return if mode == "single"
+
+    reviewers = orchestration["reviewers"]
+    synthesizer = orchestration["synthesizer"]
+    max_concurrency = orchestration["max_concurrency"]
+    unless reviewers.is_a?(Array) && reviewers.length.between?(2, 3)
+      errors.add(:settings, "cross-model review needs two or three reviewers")
+      return
+    end
+    unless max_concurrency.is_a?(Integer) && max_concurrency.between?(1, 3)
+      errors.add(:settings, "cross-model review needs max concurrency from 1 to 3")
+    end
+
+    profiles = reviewers.each_with_index.filter_map do |profile, index|
+      validate_github_review_profile(profile, "reviewer #{index + 1}")
+    end
+    synthesis = validate_github_review_profile(synthesizer, "synthesizer")
+    return unless profiles.length == reviewers.length && synthesis
+
+    ids = profiles.map { |profile| profile.fetch("id") }
+    errors.add(:settings, "cross-model reviewer IDs must be unique") if ids.uniq.length != ids.length
+    primary_pairs = profiles.map { |profile| [ profile.fetch("harness"), profile.fetch("model") ] }
+    if primary_pairs.uniq.length < 2
+      errors.add(:settings, "cross-model review needs at least two distinct primary models")
+    end
+  end
+
+  def validate_github_review_profile(value, label)
+    unless value.is_a?(Hash)
+      errors.add(:settings, "cross-model #{label} must be an object")
+      return nil
+    end
+    profile = value.deep_stringify_keys
+    unsupported = profile.keys - %w[id harness model reasoning focus max_runs_per_epoch fallbacks]
+    valid = unsupported.empty?
+    errors.add(:settings, "cross-model #{label} has unsupported fields") unless valid
+
+    id = profile["id"]
+    harness = profile["harness"]
+    model = profile["model"]
+    reasoning = profile["reasoning"]
+    focus = profile["focus"]
+    max_runs = profile["max_runs_per_epoch"]
+    fallbacks = profile["fallbacks"]
+    unless id.is_a?(String) && GITHUB_REVIEW_PROFILE_ID_PATTERN.match?(id)
+      errors.add(:settings, "cross-model #{label} has an invalid ID")
+      valid = false
+    end
+    unless GITHUB_REVIEW_HARNESSES.include?(harness)
+      errors.add(:settings, "cross-model #{label} has an invalid harness")
+      valid = false
+    end
+    unless model.is_a?(String) && GITHUB_REVIEW_MODEL_PATTERN.match?(model)
+      errors.add(:settings, "cross-model #{label} has an invalid model")
+      valid = false
+    end
+    unless reasoning.nil? || (harness == "codex" && GITHUB_REVIEW_REASONING.include?(reasoning))
+      errors.add(:settings, "cross-model #{label} has invalid reasoning")
+      valid = false
+    end
+    unless focus.is_a?(Array) && focus.all? { |item| GITHUB_REVIEW_FOCUS.include?(item) }
+      errors.add(:settings, "cross-model #{label} has invalid focus")
+      valid = false
+    end
+    unless max_runs.is_a?(Integer) && max_runs.between?(1, 3)
+      errors.add(:settings, "cross-model #{label} has invalid per-epoch budget")
+      valid = false
+    end
+    unless fallbacks.is_a?(Array) && fallbacks.length <= 2
+      errors.add(:settings, "cross-model #{label} has invalid fallbacks")
+      return nil
+    end
+
+    attempts = [ { "harness" => harness, "model" => model }, *fallbacks ]
+    valid_fallbacks = fallbacks.all? do |fallback|
+      next false unless fallback.is_a?(Hash)
+
+      candidate = fallback.deep_stringify_keys
+      fallback_harness = candidate["harness"]
+      fallback_model = candidate["model"]
+      fallback_reasoning = candidate["reasoning"]
+      (candidate.keys - %w[harness model reasoning]).empty? &&
+        GITHUB_REVIEW_HARNESSES.include?(fallback_harness) &&
+        fallback_model.is_a?(String) &&
+        GITHUB_REVIEW_MODEL_PATTERN.match?(fallback_model) &&
+        (fallback_reasoning.nil? ||
+          (fallback_harness == "codex" && GITHUB_REVIEW_REASONING.include?(fallback_reasoning)))
+    end
+    unless valid_fallbacks
+      errors.add(:settings, "cross-model #{label} has an invalid fallback")
+      valid = false
+    end
+    normalized_attempts = attempts.filter_map do |attempt|
+      harness_value = attempt["harness"] || attempt[:harness]
+      model_value = attempt["model"] || attempt[:model]
+      [ harness_value, model_value ] if harness_value.is_a?(String) && model_value.is_a?(String)
+    end
+    if normalized_attempts.uniq.length != normalized_attempts.length
+      errors.add(:settings, "cross-model #{label} repeats a model attempt")
+      valid = false
+    end
+    valid ? profile : nil
   end
 
   def validate_activity_reporting
@@ -414,20 +597,41 @@ class AutomationPolicy < ApplicationRecord
                                                                         %w[create update manual_mention].include?(event["event_action"])
 
     config = linear_settings
-    return ignored("ready issue automation is disabled") unless config["issue"] == "ready_issues"
     if event["event_action"] == "manual_mention"
+      return ignored("ready issue automation is disabled") unless config["issue"] == "ready_issues"
       return ignored("manual mentions are disabled") unless config["manual_mentions"] == true
       return ignored("event is not a verified bot mention") unless event["mentioned_bot"] == true
     end
 
-    ready, reason = linear_issue_ready?(event, config)
-    return ignored(reason) unless ready
-
     route, route_reason = linear_repository_route_for(event, config)
     return ignored(route_reason) unless route
 
+    qa_transition = linear_qa_transition?(event, config, route)
+    ready, reason = linear_issue_ready?(event, config, enforce_ready_status: !qa_transition)
+    return ignored(reason) unless ready
+
+    if qa_transition
+      return routed([ "run_qa" ], linear_route: route)
+    end
+
+    return ignored("ready issue automation is disabled") unless config["issue"] == "ready_issues"
+
     actions = event["event_action"] == "manual_mention" ? [ "respond_to_mention" ] : [ "implement_issue" ]
     routed(actions, linear_route: route)
+  end
+
+  def linear_qa_transition?(event, config, route)
+    return false unless config["qa"] == "status_transition"
+    # A legacy single-repository QA policy retains its established behavior.
+    # A routed policy must explicitly opt a repository into the fixed QA
+    # executor, so an unrelated project cannot accidentally dispatch it.
+    return false if Array(config["repository_routes"]).any? && route["qa_enabled"] != true
+
+    qa_statuses = Array(config["qa_statuses"]).map(&:downcase)
+    return false unless qa_statuses.include?(event["status"].to_s.downcase)
+    return true if event["event_action"] == "create"
+
+    event["event_action"] == "update" && Array(event["updated_fields"]).include?("stateId")
   end
 
   def github_eligible?(event)
@@ -505,7 +709,7 @@ class AutomationPolicy < ApplicationRecord
     end
   end
 
-  def linear_issue_ready?(event, config)
+  def linear_issue_ready?(event, config, enforce_ready_status: true)
     return [ false, "issue is blocked" ] if event["blocked"] == true
     return [ false, "issue title is missing" ] if event["title"].to_s.strip.empty?
 
@@ -520,7 +724,7 @@ class AutomationPolicy < ApplicationRecord
     end
 
     ready_statuses = Array(config["ready_statuses"]).map(&:downcase)
-    if ready_statuses.any? && !ready_statuses.include?(event["status"].to_s.downcase)
+    if enforce_ready_status && ready_statuses.any? && !ready_statuses.include?(event["status"].to_s.downcase)
       return [ false, "issue status is not ready" ]
     end
 
@@ -539,12 +743,29 @@ class AutomationPolicy < ApplicationRecord
     return [ legacy_linear_repository_route(config), nil ] if routes.empty?
 
     labels = Array(event["labels"]).map { |label| label.to_s.downcase }
-    matches = routes.select do |route|
-      required = Array(route["required_labels"]).map(&:downcase)
-      (required - labels).empty?
+    project_id = event["linear_project_id"].to_s.strip.downcase
+    label_matches = routes.select do |route|
+      route = route.deep_stringify_keys
+      required_labels = Array(route["required_labels"]).map(&:downcase)
+      label_project_ids = Array(route["label_project_ids"]).filter_map do |candidate|
+        candidate.to_s.strip.presence&.downcase
+      end
+      required_labels.any? && (required_labels - labels).empty? &&
+        (label_project_ids.empty? || label_project_ids.include?(project_id))
     end
-    return [ nil, "no configured repository route matches issue labels" ] if matches.empty?
-    return [ nil, "multiple configured repository routes match issue labels" ] if matches.many?
+    project_matches = routes.select do |route|
+      project_ids = Array(route.deep_stringify_keys["linear_project_ids"]).filter_map do |candidate|
+        candidate.to_s.strip.presence&.downcase
+      end
+      project_ids.any? && project_ids.include?(project_id)
+    end
+
+    # A label is an intentional, issue-level routing override. It wins over a
+    # project default, while still failing closed when labels themselves match
+    # more than one configured route.
+    matches = label_matches.presence || project_matches
+    return [ nil, "no configured repository route matches issue labels or project" ] if matches.empty?
+    return [ nil, "multiple configured repository routes match issue labels or project" ] if matches.many?
 
     [ matches.first, nil ]
   end
@@ -576,9 +797,12 @@ class AutomationPolicy < ApplicationRecord
       "reason" => mode == "act" ? "policy authorizes automation" : "policy is in observe mode",
       "actions" => actions,
       "auto_merge" => github? && github_settings["auto_merge"] == true,
+      "review_orchestration" => github? ? github_settings["review_orchestration"] : nil,
       "github_repository" => route["repository"],
       "move_to_in_progress" => linear["move_to_in_progress"] != false,
       "preview_label" => route["preview_label"],
+      "qa_profiles" => Array(linear["qa_profiles"]),
+      "qa_target" => linear["qa_target"],
       "reviewer_logins" => reviewer_logins,
       "reviewer_team_slugs" => reviewer_team_slugs
     }
@@ -596,10 +820,12 @@ class AutomationPolicy < ApplicationRecord
       errors.add(:settings, "must use either a GitHub repository or repository routes, not both")
     end
 
-    if config["issue"] == "ready_issues" && routes.empty? && !legacy_repository.match?(%r{\A[^/\s]+/[^/\s]+\z})
-      errors.add(:settings, "needs a GitHub repository or repository routes for ready issue automation")
+    if (config["issue"] == "ready_issues" || config["qa"] == "status_transition") &&
+       routes.empty? && !legacy_repository.match?(%r{\A[^/\s]+/[^/\s]+\z})
+      errors.add(:settings, "needs a GitHub repository or repository routes for Linear automation")
     end
 
+    seen_project_ids = {}
     routes.each_with_index do |route, index|
       unless route.is_a?(Hash)
         errors.add(:settings, "repository route #{index + 1} must be an object")
@@ -614,9 +840,42 @@ class AutomationPolicy < ApplicationRecord
         errors.add(:settings, "repository route #{index + 1} needs a GitHub repository")
       end
 
-      labels = route["required_labels"]
-      unless labels.is_a?(Array) && labels.all? { |label| label.is_a?(String) && label.present? } && labels.any?
-        errors.add(:settings, "repository route #{index + 1} needs at least one required label")
+      labels = route.key?("required_labels") ? route["required_labels"] : []
+      labels_valid = labels.is_a?(Array) && labels.all? { |label| label.is_a?(String) && label.present? }
+      errors.add(:settings, "repository route #{index + 1} has invalid required labels") unless labels_valid
+
+      project_ids = route.key?("linear_project_ids") ? route["linear_project_ids"] : []
+      project_ids_valid = project_ids.is_a?(Array) && project_ids.all? do |project_id|
+        project_id.is_a?(String) && LINEAR_PROJECT_ID_PATTERN.match?(project_id)
+      end
+      errors.add(:settings, "repository route #{index + 1} has invalid Linear project IDs") unless project_ids_valid
+
+      label_project_ids = route.key?("label_project_ids") ? route["label_project_ids"] : []
+      label_project_ids_valid = label_project_ids.is_a?(Array) && label_project_ids.all? do |project_id|
+        project_id.is_a?(String) && LINEAR_PROJECT_ID_PATTERN.match?(project_id)
+      end
+      errors.add(:settings, "repository route #{index + 1} has invalid label project IDs") unless label_project_ids_valid
+      if label_project_ids_valid && label_project_ids.any? && (!labels_valid || labels.empty?)
+        errors.add(:settings, "repository route #{index + 1} needs labels to scope label project IDs")
+      end
+
+      if labels_valid && project_ids_valid && labels.empty? && project_ids.empty?
+        errors.add(:settings, "repository route #{index + 1} needs at least one project or label selector")
+      end
+
+      if route.key?("qa_enabled") && !boolean?(route["qa_enabled"])
+        errors.add(:settings, "repository route #{index + 1} has an invalid QA setting")
+      end
+
+      if project_ids_valid
+        project_ids.each do |project_id|
+          previous_index = seen_project_ids[project_id.downcase]
+          if previous_index
+            errors.add(:settings, "repository route #{index + 1} repeats a Linear project ID from route #{previous_index}")
+          else
+            seen_project_ids[project_id.downcase] = index + 1
+          end
+        end
       end
 
       %w[reviewer_logins reviewer_team_slugs].each do |field|

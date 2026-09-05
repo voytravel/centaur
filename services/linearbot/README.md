@@ -17,12 +17,11 @@ control plane is unchanged (`linear:…` thread keys flow through identically).
 
 - **`@`-mentioning the bot in a comment** → the bot answers in that comment thread, keyed
   `linear:{issueId}:c:{rootCommentId}` (one thread === one sandbox/context stack). The reply is a
-  single comment, live-edited: it posts with the latest reasoning line as a headline above a
-  collapsed **Thinking…** section that fills in as the run streams (throttled), then swaps in place
-  to the final answer above a collapsed **Chain of thought** section. A 👀 reaction acks the
-  triggering comment while the bot works, settling to ✅ / ❌. A mention is encoded by Linear as the
-  bot profile's plain URL in the markdown body, so detection matches that (with the user id and a
-  typed `@name` as fallbacks).
+  single comment, live-edited from a short working status to the final answer. Detailed reasoning,
+  tool activity, and provider errors stay in Centaur Console's durable execution record, not in the
+  Linear thread. A 👀 reaction acks the triggering comment while the bot works, settling to ✅ / ❌.
+  A mention is encoded by Linear as the bot profile's plain URL in the markdown body, so detection
+  matches that (with the user id and a typed `@name` as fallbacks).
 - **Plain comments in a thread the bot is already active in** (no mention) are appended to that
   thread's session as append-only context — no execution, no reply — so a follow-up like "actually,
   hold off" is seen by the next turn. The bot's own comments are skipped (loop guard) and inactive
@@ -123,9 +122,15 @@ mentionable and assignable in the first place, not an agent-session add-on.
 When Console's repository-automation policy enables `ready_issues`, Linearbot
 submits only a signature-verified, normalized issue summary to Console. Console
 selects the repository deterministically. A simple policy supplies one
-`github_repository`; a multi-repository policy supplies label-based
-`repository_routes`. Each ready issue must match exactly one route or the event
-is recorded as ignored and no agent turn starts.
+`github_repository`; a multi-repository policy supplies project-ID and/or
+label-based `repository_routes`. A matching label route explicitly overrides a
+project route; otherwise the project route selects the repository. The selected
+selector kind must match exactly one route or the event is recorded as ignored
+and no agent turn starts. A route can also explicitly opt into the fixed QA
+executor; Linearbot itself never infers a repository or a QA target.
+`label_project_ids` can scope a label override to named Linear projects, so a
+team-wide policy does not turn a label into a repository selector for unrelated
+projects.
 
 A selected route can supply reviewers and a `preview_label`. For a user-visible
 change, the resulting prompt tells the agent to apply that already-configured

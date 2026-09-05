@@ -77,10 +77,18 @@
     </dl>
   </section>
 
-  <% if @workflow_name == GithubDependencyMaintenanceFinding::WORKFLOW_NAME && @maintenance_findings.present? %>
-    <%= render "maintenance_findings",
-               findings: @maintenance_findings,
-               maintenance_run_detail: @maintenance_run_detail %>
+  <% if @workflow_name == GithubDependencyMaintenanceFinding::WORKFLOW_NAME %>
+    <% if @maintenance_diagnostics.present? %>
+      <%= render "maintenance_diagnostics",
+                 diagnostics: @maintenance_diagnostics,
+                 maintenance_run_detail: @maintenance_run_detail %>
+    <% end %>
+    <% if @maintenance_findings.present? %>
+      <%= render "maintenance_findings",
+                 findings: @maintenance_findings,
+                 maintenance_run_detail: @maintenance_run_detail,
+                 action_runs: @maintenance_action_runs %>
+    <% end %>
   <% end %>
 
   <% debug_rows = [] %>

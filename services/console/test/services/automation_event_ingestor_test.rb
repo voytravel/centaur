@@ -30,6 +30,7 @@ class AutomationEventIngestorTest < ActiveSupport::TestCase
 
     assert_equal "act", first["decision"]
     assert_equal [ "review" ], first["actions"]
+    assert_equal({ "mode" => "single" }, first["review_orchestration"])
     assert_equal first, second
     assert_equal 1, AutomationEvent.count
     workstream = AutomationWorkstream.sole
@@ -371,6 +372,126 @@ class AutomationEventIngestorTest < ActiveSupport::TestCase
     workstream = AutomationWorkstream.sole
     assert_equal "ENG-42", workstream.metadata["linear_issue_identifier"]
     assert_equal "https://linear.app/voytravel/issue/ENG-42/implement-it", workstream.metadata["linear_issue_url"]
+    assert_equal "Implement it", workstream.metadata["linear_issue_title"]
+  end
+
+  test "queues one QA workflow for a verified Linear status transition" do
+    AutomationPolicy.create!(
+      name: "Linear QA orchestration",
+      provider: "linear",
+      linear_team_id: "team-1",
+      enabled: true,
+      mode: "act",
+      created_by: users(:acme_admin),
+      settings: {
+        "linear" => {
+          "issue" => "off",
+          "qa" => "status_transition",
+          "qa_statuses" => [ "QA" ],
+          "qa_profiles" => [ "ios_smoke" ],
+          "github_repository" => "acme/widgets"
+        }
+      }
+    )
+    input = {
+      "provider" => "linear",
+      "deduplication_key" => "issue-qa-transition",
+      "event_type" => "Issue",
+      "event_action" => "update",
+      "linear_issue_id" => "issue-qa",
+      "linear_issue_identifier" => "ENG-42",
+      "linear_issue_url" => "https://linear.app/voytravel/issue/ENG-42/verify-it",
+      "linear_team_id" => "team-1",
+      "title" => "Verify it",
+      "description" => "Ready for QA",
+      "status" => "QA",
+      "updated_fields" => [ "stateId" ],
+      "labels" => []
+    }
+    queued_event_ids = []
+
+    AutomationQaDispatchJob.stub(:perform_later, ->(event_id) { queued_event_ids << event_id }) do
+      result = AutomationEventIngestor.new(input).call
+      assert_equal "act", result["decision"]
+      assert_equal [ "run_qa" ], result["actions"]
+      assert_equal [ "ios_smoke" ], result["qa_profiles"]
+      assert_equal "act", AutomationEventIngestor.new(input).call["decision"]
+    end
+
+    event = AutomationEvent.find_by!(deduplication_key: "issue-qa-transition")
+    assert_equal [ event.id ], queued_event_ids
+    assert_equal [ "stateId" ], event.metadata["updated_fields"]
+  end
+
+  test "a QA transition on a hybrid policy never grants its coding role" do
+    role = automation_role
+    AutomationPolicy.create!(
+      name: "Hybrid Linear coding and QA",
+      provider: "linear",
+      linear_team_id: "team-1",
+      enabled: true,
+      mode: "act",
+      execution_role: role,
+      created_by: users(:acme_admin),
+      settings: {
+        "linear" => {
+          "issue" => "ready_issues",
+          "qa" => "status_transition",
+          "qa_statuses" => [ "QA" ],
+          "github_repository" => "acme/widgets"
+        }
+      }
+    )
+    issue = {
+      "provider" => "linear",
+      "event_type" => "Issue",
+      "event_action" => "update",
+      "linear_issue_id" => "hybrid-issue",
+      "linear_team_id" => "team-1",
+      "title" => "Implement it",
+      "description" => "Ready to ship",
+      "labels" => []
+    }
+
+    AutomationQaDispatchJob.stub(:perform_later, ->(_event_id) { }) do
+      qa = AutomationEventIngestor.new(issue.merge(
+        "deduplication_key" => "hybrid-qa-v1",
+        "status" => "QA",
+        "updated_fields" => [ "stateId" ]
+      )).call
+      assert_equal [ "run_qa" ], qa["actions"]
+    end
+
+    principal = Principal.create!(
+      foreign_id: "hybrid-linear-issue-#{SecureRandom.hex(6)}",
+      name: "ENG-42",
+      kind: "linear_issue",
+      labels: { "linear_issue_id" => "hybrid-issue" },
+      created_by: users(:acme_admin)
+    )
+    AutomationPrincipalAuthorizer.reconcile_principal(principal)
+    workstream = AutomationWorkstream.sole
+    assert_nil workstream.reload.authorization_role
+    assert_not_includes principal.reload.roles, role
+
+    implementation = AutomationEventIngestor.new(issue.merge(
+      "deduplication_key" => "hybrid-implementation-v1",
+      "status" => "Todo"
+    )).call
+    assert_equal [ "implement_issue" ], implementation["actions"]
+    assert_equal role, workstream.reload.authorization_role
+    assert_includes principal.reload.roles, role
+
+    AutomationQaDispatchJob.stub(:perform_later, ->(_event_id) { }) do
+      qa_again = AutomationEventIngestor.new(issue.merge(
+        "deduplication_key" => "hybrid-qa-v2",
+        "status" => "QA",
+        "updated_fields" => [ "stateId" ]
+      )).call
+      assert_equal [ "run_qa" ], qa_again["actions"]
+    end
+    assert_nil workstream.reload.authorization_role
+    assert_not_includes principal.reload.roles, role
   end
 
   test "returns the explicitly selected Linear repository route and preview label" do
@@ -392,7 +513,7 @@ class AutomationEventIngestorTest < ActiveSupport::TestCase
             },
             {
               "repository" => "acme/travel",
-              "required_labels" => [ "repo:travel" ],
+              "linear_project_ids" => [ "11111111-1111-1111-1111-111111111111" ],
               "preview_label" => "preview"
             }
           ]
@@ -409,7 +530,8 @@ class AutomationEventIngestorTest < ActiveSupport::TestCase
       "linear_team_id" => "team-1",
       "title" => "Implement travel UI",
       "description" => "Ready to ship",
-      "labels" => [ "repo:travel" ]
+      "labels" => [],
+      "linear_project_id" => "11111111-1111-1111-1111-111111111111"
     }
 
     first = AutomationEventIngestor.new(input).call

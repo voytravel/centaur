@@ -1,0 +1,26 @@
+<section class="mb-8">
+  <div class="mb-3 flex flex-wrap items-end justify-between gap-2">
+    <div>
+      <h2 class="text-xs font-semibold uppercase tracking-wider text-zinc-500">Observer diagnostics</h2>
+      <p class="mt-1 text-xs text-zinc-500">
+        These are no-action workflow failures, not approval requests or GitHub permission changes.
+      </p>
+    </div>
+    <% if maintenance_run_detail["run_id"].present? %>
+      <span class="font-mono text-xs text-zinc-600" title="<%= maintenance_run_detail["run_id"] %>">
+        observation <%= truncate_middle(maintenance_run_detail["run_id"], max: 28) %>
+      </span>
+    <% end %>
+  </div>
+
+  <div class="grid gap-3 xl:grid-cols-2">
+    <% diagnostics.each do |diagnostic| %>
+      <article class="console-panel border border-red-500/25 p-4">
+        <p class="text-sm font-medium text-zinc-100"><%= diagnostic.title %></p>
+        <p class="mt-1 text-xs text-zinc-400"><%= diagnostic.repository %></p>
+        <p class="mt-3 text-xs text-red-100/80"><%= diagnostic.detail %></p>
+        <p class="mt-4 font-mono text-xs text-zinc-600"><%= diagnostic.code %></p>
+      </article>
+    <% end %>
+  </div>
+</section>

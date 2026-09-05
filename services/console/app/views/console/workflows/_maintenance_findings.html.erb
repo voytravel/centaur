@@ -2,7 +2,7 @@
   <div class="mb-3 flex flex-wrap items-end justify-between gap-2">
     <div>
       <h2 class="text-xs font-semibold uppercase tracking-wider text-zinc-500">Approval-required findings</h2>
-      <p class="mt-1 text-xs text-zinc-500">Observed by the scheduled workflow. Approval starts a separate, scoped action run; it never authorizes a merge or deployment.</p>
+      <p class="mt-1 text-xs text-zinc-500">Observed by the scheduled workflow. Approval starts a separate, scoped action run; the card states its exact permitted mutation.</p>
     </div>
     <% if maintenance_run_detail["run_id"].present? %>
       <span class="font-mono text-xs text-zinc-600" title="<%= maintenance_run_detail["run_id"] %>">observation <%= truncate_middle(maintenance_run_detail["run_id"], max: 28) %></span>
@@ -11,6 +11,7 @@
 
   <div class="grid gap-3 xl:grid-cols-2">
     <% findings.each do |finding| %>
+      <% action_run = action_runs[finding.idempotency_key] %>
       <article class="console-panel border border-amber-500/25 p-4">
         <div class="flex flex-wrap items-start justify-between gap-3">
           <div>
@@ -22,20 +23,30 @@
                         target: "_blank", rel: "noopener noreferrer", class: "console-link text-xs" %>
           <% end %>
         </div>
-        <p class="mt-3 text-xs text-amber-100/80">The action agent must re-check this target, stay within the reviewed route, and open a Draft PR only if it remains valid.</p>
+        <p class="mt-3 text-xs text-amber-100/80"><%= finding.action_explanation %></p>
         <div class="mt-4 flex flex-wrap items-center gap-3">
-          <%= button_to "Approve scoped action",
-                        approve_finding_console_workflow_path(GithubDependencyMaintenanceFinding::WORKFLOW_NAME),
-                        method: :post,
-                        params: {
-                          run_id: finding.source_run_id,
-                          repository: finding.repository,
-                          finding_key: finding.key
-                        },
-                        class: "btn-primary",
-                        data: {
-                          turbo_confirm: "Approve #{finding.action_label.downcase} for #{finding.repository} (#{finding.source_label})? This can create a Draft PR, but cannot merge or deploy."
-                        } %>
+          <% if action_run.present? %>
+            <span class="text-xs text-amber-100/80">Action <%= action_run["status"].presence || "queued" %></span>
+            <%= link_to "Open action ↗",
+                        console_workflow_path(
+                          GithubDependencyMaintenanceFinding::ACTION_WORKFLOW_NAME,
+                          run_id: action_run["run_id"]
+                        ),
+                        class: "console-link text-xs" %>
+          <% else %>
+            <%= button_to "Approve scoped action",
+                          approve_finding_console_workflow_path(GithubDependencyMaintenanceFinding::WORKFLOW_NAME),
+                          method: :post,
+                          params: {
+                            run_id: finding.source_run_id,
+                            repository: finding.repository,
+                            finding_key: finding.key
+                          },
+                          class: "btn-primary",
+                          data: {
+                            turbo_confirm: finding.approval_confirmation
+                          } %>
+          <% end %>
           <span class="font-mono text-xs text-zinc-600"><%= finding.key %></span>
         </div>
       </article>

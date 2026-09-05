@@ -222,6 +222,26 @@ class CentaurApiClientTest < ActiveSupport::TestCase
     http.verify
   end
 
+  test "looks up a workflow run by its idempotency key" do
+    http = Minitest::Mock.new
+    expect_request(http, status: 200, body: { ok: true, runs: [ { run_id: "r1" } ] }.to_json) do |request|
+      assert_equal :get, request[:method]
+      assert_equal(
+        "http://api.internal:8080/api/workflows/runs?idempotency_key=action%3A1&limit=1&workflow_name=github_dependency_maintenance_action",
+        request[:url]
+      )
+    end
+    client = api_client(base_url: "http://api.internal:8080", http: http)
+
+    run = client.find_workflow_run_by_idempotency_key(
+      workflow_name: "github_dependency_maintenance_action",
+      idempotency_key: "action:1"
+    )
+
+    assert_equal({ "run_id" => "r1" }, run)
+    http.verify
+  end
+
   test "creates workflow runs with optional input and idempotency key" do
     http = Minitest::Mock.new
     expect_request(http, status: 200, body: { ok: true, run_id: "r1" }.to_json) do |request|

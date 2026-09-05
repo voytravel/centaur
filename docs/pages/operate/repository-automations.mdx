@@ -39,10 +39,12 @@ existing PR or issue session -> api-rs execution -> platform reply / PR work
 The Console records a workstream for each PR or issue, including the stable
 session key and recent event count. When api-rs creates the matching derived
 principal, Console attaches the policy's selected execution role only while
-the latest event remains authorized. Disabling the policy, changing it out of
-Act mode, or receiving a newly ineligible event revokes that policy-owned role
-binding. It keeps only compact event metadata; raw webhook bodies and
-credentials do not enter the policy store.
+the latest authorized action is an agent action. A deterministic `run_qa`
+event dispatches its fixed workflow without attaching a model or repository
+role to the issue principal. Disabling the policy, changing it out of Act mode,
+or receiving a newly ineligible event revokes that policy-owned role binding.
+It keeps only compact event metadata; raw webhook bodies and credentials do not
+enter the policy store.
 
 ## Optional Slack activity report
 
@@ -80,6 +82,59 @@ A GitHub policy scopes to one `owner/repository`. It can independently enable:
 - deterministic auto-merge, explicitly opt-in and still constrained by branch
   protection, draft state, and the hold label.
 
+Automatic review is organized into review epochs. By default, each epoch gets
+one broad/new-risk review and two repair-validation rounds
+(`githubbot.reviewMaxRoundsPerEpoch: 3`). Validation rounds inspect only
+accepted fixes, newly changed risk surfaces, and regressions. Hidden finding
+fingerprints in GitHub comments preserve accepted/rejected/fixed decisions
+across line movement.
+
+A new production file, dependency manifest, auth/data/API/infra boundary, or
+`githubbot.reviewEpochMinChangedLines` non-generated changed lines (default 50)
+starts an epoch. Test/docs/generated-only changes do not. A material
+bot-authored expansion pauses for human approval; it cannot reset its own
+budget. After `githubbot.reviewMaxEpochs` automatic epochs (default 3), split the
+PR or explicitly request Githubbot as reviewer to continue. A changed
+authorization/security surface may still trigger a narrowly scoped P0/security
+inspection after the normal cap. Human-submitted reviews are not budgeted, but
+responses to bot-authored feedback are. The bundled reviewer requires
+exact-line evidence, a reachable failure path, material impact, and high
+confidence before it posts a finding.
+
+Epoch classification is deterministic; no model decides whether it earned more
+review budget. Githubbot compares the last reviewed head with the new head and
+the cumulative production-only PR diff. Pure rebases, detected whitespace-only
+changes, and test/docs/generated-only deltas stay in the current epoch. PRs over
+the bounded 250-production-file inventory pause for an explicit human review
+request instead of silently classifying a partial file set. All bot-authored
+reviewers have independent response budgets, plus one aggregate PR/epoch cap so
+one bot cannot starve every other bot and adding bots cannot create an unbounded
+loop. The audit trace
+records changed-line counts and the exact classifier reasons for every review.
+
+### Cross-model review groups
+
+The default strategy is one reviewer. A reviewed, source-managed GitHub policy
+may opt into `review_orchestration.mode: "cross_model"` with two or three
+independent Centaur model profiles and one synthesizer. Each reviewer gets its
+own isolated PR session, model budget, and Console execution record; reviewers
+return structured reports privately. The synthesizer re-checks the live head
+and the relevant claims, then is the only profile allowed to publish the one
+consolidated GitHub review.
+
+The configuration is deliberately bounded: at most three reviewers, at most two
+fallback attempts per profile, three runs per profile per epoch, and a maximum
+of three concurrent reviewers. A fallback is used only after a provider outage
+or a confirmed unsupported model capability. Credential errors, cancellations,
+and ambiguous failures pause rather than silently changing models. Console
+records the requested and resolved model, reviewer ID, epoch, round, and any
+fallback category; GitHub receives neither model transcripts nor provider error
+details.
+
+External reviewers such as Cursor or Greptile are not Centaur profiles. Their
+existing GitHub reviews still feed the normal per-reviewer repair budgets, so
+adding them does not multiply automatic repair loops.
+
 Use allowed base-branch patterns such as `main` or `release/*`, required labels,
 and excluded labels to define eligibility. Existing assigned-review and
 bot-owned PR behavior remains available; the policy only extends automation to
@@ -101,25 +156,31 @@ pick up new or updated issues only when configured readiness checks pass:
 - excluded labels such as `no-agent`.
 
 Map a simple policy to one GitHub repository and optional reviewers. For a
-project that contains work for more than one repository, use explicit
-label-based repository routes instead of asking the agent to infer a target.
-Each ready issue must match exactly one route; zero or multiple matching routes
-are recorded as an ignored decision and cannot start a sandbox. A route may
-override reviewers and declare an opt-in preview label for that repository:
+team-wide policy, use explicit repository routes instead of asking the agent to
+infer a target. A route can select a Linear project ID, required issue labels,
+or both. A matching label route is an explicit issue-level override and takes
+precedence over a project route; otherwise the project route selects the target.
+Use `label_project_ids` to limit that override to named Linear projects rather
+than allowing the label to select a repository anywhere in the team.
+The selected selector kind must match exactly one route; zero or multiple
+matching routes are recorded as an ignored decision and cannot start a sandbox.
+A route may override reviewers, opt into the fixed QA executor for that
+repository, and declare an opt-in preview label:
 
 ```json
 {
   "linear": {
     "issue": "ready_issues",
-    "required_labels": ["agent:ready"],
     "repository_routes": [
       {
         "repository": "acme/widgets",
-        "required_labels": ["repo:widgets"]
+        "linear_project_ids": ["00000000-0000-0000-0000-000000000000"],
+        "qa_enabled": true
       },
       {
         "repository": "acme/web",
         "required_labels": ["repo:web"],
+        "label_project_ids": ["00000000-0000-0000-0000-000000000000"],
         "reviewer_team_slugs": ["frontend"],
         "preview_label": "preview"
       }
@@ -135,9 +196,14 @@ a user-visible change. It must be an already-reviewed repository label whose
 workflow creates a real preview; the agent reports a URL only after verifying
 it from the PR's checks or comments.
 
-In Console, native (non-source-managed) Linear policies expose the same route
-fields as labelled rows. Source-managed policies stay read-only in Console and
-must be changed in their reviewed configuration before deployment.
+When a routed policy also enables deterministic QA orchestration,
+`qa_enabled: true` is required on the selected route. This keeps a QA status
+transition for another repository from accidentally dispatching a fixed QA
+workflow. Legacy single-repository QA policies remain compatible.
+
+In Console, native (non-source-managed) Linear policies expose the same
+project-ID and label route fields. Source-managed policies stay read-only in
+Console and must be changed in their reviewed configuration before deployment.
 
 The agent re-checks readiness before coding, opens a linked PR without merging
 it, requests the configured human reviewers, and attaches a real verified

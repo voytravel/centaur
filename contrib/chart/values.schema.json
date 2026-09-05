@@ -427,6 +427,15 @@
           "enum": ["first", "always", "never"]
         },
         "continueThreadReplies": { "type": "boolean" },
+        "threadReplyMode": {
+          "type": "string",
+          "enum": ["", "mentions_only", "actionable", "all"]
+        },
+        "streamTaskDisplayMode": {
+          "type": "string",
+          "enum": ["", "none", "plan", "timeline"]
+        },
+        "visionModel": { "type": "string" },
         "responseServiceTierEnabled": { "type": "boolean" },
         "metrics": {
           "type": "object",

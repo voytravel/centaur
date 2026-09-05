@@ -105,7 +105,7 @@ class Console::WorkflowsController < ApplicationController
   # This trusted Console transition re-reads the immutable workflow result,
   # validates the selected proposal, and starts one separately scoped action
   # workflow under an idempotency key. The action workflow must still re-check
-  # the reviewed route and live GitHub state before it can make a Draft PR.
+  # the reviewed route and live GitHub state before its narrowly scoped action.
   def approve_finding
     workflow_name = params[:id].to_s
     unless workflow_name == GithubDependencyMaintenanceFinding::WORKFLOW_NAME
@@ -129,7 +129,7 @@ class Console::WorkflowsController < ApplicationController
       if result["created"] == false
         "That scoped action is already queued (#{run_id})."
       else
-        "Scoped action queued (#{run_id}). It may create only a Draft PR; it cannot merge or deploy."
+        "Scoped action queued (#{run_id}). #{finding.queued_notice}"
       end
     redirect_to console_workflow_path(workflow_name, run_id: finding.source_run_id), notice: notice
   rescue GithubDependencyMaintenanceFinding::Invalid, ActionController::ParameterMissing, KeyError => e
@@ -158,6 +158,13 @@ class Console::WorkflowsController < ApplicationController
       else
         []
       end
+    @maintenance_diagnostics =
+      if @workflow_name == GithubDependencyMaintenanceFinding::WORKFLOW_NAME
+        GithubDependencyMaintenanceFinding.diagnostics_for_run(@maintenance_run_detail)
+      else
+        []
+      end
+    @maintenance_action_runs = action_runs_for(@maintenance_findings)
 
     return if @latest_run_detail.blank? && @workflow_schedules.blank?
     return if @latest_run&.display_status == "failed"
@@ -186,6 +193,25 @@ class Console::WorkflowsController < ApplicationController
   rescue StandardError => e
     Rails.logger.warn("console_workflow_run_detail_failed run=#{run_id} error=#{e.class}: #{e.message}")
     nil
+  end
+
+  # A page render must not queue an action. The action's durable idempotency
+  # key makes this lookup exact even after the action has left recent history.
+  def action_runs_for(findings)
+    findings.each_with_object({}) do |finding, action_runs|
+      action_run = api_client.find_workflow_run_by_idempotency_key(
+        workflow_name: GithubDependencyMaintenanceFinding::ACTION_WORKFLOW_NAME,
+        idempotency_key: finding.idempotency_key
+      )
+      next unless action_run.is_a?(Hash) && action_run["run_id"].present?
+
+      action_runs[finding.idempotency_key] = action_run
+    rescue StandardError => e
+      Rails.logger.warn(
+        "console_workflow_finding_action_lookup_failed key=#{finding.idempotency_key} " \
+        "error=#{e.class}: #{e.message}"
+      )
+    end
   end
 
   def api_client

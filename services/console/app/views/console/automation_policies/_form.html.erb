@@ -201,7 +201,7 @@
 
   <fieldset class="rounded border border-ink-700 p-5">
     <legend class="px-2 text-sm font-semibold text-zinc-200">Linear issue → PR behavior</legend>
-    <p class="mb-5 text-xs text-zinc-500">The agent re-checks the issue before implementation. If it is not actionable, it asks for missing scope instead of opening a PR.</p>
+    <p class="mb-5 text-xs text-zinc-500">Coding runs use a durable issue session. QA transitions dispatch a reviewed workflow instead of running test commands in the ingress or Centaur sandbox.</p>
     <div class="grid gap-5 lg:grid-cols-2">
       <div>
         <label class="mb-2 block text-sm font-medium text-zinc-200" for="automation_policy_linear_issue_mode">Issue automation</label>
@@ -217,6 +217,37 @@
                            placeholder: "owner/repository",
                            class: "form-input font-mono" %>
         <p class="mt-2 text-xs text-zinc-500">Use this for one repository. Leave it blank when using repository routes below.</p>
+      </div>
+      <div>
+        <label class="mb-2 block text-sm font-medium text-zinc-200" for="automation_policy_linear_qa_mode">QA automation</label>
+        <%= select_tag "automation_policy[linear_qa_mode]",
+                       options_for_select([ [ "Off", "off" ], [ "When an issue enters a QA status", "status_transition" ] ], linear["qa"]),
+                       id: "automation_policy_linear_qa_mode",
+                       class: "form-input" %>
+      </div>
+      <div>
+        <label class="mb-2 block text-sm font-medium text-zinc-200" for="automation_policy_linear_qa_statuses">QA statuses</label>
+        <%= text_field_tag "automation_policy[linear_qa_statuses]", Array(linear["qa_statuses"]).join(", "),
+                           id: "automation_policy_linear_qa_statuses",
+                           placeholder: "QA",
+                           class: "form-input" %>
+        <p class="mt-2 text-xs text-zinc-500">Only a create in, or verified transition into, one of these statuses dispatches QA. Unrelated edits while already in QA do not rerun it.</p>
+      </div>
+      <div>
+        <label class="mb-2 block text-sm font-medium text-zinc-200" for="automation_policy_linear_qa_target">QA target</label>
+        <%= text_field_tag "automation_policy[linear_qa_target]", linear["qa_target"],
+                           id: "automation_policy_linear_qa_target",
+                           placeholder: "auto",
+                           class: "form-input font-mono" %>
+        <p class="mt-2 text-xs text-zinc-500">A reviewed executor target ID. Use <code>auto</code> only when the executor can resolve a linked PR/ref and fail closed on ambiguity.</p>
+      </div>
+      <div>
+        <label class="mb-2 block text-sm font-medium text-zinc-200" for="automation_policy_linear_qa_profiles">QA profiles</label>
+        <%= text_field_tag "automation_policy[linear_qa_profiles]", Array(linear["qa_profiles"]).join(", "),
+                           id: "automation_policy_linear_qa_profiles",
+                           placeholder: "ios_smoke, web_smoke",
+                           class: "form-input font-mono" %>
+        <p class="mt-2 text-xs text-zinc-500">Optional allowlisted profiles passed to the QA executor. Leave blank for its deterministic selector.</p>
       </div>
       <div>
         <label class="mb-2 block text-sm font-medium text-zinc-200" for="automation_policy_linear_ready_statuses">Ready statuses</label>
@@ -261,19 +292,26 @@
                            class: "form-input" %>
       </div>
       <details class="rounded border border-ink-700 bg-ink-900/50 p-4 lg:col-span-2" <%= "open" if repository_routes.any? %>>
-        <summary class="cursor-pointer text-sm font-medium text-zinc-200">Route different issue labels to different repositories</summary>
-        <p class="mt-3 text-xs text-zinc-500">Optional. Each non-empty route needs at least one label. A ready issue must match exactly one route; zero or multiple matches are recorded and stopped before an agent starts. Filling a route uses routes instead of the single repository above.</p>
+        <summary class="cursor-pointer text-sm font-medium text-zinc-200">Route Linear projects or issue labels to repositories</summary>
+        <p class="mt-3 text-xs text-zinc-500">Optional. Each non-empty route needs at least one Linear project ID or label selector. A matching label route overrides a project route; otherwise the project route applies. Scope a label override to selected projects when needed. The selected selector kind must match exactly one route. Zero or multiple matches are recorded and stopped before an agent starts. Filling a route uses routes instead of the single repository above.</p>
         <div class="mt-4 space-y-4">
           <% repository_route_slots.each_with_index do |route, index| %>
             <% route = route.deep_stringify_keys %>
             <fieldset class="rounded border border-ink-700 p-3">
               <legend class="px-1 text-xs font-medium text-zinc-400">Route <%= index + 1 %></legend>
-              <div class="grid gap-3 lg:grid-cols-5">
+              <div class="grid gap-3 lg:grid-cols-7">
                 <div>
                   <label class="mb-1 block text-xs text-zinc-400" for="automation_policy_linear_repository_routes_<%= index %>_repository">Repository</label>
                   <%= text_field_tag "automation_policy[linear_repository_routes][#{index}][repository]", route["repository"],
                                      id: "automation_policy_linear_repository_routes_#{index}_repository",
                                      placeholder: "owner/repository",
+                                     class: "form-input font-mono" %>
+                </div>
+                <div>
+                  <label class="mb-1 block text-xs text-zinc-400" for="automation_policy_linear_repository_routes_<%= index %>_linear_project_ids">Linear project IDs</label>
+                  <%= text_field_tag "automation_policy[linear_repository_routes][#{index}][linear_project_ids]", Array(route["linear_project_ids"]).join(", "),
+                                     id: "automation_policy_linear_repository_routes_#{index}_linear_project_ids",
+                                     placeholder: "00000000-0000-0000-0000-000000000000",
                                      class: "form-input font-mono" %>
                 </div>
                 <div>
@@ -283,6 +321,19 @@
                                      placeholder: "repo:web",
                                      class: "form-input" %>
                 </div>
+                <div>
+                  <label class="mb-1 block text-xs text-zinc-400" for="automation_policy_linear_repository_routes_<%= index %>_label_project_ids">Label project IDs</label>
+                  <%= text_field_tag "automation_policy[linear_repository_routes][#{index}][label_project_ids]", Array(route["label_project_ids"]).join(", "),
+                                     id: "automation_policy_linear_repository_routes_#{index}_label_project_ids",
+                                     placeholder: "00000000-0000-0000-0000-000000000000",
+                                     class: "form-input font-mono" %>
+                </div>
+                <label class="flex items-center gap-2 pt-6 text-xs text-zinc-400" for="automation_policy_linear_repository_routes_<%= index %>_qa_enabled">
+                  <%= check_box_tag "automation_policy[linear_repository_routes][#{index}][qa_enabled]", "1", route["qa_enabled"] == true,
+                                    id: "automation_policy_linear_repository_routes_#{index}_qa_enabled",
+                                    class: "rounded border-ink-500 bg-ink-900 text-centaur-500" %>
+                  Allow fixed QA workflow
+                </label>
                 <div>
                   <label class="mb-1 block text-xs text-zinc-400" for="automation_policy_linear_repository_routes_<%= index %>_reviewer_logins">Reviewers</label>
                   <%= text_field_tag "automation_policy[linear_repository_routes][#{index}][reviewer_logins]", Array(route["reviewer_logins"]).join(", "),

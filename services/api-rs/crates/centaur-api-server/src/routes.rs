@@ -2634,7 +2634,11 @@ async fn list_workflow_runs(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let workflows = workflow_runtime(&state)?;
     let runs = workflows
-        .list_runs(query.limit.unwrap_or(50), query.workflow_name.as_deref())
+        .list_runs(
+            query.limit.unwrap_or(50),
+            query.workflow_name.as_deref(),
+            query.idempotency_key.as_deref(),
+        )
         .await?;
     Ok(Json(json!({ "ok": true, "runs": runs })))
 }
