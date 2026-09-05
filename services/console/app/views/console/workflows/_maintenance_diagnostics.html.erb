@@ -1,14 +1,14 @@
 <section class="mb-8">
   <div class="mb-3 flex flex-wrap items-end justify-between gap-2">
     <div>
-      <h2 class="text-xs font-semibold uppercase tracking-wider text-zinc-500">Observer diagnostics</h2>
+      <h2 class="text-xs font-semibold uppercase tracking-wider text-zinc-500">Workflow diagnostics</h2>
       <p class="mt-1 text-xs text-zinc-500">
-        These are no-action workflow failures, not approval requests or GitHub permission changes.
+        These are workflow diagnostics, not approval requests. If repository action state is unknown, inspect GitHub before retrying; a change may already exist.
       </p>
     </div>
     <% if maintenance_run_detail["run_id"].present? %>
       <span class="font-mono text-xs text-zinc-600" title="<%= maintenance_run_detail["run_id"] %>">
-        observation <%= truncate_middle(maintenance_run_detail["run_id"], max: 28) %>
+        run <%= truncate_middle(maintenance_run_detail["run_id"], max: 28) %>
       </span>
     <% end %>
   </div>
