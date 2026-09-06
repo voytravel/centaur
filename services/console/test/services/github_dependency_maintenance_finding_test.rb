@@ -197,8 +197,8 @@ class GithubDependencyMaintenanceFindingTest < ActiveSupport::TestCase
     diagnostic = diagnostics.first
     assert_equal "acme/widgets", diagnostic.repository
     assert_equal "obsolete_proposal_shape", diagnostic.code
-    assert_equal "Observer result rejected", diagnostic.title
-    assert_equal "The observer used an obsolete proposal shape. No repository action was authorized.", diagnostic.detail
+    assert_equal "Could not verify the agent's report", diagnostic.title
+    assert_equal "The agent returned a recommendation in an old format Centaur could not read. This run was read-only; no repository changes were authorized.", diagnostic.detail
     assert_not_includes diagnostic.detail, "untrusted"
   end
 
@@ -233,6 +233,26 @@ class GithubDependencyMaintenanceFindingTest < ActiveSupport::TestCase
     )
   end
 
+  test "invalid final report is not presented as a confirmed code or test failure" do
+    run = maintenance_run(
+      schema_version: "3",
+      security: { "mode" => "draft_pr", "outcome" => "blocked" },
+      dependabot: { "mode" => "act", "outcome" => "blocked" },
+      diagnostic: {
+        "kind" => "observer_result_rejected",
+        "code" => "invalid_structured_result",
+        "summary" => "PRIVATE upstream report text"
+      }
+    )
+    diagnostic = GithubDependencyMaintenanceFinding.diagnostics_for_run(run).sole
+    assert_includes diagnostic.detail, "report was incomplete or inconsistent"
+    assert_includes diagnostic.detail, "does not confirm whether the code or tests failed"
+    assert_includes diagnostic.detail, "Check recent PRs, commits and merges before retrying"
+    assert_not_includes diagnostic.detail, "PRIVATE"
+    assert_not_includes diagnostic.detail, "reviewed contract"
+    assert_empty GithubDependencyMaintenanceFinding.for_run(run)
+  end
+
   test "a failed direct route does not claim that no action was authorized" do
     %w[agent_turn_unavailable invalid_structured_result].each do |code|
       run = maintenance_run(security: { "mode" => "draft_pr", "outcome" => "blocked" }, diagnostic: {
@@ -240,9 +260,9 @@ class GithubDependencyMaintenanceFindingTest < ActiveSupport::TestCase
         "code" => code, "summary" => "untrusted summary"
       })
       diagnostic = GithubDependencyMaintenanceFinding.diagnostics_for_run(run).first
-      assert_includes diagnostic.detail, "Repository action state is unknown"
-      assert_includes diagnostic.detail, "Inspect GitHub before retrying"
-      assert_not_includes diagnostic.detail, "No repository action was authorized"
+      assert_includes diagnostic.detail, "GitHub changes may already exist"
+      assert_includes diagnostic.detail, "Check recent PRs, commits and merges before retrying"
+      assert_not_includes diagnostic.detail, "no repository changes were authorized"
       assert_not_includes diagnostic.detail, "untrusted"
       assert_empty GithubDependencyMaintenanceFinding.for_run(run)
     end

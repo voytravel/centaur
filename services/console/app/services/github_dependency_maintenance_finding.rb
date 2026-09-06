@@ -16,32 +16,32 @@ class GithubDependencyMaintenanceFinding
   ACTIONS = %w[draft_pr repair consolidate merge].freeze
   DIAGNOSTICS = {
     "obsolete_proposal_shape" => {
-      title: "Observer result rejected",
-      detail: "The observer used an obsolete proposal shape. No repository action was authorized."
+      title: "Could not verify the agent's report",
+      detail: "The agent returned a recommendation in an old format Centaur could not read."
     },
     "unsupported_result_schema" => {
-      title: "Observer result rejected",
-      detail: "The observer used an unsupported result schema. No repository action was authorized."
+      title: "Could not verify the agent's report",
+      detail: "The agent returned a report in a format Centaur could not read."
     },
     "selection_count_contract" => {
-      title: "Observer result rejected",
-      detail: "The observer mixed observed totals and selected candidates. No repository action was authorized."
+      title: "Could not verify the agent's report",
+      detail: "The report's alert/PR counts or selected items were inconsistent."
     },
     "missing_structured_result" => {
-      title: "Observer result rejected",
-      detail: "The observer did not return the required structured result. No repository action was authorized."
+      title: "Could not verify the agent's report",
+      detail: "The agent's final report was missing or unreadable."
     },
     "invalid_structured_result" => {
-      title: "Observer result rejected",
-      detail: "The observer result failed the reviewed contract. No repository action was authorized."
+      title: "Could not verify the agent's report",
+      detail: "The agent's final report was incomplete or inconsistent, so Centaur could not verify what happened. This does not confirm whether the code or tests failed."
     },
     "agent_turn_unavailable" => {
-      title: "Observer unavailable",
-      detail: "The scheduled agent turn did not complete. No repository action was authorized."
+      title: "Run outcome not confirmed",
+      detail: "Centaur did not receive a confirmed outcome from the agent run."
     },
     "legacy_contract_rejection" => {
-      title: "Observer result rejected",
-      detail: "The observer result was rejected by the workflow contract. No repository action was authorized."
+      title: "Could not verify the agent's report",
+      detail: "Centaur could not verify the agent's final report."
     }
   }.freeze
   DIAGNOSTIC_KINDS = {
@@ -291,11 +291,12 @@ class GithubDependencyMaintenanceFinding
       read_only = [ route["security_advisories"], route["dependabot"] ].all? do |section|
         section.is_a?(Hash) && %w[observe approval_required].include?(section["mode"])
       end
-      detail = presentation.fetch(:detail)
-      unless read_only
-        detail = detail.sub("No repository action was authorized.",
-          "Repository action state is unknown. Inspect GitHub before retrying; a change may already exist.")
+      impact = if read_only
+        "This run was read-only; no repository changes were authorized."
+      else
+        "GitHub changes may already exist. Check recent PRs, commits and merges before retrying to avoid duplicating work."
       end
+      detail = "#{presentation.fetch(:detail)} #{impact}"
       Diagnostic.new(
         repository: repository,
         code: code,

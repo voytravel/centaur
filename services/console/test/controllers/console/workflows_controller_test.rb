@@ -338,11 +338,14 @@ class Console::WorkflowsControllerTest < ActionDispatch::IntegrationTest
       get console_workflow_url(run.workflow_name, run_id: run.run_id)
     end
     assert_response :ok
-    assert_select "h2", text: "Workflow diagnostics"
-    assert_select "p.text-red-300", text: /Repository action state is unknown/
-    assert_select "p", text: /inspect GitHub before retrying/
+    assert_select "p.text-red-300", text: /GitHub changes may already exist/
+    assert_select "h2", text: "Checks needing attention"
+    assert_select 'article a[href="https://github.com/acme/widgets/pulls?q=is%3Apr+sort%3Aupdated-desc"]', text: "Recent PRs"
+    assert_select 'article a[href="https://github.com/acme/widgets/activity"]', text: "Commits and merges"
+    assert_select "article details:not([open]) summary", text: "Technical detail"
+    assert_select "p", text: /Check recent PRs, commits and merges before retrying/
     refute_includes response.body, "no-action workflow failures"
-    refute_includes response.body, "No repository action was authorized"
+    refute_includes response.body, "no repository changes were authorized"
     assert_select "button", text: "Approve scoped action", count: 0
   end
 
