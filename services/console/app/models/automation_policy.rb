@@ -16,6 +16,7 @@ class AutomationPolicy < ApplicationRecord
   ACTIVITY_REPORT_KINDS = %w[accepted pr_created].freeze
   LINEAR_REPOSITORY_ROUTE_KEYS = %w[
     repository
+    base_branch
     linear_project_ids
     required_labels
     label_project_ids
@@ -27,6 +28,7 @@ class AutomationPolicy < ApplicationRecord
   MANAGED_SOURCE_KEY = "_centaur_managed_source".freeze
   MANAGED_SOURCE_FIELDS = %w[kind repository path revision content_sha256].freeze
   GITHUB_REPOSITORY_PATTERN = /\A[A-Za-z0-9][A-Za-z0-9_.-]*\/[A-Za-z0-9][A-Za-z0-9_.-]*\z/.freeze
+  GITHUB_BRANCH_PATTERN = /\A[A-Za-z0-9][A-Za-z0-9._\/-]{0,199}\z/.freeze
   SLACK_CHANNEL_ID_PATTERN = /\A[CG][A-Z0-9]{8,}\z/.freeze
   LINEAR_PROJECT_ID_PATTERN = /\A[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\z/i.freeze
   QA_ID_PATTERN = /\A[a-z][a-z0-9_-]{0,63}\z/.freeze
@@ -799,6 +801,7 @@ class AutomationPolicy < ApplicationRecord
       "auto_merge" => github? && github_settings["auto_merge"] == true,
       "review_orchestration" => github? ? github_settings["review_orchestration"] : nil,
       "github_repository" => route["repository"],
+      "base_branch" => route["base_branch"],
       "move_to_in_progress" => linear["move_to_in_progress"] != false,
       "preview_label" => route["preview_label"],
       "qa_profiles" => Array(linear["qa_profiles"]),
@@ -838,6 +841,11 @@ class AutomationPolicy < ApplicationRecord
       repository = route["repository"].to_s
       unless repository.match?(%r{\A[^/\s]+/[^/\s]+\z})
         errors.add(:settings, "repository route #{index + 1} needs a GitHub repository")
+      end
+
+      base_branch = route["base_branch"].to_s
+      if base_branch.present? && (!GITHUB_BRANCH_PATTERN.match?(base_branch) || base_branch.start_with?("/"))
+        errors.add(:settings, "repository route #{index + 1} has an invalid base branch")
       end
 
       labels = route.key?("required_labels") ? route["required_labels"] : []

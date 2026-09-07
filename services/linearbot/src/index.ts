@@ -1209,10 +1209,14 @@ function automationInstructionMessage(
       JSON.stringify(decision.previewLabel) +
       " with `gh pr edit --add-label`. Then inspect the PR's verified checks and comments for a preview URL. Include it only after it exists; otherwise say that preview provisioning is pending. Do not apply the label for a non-visual change, and never create or guess a preview URL yourself."
     : "If the repository's normal verified deployment flow provides a preview URL for a user-visible change, include that URL in the PR and Linear update; otherwise state that no preview URL is available. Never create or guess a preview URL yourself. For a non-visual change, say that no screenshot or preview URL applies.";
+  const baseBranchInstruction = decision.baseBranch
+    ? "The policy-selected default base branch is " + JSON.stringify(decision.baseBranch) + ". Fetch that exact remote branch, create the work branch from its current tip, and pass `--base " + decision.baseBranch + "` to `gh pr create`. Do not infer `main` from the local checkout. Use another base only when the initiating Linear issue or an authorized human explicitly names it; state that override in the PR."
+    : "Resolve the repository's current default branch with `gh repo view --json defaultBranchRef`; create the work branch from that exact remote tip and pass it explicitly to `gh pr create --base`. Do not infer `main` from the local checkout.";
   const text = [
     "This Linear issue was selected by an automation policy after a new or updated issue event.",
     "First assess whether the issue is genuinely ready and actionable. If scope, acceptance criteria, repository fit, or a dependency is unclear, do not create a PR; post one concise Linear comment naming what is missing and stop.",
     "If it is actionable, implement it in " + (decision.githubRepository ?? "the mapped GitHub repository") + ". Use git and gh in your sandbox, run the relevant verification, open a draft PR that links this Linear issue, and do not merge it.",
+    baseBranchInstruction,
     "Use the exact Linear issue identifier from the injected issue context as a prefix in the draft PR title (for example, `ENG-123: concise summary`). This is the durable link contract for review and release evidence. Include the issue URL in the PR body, but do not use closing magic words such as `Fixes`, `Closes`, or `Resolves`; the issue must not move to Done merely because its PR merges.",
     inlineScreenshotInstruction,
     previewInstruction,

@@ -513,6 +513,7 @@ class AutomationEventIngestorTest < ActiveSupport::TestCase
             },
             {
               "repository" => "acme/travel",
+              "base_branch" => "develop",
               "linear_project_ids" => [ "11111111-1111-1111-1111-111111111111" ],
               "preview_label" => "preview"
             }
@@ -539,10 +540,12 @@ class AutomationEventIngestorTest < ActiveSupport::TestCase
 
     assert_equal "act", first["decision"]
     assert_equal "acme/travel", first["github_repository"]
+    assert_equal "develop", first["base_branch"]
     assert_equal "preview", first["preview_label"]
     assert_equal first, second
     event = AutomationEvent.sole
     assert_equal "acme/travel", event.metadata.dig("result", "github_repository")
+    assert_equal "develop", event.metadata.dig("result", "base_branch")
     assert_equal "preview", event.metadata.dig("result", "preview_label")
     assert_equal "acme/travel", AutomationWorkstream.sole.repository
   end

@@ -164,8 +164,8 @@ Use `label_project_ids` to limit that override to named Linear projects rather
 than allowing the label to select a repository anywhere in the team.
 The selected selector kind must match exactly one route; zero or multiple
 matching routes are recorded as an ignored decision and cannot start a sandbox.
-A route may override reviewers, opt into the fixed QA executor for that
-repository, and declare an opt-in preview label:
+A route may declare the default PR `base_branch`, override reviewers, opt into
+the fixed QA executor for that repository, and declare an opt-in preview label:
 
 ```json
 {
@@ -174,11 +174,13 @@ repository, and declare an opt-in preview label:
     "repository_routes": [
       {
         "repository": "acme/widgets",
+        "base_branch": "develop",
         "linear_project_ids": ["00000000-0000-0000-0000-000000000000"],
         "qa_enabled": true
       },
       {
         "repository": "acme/web",
+        "base_branch": "main",
         "required_labels": ["repo:web"],
         "label_project_ids": ["00000000-0000-0000-0000-000000000000"],
         "reviewer_team_slugs": ["frontend"],
@@ -191,7 +193,13 @@ repository, and declare an opt-in preview label:
 
 `github_repository` and `repository_routes` are mutually exclusive, so adding
 routes cannot silently turn a formerly single-repository policy into a broad
-fallback. A `preview_label` is applied only after the agent opens a draft PR for
+fallback. A configured `base_branch` is returned as typed policy output and
+included in the issue-work prompt; the agent must branch from its remote tip
+and pass it explicitly to `gh pr create --base`. Without one, the prompt
+requires resolving GitHub's current default branch rather than assuming
+`main`. An initiating issue or authorized human may explicitly select another
+base, and the resulting PR must state that override. A `preview_label` is
+applied only after the agent opens a draft PR for
 a user-visible change. It must be an already-reviewed repository label whose
 workflow creates a real preview; the agent reports a URL only after verifying
 it from the PR's checks or comments.
