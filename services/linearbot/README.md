@@ -132,7 +132,11 @@ executor; Linearbot itself never infers a repository or a QA target.
 team-wide policy does not turn a label into a repository selector for unrelated
 projects.
 
-A selected route can supply reviewers and a `preview_label`. For a user-visible
+A selected route can supply a `base_branch`, reviewers, and a `preview_label`.
+The base branch is carried as policy output into the coding instruction; the
+agent must branch from that remote tip and name it in `gh pr create --base`.
+Without one, the instruction resolves GitHub's current default branch and does
+not assume `main`. For a user-visible
 change, the resulting prompt tells the agent to apply that already-configured
 GitHub label after it has opened a draft PR, then to report only a preview URL
 verified from PR checks or comments. Linearbot does not infer repositories,

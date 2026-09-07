@@ -46,6 +46,13 @@ class Console::AutomationPoliciesControllerTest < ActionDispatch::IntegrationTes
     assert policy.reports_activity?("pr_created")
   end
 
+  test "renders a base branch field for Linear repository routes" do
+    get new_console_automation_policy_url
+
+    assert_response :ok
+    assert_select "input[name='automation_policy[linear_repository_routes][0][base_branch]']"
+  end
+
   test "does not let a non-admin write policies" do
     delete logout_url
     post login_url, params: { email: users(:member_user).email, password: "password123456" }
@@ -114,6 +121,7 @@ class Console::AutomationPoliciesControllerTest < ActionDispatch::IntegrationTes
           linear_repository_routes: {
             "0" => {
               repository: "acme/widgets",
+              base_branch: "develop",
               linear_project_ids: "11111111-1111-1111-1111-111111111111",
               required_labels: "repo:widgets",
               label_project_ids: "11111111-1111-1111-1111-111111111111",
@@ -124,6 +132,7 @@ class Console::AutomationPoliciesControllerTest < ActionDispatch::IntegrationTes
             },
             "1" => {
               repository: "acme/web",
+              base_branch: "main",
               linear_project_ids: "",
               required_labels: "repo:web",
               label_project_ids: "",
@@ -133,6 +142,7 @@ class Console::AutomationPoliciesControllerTest < ActionDispatch::IntegrationTes
             },
             "2" => {
               repository: "",
+              base_branch: "",
               linear_project_ids: "",
               required_labels: "",
               label_project_ids: "",
@@ -152,6 +162,7 @@ class Console::AutomationPoliciesControllerTest < ActionDispatch::IntegrationTes
       [
         {
           "repository" => "acme/widgets",
+          "base_branch" => "develop",
           "linear_project_ids" => [ "11111111-1111-1111-1111-111111111111" ],
           "required_labels" => [ "repo:widgets" ],
           "label_project_ids" => [ "11111111-1111-1111-1111-111111111111" ],
@@ -160,6 +171,7 @@ class Console::AutomationPoliciesControllerTest < ActionDispatch::IntegrationTes
         },
         {
           "repository" => "acme/web",
+          "base_branch" => "main",
           "required_labels" => [ "repo:web" ],
           "reviewer_team_slugs" => [ "frontend" ],
           "preview_label" => "preview"

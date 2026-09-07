@@ -299,12 +299,19 @@
             <% route = route.deep_stringify_keys %>
             <fieldset class="rounded border border-ink-700 p-3">
               <legend class="px-1 text-xs font-medium text-zinc-400">Route <%= index + 1 %></legend>
-              <div class="grid gap-3 lg:grid-cols-7">
+              <div class="grid gap-3 lg:grid-cols-8">
                 <div>
                   <label class="mb-1 block text-xs text-zinc-400" for="automation_policy_linear_repository_routes_<%= index %>_repository">Repository</label>
                   <%= text_field_tag "automation_policy[linear_repository_routes][#{index}][repository]", route["repository"],
                                      id: "automation_policy_linear_repository_routes_#{index}_repository",
                                      placeholder: "owner/repository",
+                                     class: "form-input font-mono" %>
+                </div>
+                <div>
+                  <label class="mb-1 block text-xs text-zinc-400" for="automation_policy_linear_repository_routes_<%= index %>_base_branch">Default base branch</label>
+                  <%= text_field_tag "automation_policy[linear_repository_routes][#{index}][base_branch]", route["base_branch"],
+                                     id: "automation_policy_linear_repository_routes_#{index}_base_branch",
+                                     placeholder: "main",
                                      class: "form-input font-mono" %>
                 </div>
                 <div>

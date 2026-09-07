@@ -778,6 +778,7 @@ describe("linearbot comment-thread pipeline", () => {
                 actions: [ "implement_issue" ],
                 decision: "act",
                 github_repository: "acme/widgets",
+                base_branch: "develop",
                 move_to_in_progress: false,
                 preview_label: "preview",
                 reason: "policy authorizes automation",
@@ -826,6 +827,12 @@ describe("linearbot comment-thread pipeline", () => {
     expect(
       executeInputTexts(threadKey).some((text) =>
         text.includes("exact Linear issue identifier"),
+      ),
+    ).toBe(true);
+    expect(
+      executeInputTexts(threadKey).some((text) =>
+        text.includes('policy-selected default base branch is "develop"') &&
+        text.includes('pass `--base develop` to `gh pr create`'),
       ),
     ).toBe(true);
     expect(

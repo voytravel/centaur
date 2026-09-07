@@ -160,6 +160,7 @@ class Console::AutomationPoliciesController < ApplicationController
       :linear_move_to_in_progress,
       linear_repository_routes: %i[
         repository
+        base_branch
         linear_project_ids
         required_labels
         label_project_ids
@@ -189,6 +190,7 @@ class Console::AutomationPoliciesController < ApplicationController
 
       route = route.to_h.with_indifferent_access
       repository = route[:repository].to_s.strip
+      base_branch = route[:base_branch].to_s.strip
       project_ids = comma_list(route[:linear_project_ids]).map(&:downcase)
       labels = comma_list(route[:required_labels])
       label_project_ids = comma_list(route[:label_project_ids]).map(&:downcase)
@@ -196,12 +198,13 @@ class Console::AutomationPoliciesController < ApplicationController
       reviewer_logins = comma_list(route[:reviewer_logins])
       reviewer_team_slugs = comma_list(route[:reviewer_team_slugs])
       preview_label = route[:preview_label].to_s.strip
-      blank_route = repository.blank? && project_ids.empty? && labels.empty? && label_project_ids.empty? && !qa_enabled && reviewer_logins.empty? &&
+      blank_route = repository.blank? && base_branch.blank? && project_ids.empty? && labels.empty? && label_project_ids.empty? && !qa_enabled && reviewer_logins.empty? &&
         reviewer_team_slugs.empty? && preview_label.blank?
       next if blank_route
 
       {
         "repository" => repository,
+        "base_branch" => base_branch.presence,
         "linear_project_ids" => project_ids.presence,
         "required_labels" => labels,
         "label_project_ids" => label_project_ids.presence,

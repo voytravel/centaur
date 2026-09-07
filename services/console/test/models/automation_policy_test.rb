@@ -479,6 +479,7 @@ class AutomationPolicyTest < ActiveSupport::TestCase
             },
             {
               "repository" => "acme/travel",
+              "base_branch" => "develop",
               "linear_project_ids" => [ "11111111-1111-1111-1111-111111111111" ],
               "reviewer_logins" => [ "octocat" ],
               "reviewer_team_slugs" => [ "product" ],
@@ -501,6 +502,7 @@ class AutomationPolicyTest < ActiveSupport::TestCase
 
     assert_equal "act", routed["decision"]
     assert_equal "acme/travel", routed["github_repository"]
+    assert_equal "develop", routed["base_branch"]
     assert_equal "preview", routed["preview_label"]
     assert_equal [ "octocat" ], routed["reviewer_logins"]
     assert_equal [ "product" ], routed["reviewer_team_slugs"]
@@ -529,6 +531,7 @@ class AutomationPolicyTest < ActiveSupport::TestCase
     )
     assert_equal "act", label_override["decision"]
     assert_equal "acme/widgets", label_override["github_repository"]
+    assert_nil label_override["base_branch"]
 
     off_scope_label = policy.evaluate(
       "event_type" => "Issue",
@@ -541,6 +544,30 @@ class AutomationPolicyTest < ActiveSupport::TestCase
     )
     assert_equal "ignored", off_scope_label["decision"]
     assert_equal "no configured repository route matches issue labels or project", off_scope_label["reason"]
+  end
+
+  test "rejects an invalid Linear repository route base branch" do
+    policy = AutomationPolicy.new(
+      name: "Invalid routed base",
+      provider: "linear",
+      linear_team_id: "team-1",
+      created_by: users(:acme_admin),
+      settings: {
+        "linear" => {
+          "issue" => "ready_issues",
+          "repository_routes" => [
+            {
+              "repository" => "acme/widgets",
+              "base_branch" => "/main",
+              "linear_project_ids" => [ "11111111-1111-1111-1111-111111111111" ]
+            }
+          ]
+        }
+      }
+    )
+
+    assert_not policy.valid?
+    assert_includes policy.errors[:settings], "repository route 1 has an invalid base branch"
   end
 
   test "rejects overlapping explicit Linear label routes even with a project default" do
