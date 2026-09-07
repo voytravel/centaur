@@ -919,7 +919,15 @@ describe("linearbot comment-thread pipeline", () => {
     });
     expect(response.status).toBeGreaterThanOrEqual(400);
     await Bun.sleep(50);
-    expect(codexApi.executes).toHaveLength(0);
+    // A detached run from a preceding test can still settle after the shared
+    // mock reset. The security property is that this forged webhook cannot
+    // start work for its own comment thread.
+    expect(
+      codexApi.executes.some(
+        (execution) =>
+          execution.threadKey === `linear:${ISSUE_ID}:c:comment-forged`,
+      ),
+    ).toBe(false);
   });
 });
 
