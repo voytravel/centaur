@@ -2,6 +2,8 @@ import { describe, expect, test } from "bun:test";
 import {
   forwardToSessionApi,
   harnessRestartPreamble,
+  isRetryableSessionApiError,
+  openSessionEventStream,
 } from "../src/session-api";
 import type {
   ForwardSessionInput,
@@ -260,6 +262,47 @@ describe("forwardToSessionApi overrides", () => {
     expect(thrown?.message).toContain("create session failed: 500");
     // The body is logged server-side only; the user-facing message stays generic.
     expect(thrown?.message).not.toContain("internal hostname leaked");
+  });
+});
+
+describe("session event replay", () => {
+  test("marks a stream closed before a terminal event as retryable", async () => {
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(
+          encoder.encode(
+            "event: session.output.line\ndata: {\"type\":\"item.started\"}\n\n",
+          ),
+        );
+        controller.close();
+      },
+    });
+    const events = await openSessionEventStream(
+      options(async () =>
+        new Response(stream, {
+          headers: { "content-type": "text/event-stream" },
+        }),
+      ),
+      {
+        afterEventId: 41,
+        onEventId: () => undefined,
+        threadId: THREAD_ID,
+      },
+    );
+
+    let thrown: unknown;
+    try {
+      for await (const _event of events) {
+        // Consume the pre-terminal event; the close must still fail the read.
+      }
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(isRetryableSessionApiError(thrown)).toBe(true);
+    expect(thrown).toBeInstanceOf(Error);
+    expect((thrown as Error).message).toContain("before terminal completion");
   });
 });
 

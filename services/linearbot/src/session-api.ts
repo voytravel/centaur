@@ -53,8 +53,21 @@ export class SessionApiError extends Error {
   }
 }
 
+/**
+ * The session event endpoint is an SSE replay stream. A transport close before
+ * a terminal event is therefore not a completed turn: callers can reopen it
+ * from their persisted event watermark without executing the turn again.
+ */
+export class IncompleteSessionEventStreamError extends Error {
+  constructor() {
+    super("session event stream closed before terminal completion");
+    this.name = "IncompleteSessionEventStreamError";
+  }
+}
+
 export function isRetryableSessionApiError(error: unknown): boolean {
   if (error instanceof SessionApiError) return error.retryable;
+  if (error instanceof IncompleteSessionEventStreamError) return true;
   if (!(error instanceof Error)) return false;
   return error.name === "AbortError" || error.name === "TypeError";
 }
@@ -868,7 +881,9 @@ async function* parseSessionEventStream(
         eventId: event.id,
         eventKind: event.event,
       } satisfies RustSessionStreamEvent;
-      if (isTerminalCodexOutputLine(event.data)) return;
+      if (isTerminalCodexOutputLine(event.data)) {
+        return;
+      }
       continue;
     }
     if (
@@ -902,6 +917,11 @@ async function* parseSessionEventStream(
       return;
     }
   }
+  // A clean HTTP/SSE close is not proof that the agent completed. In
+  // particular, proxy restarts can close a live stream without a terminal
+  // event. The caller retains the event watermark and retries this replayable
+  // read, so never silently turn that into an empty final Linear reply.
+  throw new IncompleteSessionEventStreamError();
 }
 
 async function* parseSseEvents(

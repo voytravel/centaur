@@ -366,7 +366,10 @@ function issueCommentMessage(
   } as unknown as ChatMessage;
 }
 
-const THREAD_TURN_MAX_RETRIES = 3;
+// Reopening the event stream is a read-only replay from its watermark; give a
+// completed but temporarily disconnected execution enough chances to surface
+// its final answer before declaring the user-visible reply unsuccessful.
+const THREAD_TURN_MAX_RETRIES = 5;
 // Cap on the full issue-context preamble seeded on a thread's first turn. The
 // description rides inline in the execute, so keep it bounded (the whole issue
 // description, untruncated, could be huge).
