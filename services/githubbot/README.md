@@ -181,6 +181,13 @@ fails closed, leaving normal requested-review, assigned-issue, and comment
 paths unchanged. See [Repository Automations](/operate/repository-automations)
 for rollout and operator configuration.
 
+Policies may separately enable `merge_after_human_approval`. That mode only
+squash-merges a PR authored by the configured GitHub App bot after its current
+head has an approval from an organization Owner or Member, no current change
+request or unresolved review thread, clean mergeability, and settled green CI.
+The merge request includes the exact head SHA, so a push after review fails
+closed and requires approval of the new head.
+
 > **Scope.** v2 targets **same-repo PRs on repos you control** (where you own the webhook). The
 > fork → upstream contribution flow (e.g. PRs against `paradigmxyz/centaur`) is out of scope: it
 > needs the upstream repo to deliver webhooks to this bot, which isn't yours to configure.

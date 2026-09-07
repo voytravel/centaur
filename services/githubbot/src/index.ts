@@ -843,6 +843,9 @@ function routePolicyLifecycleEvent(
 
   const automation: PolicyPrAutomation = {
     autoMerge: active.some((decision) => decision.autoMerge),
+    mergeAfterHumanApproval: active.some(
+      (decision) => decision.mergeAfterHumanApproval,
+    ),
     checks: actions.has("fix_checks"),
     conflicts: actions.has("resolve_conflict"),
     feedback: actions.has("address_feedback"),
@@ -863,14 +866,14 @@ function routePolicyLifecycleEvent(
         automation,
       ));
     }
-    if (automation.conflicts || automation.autoMerge) {
+    if (automation.conflicts || automation.autoMerge || automation.mergeAfterHumanApproval) {
       work.push(handlePullRequestEvent(input.prManagerCtx, rawBody, automation));
     }
     return Promise.all(work).then(() => undefined);
   }
   if (
     eventType === "pull_request_review" &&
-    (automation.feedback || automation.autoMerge)
+    (automation.feedback || automation.autoMerge || automation.mergeAfterHumanApproval)
   ) {
     return handleReviewEvent(input.prManagerCtx, rawBody, automation);
   }
@@ -879,7 +882,7 @@ function routePolicyLifecycleEvent(
       eventType === "check_suite" ||
       eventType === "status" ||
       eventType === "workflow_run") &&
-    (automation.checks || automation.autoMerge)
+    (automation.checks || automation.autoMerge || automation.mergeAfterHumanApproval)
   ) {
     return handleCiEvent(input.prManagerCtx, eventType, rawBody, automation);
   }

@@ -89,6 +89,9 @@ class Console::AutomationPoliciesController < ApplicationController
             "checks" => values[:github_checks_mode],
             "conflicts" => values[:github_conflicts_mode],
             "auto_merge" => boolean_value(values[:github_auto_merge]),
+            "merge_after_human_approval" => boolean_value(
+              values[:github_merge_after_human_approval]
+            ),
             "base_branches" => comma_list(values[:github_base_branches]),
             "required_labels" => comma_list(values[:github_required_labels]),
             "excluded_labels" => comma_list(values[:github_excluded_labels])
@@ -139,6 +142,7 @@ class Console::AutomationPoliciesController < ApplicationController
       :github_checks_mode,
       :github_conflicts_mode,
       :github_auto_merge,
+      :github_merge_after_human_approval,
       :github_base_branches,
       :github_required_labels,
       :github_excluded_labels,

@@ -6,6 +6,7 @@ type JsonRecord = Record<string, unknown>;
 export type GithubAutomationDecision = {
   actions: string[];
   autoMerge: boolean;
+  mergeAfterHumanApproval: boolean;
   decision: "act" | "ignored" | "observe";
   policyId?: string;
   reason: string;
@@ -282,6 +283,7 @@ async function submitEvent(
     return {
       actions: stringArray(data.actions),
       autoMerge: data.auto_merge === true,
+      mergeAfterHumanApproval: data.merge_after_human_approval === true,
       decision,
       policyId: stringValue(data.policy_id),
       reason: stringValue(data.reason) ?? "policy result",
