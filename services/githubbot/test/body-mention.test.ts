@@ -9,6 +9,14 @@ describe("mentionsBot", () => {
     expect(mentionsBot("ping\n@centaur-bot", "centaur-bot")).toBe(true);
   });
 
+  test("matches the Markdown slug for a GitHub App bot actor", () => {
+    expect(mentionsBot("hey @centaur-bot please look", "centaur-bot[bot]")).toBe(true);
+    // Keep accepting the full actor form for compatibility with synthetic or
+    // future provider payloads, even though GitHub Markdown does not render it
+    // as a normal user mention.
+    expect(mentionsBot("hey @centaur-bot[bot] please look", "centaur-bot[bot]")).toBe(true);
+  });
+
   test("does not match substrings, emails, or absence", () => {
     expect(mentionsBot("see @centaur-bot-helper", "centaur-bot")).toBe(false);
     expect(mentionsBot("mail me@centaur-bot.com", "centaur-bot")).toBe(false);
@@ -16,7 +24,7 @@ describe("mentionsBot", () => {
   });
 });
 
-type Spies = { reactions: number; comments: number };
+type Spies = { reactions: number; comments: number; commentBodies?: string[] };
 
 function makeCtx(spies: Spies): PrManagerContext {
   const m = new Map<string, unknown>();
@@ -41,8 +49,9 @@ function makeCtx(spies: Spies): PrManagerContext {
           },
         },
         issues: {
-          createComment: async () => {
+          createComment: async (input: { body?: unknown }) => {
             spies.comments += 1;
+            if (typeof input.body === "string") spies.commentBodies?.push(input.body);
             return { data: { id: 2 } };
           },
         },
@@ -135,8 +144,8 @@ describe("handleBodyMention", () => {
     expect(spies.comments).toBe(0);
   });
 
-  test("runs a turn and replies once for an authorized mention; dedups redelivery", async () => {
-    const spies = { reactions: 0, comments: 0 };
+  test("acknowledges then replies once for an authorized mention; dedups redelivery", async () => {
+    const spies = { reactions: 0, comments: 0, commentBodies: [] as string[] };
     const ctx = makeCtx(spies);
     const first = handleBodyMention(
       ctx,
@@ -151,7 +160,8 @@ describe("handleBodyMention", () => {
       "pull_request",
       openedPr("@centaur-bot please review"),
     );
-    expect(spies.comments).toBe(1);
+    expect(spies.comments).toBe(2);
+    expect(spies.commentBodies[0]).toContain("carry out the requested work");
     expect(spies.reactions).toBeGreaterThanOrEqual(1);
   });
 });

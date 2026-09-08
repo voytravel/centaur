@@ -90,6 +90,10 @@ export type GithubbotFetch = (
 export type GithubbotOptions = {
   apiKey?: string;
   apiUrl: string;
+  /** Console internal URL used solely for policy evaluation and workstream audit. */
+  automationApiUrl?: string;
+  /** Single-purpose credential accepted only by Console automation ingress. */
+  automationIngressToken?: string;
   /**
    * Bot's GitHub user id (numeric, as a string). Used by the adapter for
    * self-message detection; auto-detected from the token when omitted.
@@ -102,8 +106,8 @@ export type GithubbotOptions = {
    */
   connectStateOnStart?: boolean;
   /**
-   * Harness for new threads when no --claude/--amp/--codex flag is given
-   * (HarnessType wire value: codex | amp | claudecode). Defaults to codex.
+   * Harness for new threads when no --claude/--codex flag is given
+   * (HarnessType wire value: codex | claudecode). Defaults to codex.
    */
   defaultHarnessType?: string;
   fetch?: GithubbotFetch;
@@ -142,6 +146,20 @@ export type GithubbotOptions = {
    * mergeable (branch protection is the source of truth). Defaults to true.
    */
   autoMerge?: boolean;
+  /** Max broad/repair-validation review rounds in one review epoch. Default 3. */
+  reviewMaxRoundsPerEpoch?: number;
+  /** Max repair responses to one reviewer bot in an epoch. Default 3. */
+  reviewMaxBotFeedbackRoundsPerReviewer?: number;
+  /** Max repair responses to all reviewer bots combined in an epoch. Default 6. */
+  reviewMaxBotFeedbackRoundsPerEpoch?: number;
+  /** Max automatically created review epochs per PR. Default 3. */
+  reviewMaxEpochs?: number;
+  /**
+   * Non-generated changed lines that constitute a new risk surface and start a
+   * review epoch. Boundary/dependency/new-production-file rules can trigger an
+   * epoch below this threshold. Default 50.
+   */
+  reviewEpochMinChangedLines?: number;
   /** Max consecutive CI-fix attempts on an owned PR before escalating. Default 3. */
   ciFixMaxAttempts?: number;
   /** Delay before confirming a settled-green rollup. Default 15000ms. */
@@ -156,8 +174,14 @@ export type GithubbotOptions = {
   holdLabel?: string;
   /** Merge method for auto-merge: "merge" | "squash" | "rebase". Default "squash". */
   mergeMethod?: "merge" | "squash" | "rebase";
-  /** Personal access token for the bot's GitHub teammate account. */
-  token: string;
+  /** Personal access token for the bot's teammate account (legacy mode). */
+  token?: string;
+  /** GitHub App Client ID used as the JWT issuer by GitHub's App API. */
+  githubAppId?: string;
+  /** Fixed installation whose repositories this bot may handle. */
+  githubInstallationId?: number;
+  /** PEM key used only by the receiver to mint short-lived installation tokens. */
+  githubPrivateKey?: string;
   userName?: string;
   /**
    * GitHub `author_association` values allowed to drive the conversational
@@ -238,14 +262,22 @@ export type ForwardSessionInput = {
    * harness still sees the PR/issue + comment history.
    */
   contextPreamble?: string;
+  /**
+   * Non-secret execution labels owned by Githubbot. They are persisted with the
+   * durable execution so Console can distinguish independent review passes
+   * from the eventual public synthesis.
+   */
+  executionMetadata?: JsonObject;
   executionId?: string;
   executeMessage?: GithubbotApiMessage;
-  /** Harness override parsed from message flags (--claude/--amp/--codex). */
+  /** Harness override parsed from message flags (--claude/--codex). */
   harnessType?: string;
   messages: GithubbotApiMessage[];
   /** Per-turn model override parsed from message flags (--model/--opus/...). */
   model?: string;
-  /** Effective model provider selected by a message flag; codex only. */
+  /** Optional Codex reasoning effort for a per-turn workflow/review override. */
+  reasoning?: string;
+  /** Legacy model provider persisted by older sessions; new selection is disabled. */
   provider?: string;
   onEventId(eventId: number): void;
   openStream: boolean;

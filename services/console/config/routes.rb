@@ -55,6 +55,7 @@ Rails.application.routes.draw do
     resources :workflows, only: %i[index show] do
       member do
         post :run, action: :force_start
+        post :approve_finding
       end
     end
     resources :scheduled_tasks, except: :show do
@@ -64,6 +65,8 @@ Rails.application.routes.draw do
           to: "slack_channel_options#index",
           defaults: { owner_type: "scheduled_task" }
     end
+    resources :automation_policies, only: %i[index new create edit update destroy]
+    resources :automation_workstreams, only: :show
     resources :skills do
       collection do
         get :mine
@@ -169,6 +172,9 @@ Rails.application.routes.draw do
   end
 
   namespace :api do
+    namespace :internal do
+      resources :automation_events, only: :create
+    end
     namespace :v1 do
       # Each secret type is addressable by opaque oid or globally unique foreign_id.
       # The /lookup/default/... form is a temporary compatibility alias.

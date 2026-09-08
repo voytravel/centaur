@@ -20,6 +20,11 @@ type ReviewHandlerInput = {
   state: StateAdapter;
 };
 
+export type ReviewRequestTargetInput = Pick<
+  ReviewHandlerInput,
+  "botUserName" | "octokit" | "options" | "state"
+>;
+
 type PullRequestWebhookPayload = {
   action?: unknown;
   pull_request?: {
@@ -52,6 +57,35 @@ export function reviewThreadKey(
   number: number,
 ): string {
   return `github-review:${owner}/${repo}:${number}`;
+}
+
+/**
+ * Whether a signature-verified review-request webhook explicitly targets this
+ * bot. Direct requests compare the login; team requests verify membership with
+ * the same short-lived cache used by the review handler. The result is safe to
+ * send to Console as a normalized boolean, while the raw requested reviewer or
+ * team name stays inside Githubbot.
+ */
+export async function isReviewRequestedForBot(
+  rawBody: string,
+  input: ReviewRequestTargetInput,
+): Promise<boolean> {
+  let payload: PullRequestWebhookPayload;
+  try {
+    payload = JSON.parse(rawBody) as PullRequestWebhookPayload;
+  } catch {
+    return false;
+  }
+  if (payload.action !== "review_requested") return false;
+
+  const reviewer = stringValue(payload.requested_reviewer?.login);
+  if (reviewer && reviewer.toLowerCase() === input.botUserName.toLowerCase()) {
+    return true;
+  }
+  const teamSlug = stringValue(payload.requested_team?.slug);
+  const repository = stringValue(payload.repository?.full_name);
+  const [owner] = repository?.split("/", 2) ?? [];
+  return Boolean(teamSlug && owner && await isBotOnTeam(input, owner, teamSlug));
 }
 
 /**
@@ -116,8 +150,9 @@ export function handleReviewRequest(
   return (async () => {
     const logger = options.logger ?? noopLogger;
     // A team review request only counts when the bot is actually a member of the
-    // requested team (a direct request of the bot needs no such check).
-    if (!directMatch && teamSlug && !(await isBotOnTeam(input, owner, teamSlug))) {
+    // requested team (a direct request of the bot needs no such check). Use the
+    // same matcher that adds the normalized policy fact in the lifecycle router.
+    if (!(await isReviewRequestedForBot(rawBody, input))) {
       traceLog(options, "githubbot_review_team_not_member_skipped", trace, {
         team: `${owner}/${teamSlug}`,
       });
@@ -216,7 +251,7 @@ export function handleReviewRequest(
  * ours" so an unrelated team's review request is ignored.
  */
 async function isBotOnTeam(
-  input: ReviewHandlerInput,
+  input: ReviewRequestTargetInput,
   org: string,
   teamSlug: string,
 ): Promise<boolean> {

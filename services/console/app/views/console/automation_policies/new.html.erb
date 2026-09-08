@@ -1,0 +1,8 @@
+<% content_for :title, "New Automation Policy · Centaur Console" %>
+
+<%= render "console/page_header",
+           title: "New Automation Policy",
+           subtitle: "Start in observe mode, inspect the workstream audit, then opt into action deliberately.",
+           icon: "workflow" %>
+
+<%= render "form", policy: @policy %>

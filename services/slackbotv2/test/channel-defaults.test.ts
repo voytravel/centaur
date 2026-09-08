@@ -24,8 +24,8 @@ describe('parseChannelDefaults', () => {
       // `claude` -> wire harness, `opus` -> full model id.
       C0ENG: { harnessType: 'claudecode', model: 'claude-opus-4-8', reasoning: 'high' },
       C0TRIAGE: { harnessType: 'codex', reasoning: 'low' },
-      // A provider shortcut implies its harness, mirroring `--bedrock`.
-      C0BEDROCK: { harnessType: 'codex', model: 'gpt-5.2', provider: 'amazon-bedrock' }
+      // Legacy provider fields are ignored, but an explicit model remains valid.
+      C0BEDROCK: { model: 'gpt-5.2' }
     })
   })
 

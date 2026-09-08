@@ -1,13 +1,12 @@
 /**
- * Per-channel default harness / model / provider / reasoning. Loaded from the
+ * Per-channel default harness / model / reasoning. Loaded from the
  * `SLACKBOTV2_CHANNEL_DEFAULTS` env var: JSON keyed by Slack conversation id,
  * each value an object normalized like the inline flags (see
  * `normalizeHarnessOverrides`):
  *
  *   SLACKBOTV2_CHANNEL_DEFAULTS='{
  *     "C0ENG":     {"harness": "claude", "model": "opus", "reasoning": "high"},
- *     "C0TRIAGE":  {"reasoning": "low"},
- *     "C0BEDROCK": {"provider": "bedrock", "model": "gpt-5.2"}
+ *     "C0TRIAGE":  {"reasoning": "low"}
  *   }'
  *
  * Fields are independent. Precedence (in index.ts): per-thread override, then
@@ -46,12 +45,12 @@ export function parseChannelDefaults(
     const key = channelId.trim()
     if (!key) continue
     if (!isPlainObject(rawEntry)) {
-      onError?.(`channel ${key}: expected an object of harness/model/provider/reasoning fields`)
+      onError?.(`channel ${key}: expected an object of harness/model/reasoning fields`)
       continue
     }
     const overrides = normalizeHarnessOverrides(rawEntry, message => onError?.(`channel ${key}: ${message}`))
-    if (!overrides.harnessType && !overrides.model && !overrides.provider && !overrides.reasoning) {
-      onError?.(`channel ${key}: no usable harness/model/provider/reasoning fields`)
+    if (!overrides.harnessType && !overrides.model && !overrides.reasoning) {
+      onError?.(`channel ${key}: no usable harness/model/reasoning fields`)
       continue
     }
     result[key] = overrides

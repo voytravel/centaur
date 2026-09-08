@@ -17,12 +17,11 @@ control plane is unchanged (`linear:…` thread keys flow through identically).
 
 - **`@`-mentioning the bot in a comment** → the bot answers in that comment thread, keyed
   `linear:{issueId}:c:{rootCommentId}` (one thread === one sandbox/context stack). The reply is a
-  single comment, live-edited: it posts with the latest reasoning line as a headline above a
-  collapsed **Thinking…** section that fills in as the run streams (throttled), then swaps in place
-  to the final answer above a collapsed **Chain of thought** section. A 👀 reaction acks the
-  triggering comment while the bot works, settling to ✅ / ❌. A mention is encoded by Linear as the
-  bot profile's plain URL in the markdown body, so detection matches that (with the user id and a
-  typed `@name` as fallbacks).
+  single comment, live-edited from a short working status to the final answer. Detailed reasoning,
+  tool activity, and provider errors stay in Centaur Console's durable execution record, not in the
+  Linear thread. A 👀 reaction acks the triggering comment while the bot works, settling to ✅ / ❌.
+  A mention is encoded by Linear as the bot profile's plain URL in the markdown body, so detection
+  matches that (with the user id and a typed `@name` as fallbacks).
 - **Plain comments in a thread the bot is already active in** (no mention) are appended to that
   thread's session as append-only context — no execution, no reply — so a follow-up like "actually,
   hold off" is seen by the next turn. The bot's own comments are skipped (loop guard) and inactive
@@ -43,6 +42,18 @@ control plane is unchanged (`linear:…` thread keys flow through identically).
   (the issue-level thread is the sole status owner); comment turns never write it — so a commenter
   can't force a transition via the marker, and a delegate-plus-mention can't race two threads onto
   the same issue. Best-effort.
+- **Policy-selected ready issues** → when Console has an acting Linear policy for the issue's team
+  (optionally project), a new or updated issue can continue the issue-level `linear:{issueId}`
+  session without an explicit assignment. Console gates title, description, ready state, labels, and
+  unresolved Linear blockers;
+  the agent re-checks readiness, opens a linked draft PR only when the issue is actionable, requests
+  the configured human reviewers, and reports verified preview/screenshot evidence for visual work
+  when the repository supports it. Screenshots must be embedded inline in the PR description or a
+  PR comment, not left as a detached upload. The PR title must begin with the exact Linear identifier from
+  the injected issue context, which creates durable review/release evidence without relying on an
+  LLM to infer a link. The instruction prohibits closing magic words in the PR body, so a merge
+  cannot imply deployment or move the issue to Done. The issue moves to In Review only after a PR
+  exists. The policy is disabled by default and starts in Observe mode.
 - **Ownership contract**: when the issue is assigned or delegated to the bot — on the assignment
   turn AND on comment turns where the bot is the delegate — an ownership note is injected so the
   agent carries the work forward (and knows how to signal status), not just answers, plus the
@@ -52,7 +63,7 @@ control plane is unchanged (`linear:…` thread keys flow through identically).
   compact id/title header thereafter — so a recycled sandbox always knows what the task is.
   (`Comment`/`Issue` webhooks carry no `promptContext` blob, unlike agent-session events, so the bot
   fetches the issue itself.)
-- `--claude` / `--codex` / `--amp` / `--model …` / `--opus|--sonnet|--haiku` inline flags pick the
+- `--claude` / `--codex` / `--model …` / `--opus|--sonnet|--haiku` inline flags pick the
   harness/model, same as slackbotv2.
 
 ## Ingress model
@@ -99,10 +110,37 @@ mentionable and assignable in the first place, not an agent-session add-on.
 | `LINEAR_ACCESS_TOKEN` | ✅* | actor=app OAuth token (*or `LINEAR_API_KEY`). |
 | `LINEARBOT_DATABASE_URL` | ✅ | Postgres for chat-SDK state (falls back to `DATABASE_URL`). |
 | `CENTAUR_API_URL` | — | api-rs control plane, default `http://127.0.0.1:8080`. |
+| `CENTAUR_AUTOMATION_API_URL` | — | Console base URL for verified policy-event evaluation. Both automation variables must be set to enable it. |
+| `CENTAUR_AUTOMATION_INGRESS_TOKEN` | — | Single-purpose bearer for Console's normalized automation-event endpoint; not an operator API key. |
 | `LINEARBOT_API_KEY` | — | Dedicated bearer sent to api-rs. |
 | `LINEARBOT_USER_NAME` | — | Bot display name for mention parsing, default `centaur` (the bot also derives its real handle/name from its own token). |
 | `LINEARBOT_LOG_LEVEL` | — | `debug`/`info`/`warn`/`error`, default `info`. |
 | `SESSION_IDLE_TIMEOUT_MS` / `SESSION_MAX_DURATION_MS` | — | Forwarded to api-rs executes. |
+
+## Policy-routed Linear issues
+
+When Console's repository-automation policy enables `ready_issues`, Linearbot
+submits only a signature-verified, normalized issue summary to Console. Console
+selects the repository deterministically. A simple policy supplies one
+`github_repository`; a multi-repository policy supplies project-ID and/or
+label-based `repository_routes`. A matching label route explicitly overrides a
+project route; otherwise the project route selects the repository. The selected
+selector kind must match exactly one route or the event is recorded as ignored
+and no agent turn starts. A route can also explicitly opt into the fixed QA
+executor; Linearbot itself never infers a repository or a QA target.
+`label_project_ids` can scope a label override to named Linear projects, so a
+team-wide policy does not turn a label into a repository selector for unrelated
+projects.
+
+A selected route can supply a `base_branch`, reviewers, and a `preview_label`.
+The base branch is carried as policy output into the coding instruction; the
+agent must branch from that remote tip and name it in `gh pr create --base`.
+Without one, the instruction resolves GitHub's current default branch and does
+not assume `main`. For a user-visible
+change, the resulting prompt tells the agent to apply that already-configured
+GitHub label after it has opened a draft PR, then to report only a preview URL
+verified from PR checks or comments. Linearbot does not infer repositories,
+create previews, or fabricate URLs.
 
 ## Patched adapter
 

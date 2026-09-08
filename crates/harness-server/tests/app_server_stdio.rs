@@ -249,9 +249,9 @@ fn fake_claude_subagent_sidechain_stop_does_not_complete_the_turn() {
 }
 
 #[test]
-fn fake_codex_blocks_mode_uses_openrouter_provider_when_model_is_configured() {
-    let fake_codex = temp_path("fake-openrouter-codex.sh");
-    let fake_codex_log = temp_path("fake-openrouter-codex-requests.jsonl");
+fn fake_codex_blocks_mode_uses_darkmatter_provider_when_gateway_is_configured() {
+    let fake_codex = temp_path("fake-darkmatter-codex.sh");
+    let fake_codex_log = temp_path("fake-darkmatter-codex-requests.jsonl");
     let script = fake_codex_app_server_script(&fake_codex_log);
     std::fs::write(&fake_codex, script).expect("write fake codex script");
     let mut permissions = std::fs::metadata(&fake_codex)
@@ -267,9 +267,12 @@ fn fake_codex_blocks_mode_uses_openrouter_provider_when_model_is_configured() {
             "CODEX_BIN",
             fake_codex.to_str().expect("utf-8 fake codex path"),
         )),
-        &[("OPENROUTER_MODEL", "openrouter/auto")],
+        &[
+            ("CODEX_MODEL", "DARKMATTER/GLM-5.2-FP8"),
+            ("OPENAI_BASE_URL", "https://litellm.example/v1"),
+        ],
     );
-    let turn = bridge.run_blocks_user_turn("say openrouter blocks", Duration::from_secs(10));
+    let turn = bridge.run_blocks_user_turn("say LiteLLM blocks", Duration::from_secs(10));
     bridge.finish_successfully();
 
     assert_completed_turn(&turn);
@@ -288,7 +291,7 @@ fn fake_codex_blocks_mode_uses_openrouter_provider_when_model_is_configured() {
         thread_start
             .pointer("/params/modelProvider")
             .and_then(Value::as_str),
-        Some("openrouter")
+        Some("darkmatter")
     );
     let turn_start = requests
         .iter()
@@ -296,7 +299,7 @@ fn fake_codex_blocks_mode_uses_openrouter_provider_when_model_is_configured() {
         .unwrap_or_else(|| panic!("blocks mode did not send turn/start; requests={requests:?}"));
     assert_eq!(
         turn_start.pointer("/params/model").and_then(Value::as_str),
-        Some("openrouter/auto")
+        Some("DARKMATTER/GLM-5.2-FP8")
     );
 
     let _ = std::fs::remove_file(fake_codex);
@@ -304,7 +307,7 @@ fn fake_codex_blocks_mode_uses_openrouter_provider_when_model_is_configured() {
 }
 
 #[test]
-fn fake_codex_blocks_mode_uses_openrouter_provider_for_explicit_model_slug() {
+fn fake_codex_blocks_mode_uses_openai_provider_without_a_gateway() {
     let fake_codex = temp_path("fake-openrouter-flag-codex.sh");
     let fake_codex_log = temp_path("fake-openrouter-flag-codex-requests.jsonl");
     let script = fake_codex_app_server_script(&fake_codex_log);
@@ -324,7 +327,7 @@ fn fake_codex_blocks_mode_uses_openrouter_provider_for_explicit_model_slug() {
         )),
     );
     let turn = bridge.run_blocks_user_turn_with_model(
-        "say explicit openrouter blocks",
+        "say provider-style LiteLLM model blocks",
         Some("anthropic/claude-fable-5"),
         Duration::from_secs(10),
     );
@@ -346,7 +349,7 @@ fn fake_codex_blocks_mode_uses_openrouter_provider_for_explicit_model_slug() {
         thread_start
             .pointer("/params/modelProvider")
             .and_then(Value::as_str),
-        Some("openrouter")
+        Some("openai")
     );
     let turn_start = requests
         .iter()
@@ -362,9 +365,9 @@ fn fake_codex_blocks_mode_uses_openrouter_provider_for_explicit_model_slug() {
 }
 
 #[test]
-fn fake_codex_blocks_mode_uses_bedrock_provider_when_selected() {
-    let fake_codex = temp_path("fake-bedrock-codex.sh");
-    let fake_codex_log = temp_path("fake-bedrock-codex-requests.jsonl");
+fn fake_codex_blocks_mode_ignores_legacy_provider_selection() {
+    let fake_codex = temp_path("fake-legacy-provider-codex.sh");
+    let fake_codex_log = temp_path("fake-legacy-provider-codex-requests.jsonl");
     let script = fake_codex_app_server_script(&fake_codex_log);
     std::fs::write(&fake_codex, script).expect("write fake codex script");
     let mut permissions = std::fs::metadata(&fake_codex)
@@ -373,25 +376,25 @@ fn fake_codex_blocks_mode_uses_bedrock_provider_when_selected() {
     permissions.set_mode(0o755);
     std::fs::set_permissions(&fake_codex, permissions).expect("chmod fake codex script");
 
-    let mut bridge = BridgeProcess::spawn_harness_blocks(
+    let mut bridge = BridgeProcess::spawn_harness_blocks_envs(
         Harness::Codex,
         None,
         Some((
             "CODEX_BIN",
             fake_codex.to_str().expect("utf-8 fake codex path"),
         )),
+        &[("OPENAI_BASE_URL", "https://litellm.example/v1")],
     );
-    // The `--bedrock` Slack flag rides the blocks `provider` field; it must pin
-    // codex's `amazon-bedrock` provider even though the Bedrock model id carries
-    // no `/` slug (which would otherwise route nowhere special).
+    // Old persisted threads may still carry a provider field. It must not
+    // redirect the configured OpenAI-compatible LiteLLM client.
     let user_line = json!({
         "type": "user",
         "thread_key": "slack:C123:123.456",
         "provider": "amazon-bedrock",
-        "model": "anthropic.claude-sonnet-4-5",
+        "model": "DARKMATTER/GLM-5.2-FP8",
         "message": {
             "role": "user",
-            "content": [{"type": "text", "text": "say bedrock blocks"}],
+            "content": [{"type": "text", "text": "say LiteLLM blocks"}],
         },
     });
     let turn = bridge.run_blocks_user_line(user_line, Duration::from_secs(10));
@@ -413,7 +416,7 @@ fn fake_codex_blocks_mode_uses_bedrock_provider_when_selected() {
         thread_start
             .pointer("/params/modelProvider")
             .and_then(Value::as_str),
-        Some("amazon-bedrock")
+        Some("darkmatter")
     );
     let turn_start = requests
         .iter()
@@ -421,7 +424,7 @@ fn fake_codex_blocks_mode_uses_bedrock_provider_when_selected() {
         .unwrap_or_else(|| panic!("blocks mode did not send turn/start; requests={requests:?}"));
     assert_eq!(
         turn_start.pointer("/params/model").and_then(Value::as_str),
-        Some("anthropic.claude-sonnet-4-5")
+        Some("DARKMATTER/GLM-5.2-FP8")
     );
 
     let _ = std::fs::remove_file(fake_codex);
@@ -1275,6 +1278,7 @@ impl BridgeProcess {
             "CENTAUR_AMP_APP_BRIDGE_COMMAND",
             "CODEX_MODEL",
             "CODEX_MODEL_PROVIDER",
+            "OPENAI_BASE_URL",
             "OPENROUTER_MODEL",
         ] {
             command.env_remove(env_key);

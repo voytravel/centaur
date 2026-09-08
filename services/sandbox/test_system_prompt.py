@@ -51,15 +51,23 @@ class SystemPromptTest(unittest.TestCase):
         prompt = SYSTEM_PROMPT.read_text()
 
         self.assertIn("[Model and Harness Switching Answers]", prompt)
-        self.assertIn("`--codex`, `--claude` or `--claude-code`, and `--amp`", prompt)
+        self.assertIn("`--codex` and `--claude` or `--claude-code`", prompt)
         self.assertIn("`--model <model-id-or-alias>`", prompt)
         self.assertIn("`--model=<model-id-or-alias>`", prompt)
         self.assertIn("`--fable`, `--opus`, `--sonnet`, and `--haiku`", prompt)
         self.assertIn("`--claude --model=fable fix this`", prompt)
-        self.assertIn("`--codex --model=gpt-5.2 investigate this`", prompt)
-        self.assertIn("`--meta` selects Codex with the Meta provider", prompt)
-        self.assertIn("`--bedrock` selects Codex with the Bedrock provider", prompt)
-        self.assertIn("`-rsn <effort>` sets Codex reasoning effort", prompt)
+        self.assertIn("`--codex --model=DARKMATTER/GLM-5.2-FP8 investigate this`", prompt)
+        self.assertIn("Codex model IDs are routed through the configured OpenAI-compatible gateway", prompt)
+        self.assertIn("Use `-rsn <effort>` to set Codex reasoning effort", prompt)
+
+    def test_slack_progress_is_concise_and_reasoning_stays_in_console(self) -> None:
+        prompt = SYSTEM_PROMPT.read_text()
+
+        self.assertIn("[Chat progress discipline]", prompt)
+        self.assertIn("not a chain-of-thought", prompt)
+        self.assertIn("concise live status", prompt)
+        self.assertIn("durable Console trace", prompt)
+        self.assertIn("Do not replay your investigation chronologically", prompt)
 
     def test_personal_oauth_app_connection_guidance_is_present(self) -> None:
         prompt = SYSTEM_PROMPT.read_text()
@@ -73,6 +81,14 @@ class SystemPromptTest(unittest.TestCase):
         self.assertIn("look in `oauth_credentials`", prompt)
         self.assertIn("personal `provider_email`", prompt)
         self.assertIn("Centaur can use their personal connected account", prompt)
+
+    def test_action_scope_and_evidence_guidance_is_present(self) -> None:
+        prompt = SYSTEM_PROMPT.read_text()
+
+        self.assertIn("[Action scope and evidence]", prompt)
+        self.assertIn("Treat requests to investigate, diagnose, assess, review, explain, or answer as read-only", prompt)
+        self.assertIn("A code path that could explain an observation is a hypothesis", prompt)
+        self.assertIn("Keep chat-surface progress terse", prompt)
 
 if __name__ == "__main__":
     unittest.main()

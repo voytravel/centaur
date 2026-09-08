@@ -84,6 +84,10 @@ class Console::WorkflowsController < ApplicationController
   # with their registered schedule input so a forced run matches a normal tick.
   def force_start
     workflow_name = params[:id].to_s
+    if workflow_name == GithubDependencyMaintenanceFinding::ACTION_WORKFLOW_NAME
+      redirect_to console_workflow_path(workflow_name), alert: "Start a scoped action from its observation approval card, not an empty manual run."
+      return
+    end
     schedule = workflow_schedules_for(workflow_name).first
     result = api_client.create_workflow_run(
       workflow_name: workflow_name,
@@ -101,6 +105,45 @@ class Console::WorkflowsController < ApplicationController
     redirect_to console_workflow_path(workflow_name), alert: "Could not start workflow: #{e.message}"
   end
 
+  # A scheduled observation is never itself permission to change a repository.
+  # This trusted Console transition re-reads the immutable workflow result,
+  # validates the selected proposal, and starts one separately scoped action
+  # workflow under an idempotency key. The action workflow must still re-check
+  # the reviewed route and live GitHub state before its narrowly scoped action.
+  def approve_finding
+    workflow_name = params[:id].to_s
+    unless workflow_name == GithubDependencyMaintenanceFinding::WORKFLOW_NAME
+      redirect_to console_workflow_path(workflow_name), alert: "This workflow has no approvable findings."
+      return
+    end
+
+    source_run = api_client.get_workflow_run(params.require(:run_id)).fetch("run")
+    finding = GithubDependencyMaintenanceFinding.find_for_approval(
+      run: source_run,
+      repository: params.require(:repository),
+      finding_key: params.require(:finding_key)
+    )
+    existing = action_run_for(finding)
+    result = existing&.merge("created" => false) || api_client.create_workflow_run(
+      workflow_name: GithubDependencyMaintenanceFinding::ACTION_WORKFLOW_NAME,
+      input: finding.action_input(approved_by: current_user.oid),
+      idempotency_key: finding.idempotency_key
+    )
+    run_id = result["run_id"]
+    notice =
+      if result["created"] == false
+        "That scoped action already exists (#{run_id}). Open action on its card to see the current outcome."
+      else
+        "Scoped action queued (#{run_id}). #{finding.queued_notice}"
+      end
+    redirect_to console_workflow_path(workflow_name, run_id: finding.source_run_id), notice: notice
+  rescue GithubDependencyMaintenanceFinding::Invalid, ActionController::ParameterMissing, KeyError => e
+    redirect_to console_workflow_path(workflow_name || params[:id]), alert: "Could not approve finding: #{e.message}"
+  rescue StandardError => e
+    Rails.logger.warn("console_workflow_finding_approval_failed workflow=#{workflow_name} error=#{e.class}: #{e.message}")
+    redirect_to console_workflow_path(workflow_name || params[:id]), alert: "Could not queue scoped action: #{e.message}"
+  end
+
   private
 
   # Best-effort enrichment from the workflows API: the registered schedule
@@ -110,7 +153,27 @@ class Console::WorkflowsController < ApplicationController
   def load_workflow_api_details
     @workflow_schedules = workflow_schedules_for(@workflow_name)
     @latest_run_detail = fetch_run_detail(@latest_run&.run_id)
+    selected_detail = fetch_run_detail(params[:run_id]) if params[:run_id].present?
+    @selected_run_detail = selected_detail if selected_detail&.fetch("workflow_name", nil) == @workflow_name
+    @selected_run_unavailable = params[:run_id].present? && @selected_run_detail.nil?
+    @maintenance_run_detail = @selected_run_detail || @latest_run_detail
+    @display_run_detail = @maintenance_run_detail
+    @maintenance_findings =
+      if @workflow_name == GithubDependencyMaintenanceFinding::WORKFLOW_NAME
+        GithubDependencyMaintenanceFinding.for_run(@maintenance_run_detail)
+      else
+        []
+      end
+    @maintenance_diagnostics =
+      if @workflow_name == GithubDependencyMaintenanceFinding::WORKFLOW_NAME
+        GithubDependencyMaintenanceFinding.diagnostics_for_run(@maintenance_run_detail)
+      else
+        []
+      end
+    @maintenance_action_lookup_failures = []
+    @maintenance_action_runs = action_runs_for(@maintenance_findings)
 
+    return if @selected_run_detail.present?
     return if @latest_run_detail.blank? && @workflow_schedules.blank?
     return if @latest_run&.display_status == "failed"
     return unless @status_counts["failed"].to_i.positive?
@@ -138,6 +201,43 @@ class Console::WorkflowsController < ApplicationController
   rescue StandardError => e
     Rails.logger.warn("console_workflow_run_detail_failed run=#{run_id} error=#{e.class}: #{e.message}")
     nil
+  end
+
+  # A page render must not queue an action. The action's durable idempotency
+  # key makes this lookup exact even after the action has left recent history.
+  def action_runs_for(findings)
+    findings.each_with_object({}) do |finding, action_runs|
+      action_run = action_run_for(finding)
+      next unless action_run.is_a?(Hash) && action_run["run_id"].present?
+
+      action_runs[finding.idempotency_key] = action_run
+    rescue StandardError => e
+      @maintenance_action_lookup_failures << finding.idempotency_key
+      Rails.logger.warn(
+        "console_workflow_finding_action_lookup_failed key=#{finding.idempotency_key} " \
+        "error=#{e.class}: #{e.message}"
+      )
+    end
+  end
+
+  def action_run_for(finding)
+    action_run = api_client.find_workflow_run_by_idempotency_key(
+      workflow_name: GithubDependencyMaintenanceFinding::ACTION_WORKFLOW_NAME,
+      idempotency_key: finding.idempotency_key
+    )
+    return action_run if action_run.is_a?(Hash) && action_run["run_id"].present?
+
+    # Old keys omitted the repository/action. Preserve already-authorized work,
+    # but only after checking its immutable input belongs to this exact card.
+    legacy = api_client.find_workflow_run_by_idempotency_key(
+      workflow_name: GithubDependencyMaintenanceFinding::ACTION_WORKFLOW_NAME,
+      idempotency_key: finding.legacy_idempotency_key
+    )
+    return unless legacy.is_a?(Hash) && legacy["run_id"].present?
+
+    detail = api_client.get_workflow_run(legacy.fetch("run_id")).fetch("run")
+    detail if detail["workflow_name"] == GithubDependencyMaintenanceFinding::ACTION_WORKFLOW_NAME &&
+      finding.matches_action_input?(detail["input"])
   end
 
   def api_client

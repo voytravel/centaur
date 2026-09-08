@@ -36,14 +36,17 @@ class Console::WorkflowsControllerTest < ActionDispatch::IntegrationTest
   # Stands in for CentaurApiClient: schedules/run details for show-page
   # enrichment, plus a capture of force-started runs.
   class FakeApiClient
-    attr_reader :created_runs
+    attr_reader :created_runs, :idempotency_lookups
 
-    def initialize(schedules: [], run_details: {}, create_result: nil, create_error: nil)
+    def initialize(schedules: [], run_details: {}, action_runs: {}, create_result: nil, create_error: nil, lookup_error: nil)
       @schedules = schedules
       @run_details = run_details
+      @action_runs = action_runs
       @create_result = create_result || { "ok" => true, "run_id" => "run-new", "created" => true }
       @create_error = create_error
+      @lookup_error = lookup_error
       @created_runs = []
+      @idempotency_lookups = []
     end
 
     def list_workflow_schedules
@@ -57,10 +60,21 @@ class Console::WorkflowsControllerTest < ActionDispatch::IntegrationTest
       { "ok" => true, "run" => detail }
     end
 
-    def create_workflow_run(workflow_name:, input: nil)
+    def find_workflow_run_by_idempotency_key(workflow_name:, idempotency_key:)
+      raise CentaurApiClient::Error, @lookup_error if @lookup_error
+      @idempotency_lookups << { workflow_name: workflow_name, idempotency_key: idempotency_key }
+      @action_runs[idempotency_key]
+    end
+
+    def create_workflow_run(workflow_name:, input: nil, idempotency_key: nil, max_attempts: nil)
       raise CentaurApiClient::Error, @create_error if @create_error
 
-      @created_runs << { workflow_name: workflow_name, input: input }
+      @created_runs << {
+        workflow_name: workflow_name,
+        input: input,
+        idempotency_key: idempotency_key,
+        max_attempts: max_attempts
+      }
       @create_result
     end
   end
@@ -159,6 +173,21 @@ class Console::WorkflowsControllerTest < ActionDispatch::IntegrationTest
     assert_select "dt", text: "Schedule", count: 0
   end
 
+  test "a completed QA monitor prominently shows a failed QA outcome" do
+    run = fake_run(workflow_name: "linear_qa_control_plane", display_status: "completed")
+    with_api_client(FakeApiClient.new(run_details: {
+      run.run_id => { "run_id" => run.run_id, "workflow_name" => run.workflow_name, "status" => "completed",
+                      "result" => { "output" => { "conclusion" => "failure" } } }
+    }))
+    with_workflow_history(run.workflow_name, runs: [ run ]) do
+      get console_workflow_url(run.workflow_name)
+    end
+    assert_response :ok
+    assert_select "span", text: "Engine: completed"
+    assert_select "span", text: "QA failure"
+    assert_select "a[href=?]", console_workflow_path(run.workflow_name, run_id: run.run_id)
+  end
+
   test "force starting a workflow queues a run with the schedule input" do
     client = FakeApiClient.new(schedules: [ slack_sync_schedule ])
     with_api_client(client)
@@ -167,7 +196,241 @@ class Console::WorkflowsControllerTest < ActionDispatch::IntegrationTest
 
     assert_redirected_to console_workflow_path("slack_sync")
     assert_match(/Run queued \(run-new\)/, flash[:notice])
-    assert_equal [ { workflow_name: "slack_sync", input: { "mode" => "incremental" } } ], client.created_runs
+    assert_equal [
+      {
+        workflow_name: "slack_sync",
+        input: { "mode" => "incremental" },
+        idempotency_key: nil,
+        max_attempts: nil
+      }
+    ], client.created_runs
+  end
+
+  test "renders an approval-required dependency-maintenance finding from the selected observation run" do
+    run = fake_run(workflow_name: "github_dependency_maintenance")
+    detail = maintenance_run_detail(run.run_id)
+    with_api_client(FakeApiClient.new(run_details: { run.run_id => detail }))
+
+    with_workflow_history("github_dependency_maintenance", runs: [ run ]) do
+      get console_workflow_url("github_dependency_maintenance", run_id: run.run_id)
+    end
+
+    assert_response :ok
+    assert_select "h2", text: "Approval-required findings"
+    assert_select "p", text: /acme\/widgets.*security alert #19/
+    assert_select "form[action=?]", approve_finding_console_workflow_path("github_dependency_maintenance")
+    assert_select "button", text: "Approve scoped action"
+  end
+
+  test "renders an approval-required finding from a Python workflow-host result envelope" do
+    run = fake_run(workflow_name: "github_dependency_maintenance")
+    detail = maintenance_run_detail(run.run_id)
+    payload = detail.fetch("result")
+    detail["result"] = {
+      "output" => payload,
+      "run_id" => run.run_id,
+      "steps" => [ "python_host" ],
+      "task_id" => run.task_id,
+      "workflow_name" => "github_dependency_maintenance"
+    }
+    with_api_client(FakeApiClient.new(run_details: { run.run_id => detail }))
+
+    with_workflow_history("github_dependency_maintenance", runs: [ run ]) do
+      get console_workflow_url("github_dependency_maintenance", run_id: run.run_id)
+    end
+
+    assert_response :ok
+    assert_select "h2", text: "Approval-required findings"
+    assert_select "button", text: "Approve scoped action"
+  end
+
+  test "links an already queued scoped action instead of offering a second approval" do
+    run = fake_run(workflow_name: "github_dependency_maintenance")
+    finding_key = GithubDependencyMaintenanceFinding.for_run(maintenance_run_detail(run.run_id)).first.idempotency_key
+    client = FakeApiClient.new(
+      run_details: { run.run_id => maintenance_run_detail(run.run_id) },
+      action_runs: {
+        finding_key => { "run_id" => "action-run-1", "status" => "queued" }
+      }
+    )
+    with_api_client(client)
+
+    with_workflow_history("github_dependency_maintenance", runs: [ run ]) do
+      get console_workflow_url("github_dependency_maintenance", run_id: run.run_id)
+    end
+
+    assert_response :ok
+    assert_select "button", text: "Approve scoped action", count: 0
+    assert_select "span", text: "Action queued"
+    assert_select(
+      "a[href=?]",
+      console_workflow_path("github_dependency_maintenance_action", run_id: "action-run-1"),
+      text: "Open action ↗"
+    )
+    assert_empty client.created_runs
+    assert_equal [
+      {
+        workflow_name: "github_dependency_maintenance_action",
+        idempotency_key: finding_key
+      }
+    ], client.idempotency_lookups
+  end
+
+  test "approving a validated dependency finding queues one scoped action with a durable idempotency key" do
+    source_run_id = "run-observation-1"
+    client = FakeApiClient.new(run_details: { source_run_id => maintenance_run_detail(source_run_id) })
+    with_api_client(client)
+
+    post approve_finding_console_workflow_path("github_dependency_maintenance"), params: {
+      run_id: source_run_id,
+      repository: "acme/widgets",
+      finding_key: "security:19"
+    }
+
+    assert_redirected_to console_workflow_path("github_dependency_maintenance", run_id: source_run_id)
+    assert_match(/Scoped action queued/, flash[:notice])
+    assert_equal [
+      {
+        workflow_name: "github_dependency_maintenance_action",
+        input: {
+          "source_run_id" => source_run_id,
+          "repository" => "acme/widgets",
+          "base_branch" => "main",
+          "finding" => {
+            "key" => "security:19",
+            "kind" => "security_advisory",
+            "action" => "draft_pr",
+            "source_numbers" => [ 19 ]
+          },
+          "approved_by" => @operator.oid
+        },
+        idempotency_key: GithubDependencyMaintenanceFinding.for_run(maintenance_run_detail(source_run_id)).first.idempotency_key,
+        max_attempts: nil
+      }
+    ], client.created_runs
+  end
+
+  test "unknown action status hides approval and also rejects a direct approval POST" do
+    run = fake_run(workflow_name: "github_dependency_maintenance")
+    client = FakeApiClient.new(run_details: { run.run_id => maintenance_run_detail(run.run_id) }, lookup_error: "unavailable")
+    with_api_client(client)
+    with_workflow_history("github_dependency_maintenance", runs: [ run ]) do
+      get console_workflow_url("github_dependency_maintenance", run_id: run.run_id)
+    end
+    assert_select "button", text: "Approve scoped action", count: 0
+    assert_select "span", text: /Action status unavailable/
+    post approve_finding_console_workflow_path("github_dependency_maintenance"), params: {
+      run_id: run.run_id, repository: "acme/widgets", finding_key: "security:19"
+    }
+    assert_match(/Could not queue/, flash[:alert])
+    assert_empty client.created_runs
+  end
+
+  test "mutating workflow diagnostics never claim that no action happened" do
+    run = fake_run(workflow_name: "github_dependency_maintenance")
+    detail = maintenance_run_detail(run.run_id)
+    route = detail.fetch("result").fetch("routes").first
+    route["security_advisories"]["mode"] = "draft_pr"
+    route["proposals"] = []
+    route["diagnostic"] = { "kind" => "observer_unavailable", "code" => "agent_turn_unavailable", "summary" => "unused untrusted description" }
+    with_api_client(FakeApiClient.new(run_details: { run.run_id => detail }))
+    with_workflow_history(run.workflow_name, runs: [ run ]) do
+      get console_workflow_url(run.workflow_name, run_id: run.run_id)
+    end
+    assert_response :ok
+    assert_select "p.text-red-300", text: /GitHub changes may already exist/
+    assert_select "h2", text: "Checks needing attention"
+    assert_select 'article a[href="https://github.com/acme/widgets/pulls?q=is%3Apr+sort%3Aupdated-desc"]', text: "Recent PRs"
+    assert_select 'article a[href="https://github.com/acme/widgets/activity"]', text: "Commits and merges"
+    assert_select "article details:not([open]) summary", text: "Technical detail"
+    assert_select "p", text: /Check recent PRs, commits and merges before retrying/
+    refute_includes response.body, "no-action workflow failures"
+    refute_includes response.body, "no repository changes were authorized"
+    assert_select "button", text: "Approve scoped action", count: 0
+  end
+
+  test "matching legacy action is linked and cannot be approved a second time" do
+    detail = maintenance_run_detail("run-observation-1")
+    finding = GithubDependencyMaintenanceFinding.for_run(detail).first
+    client = FakeApiClient.new(
+      run_details: {
+        finding.source_run_id => detail,
+        "legacy-action" => { "run_id" => "legacy-action", "workflow_name" => "github_dependency_maintenance_action", "status" => "completed", "input" => finding.action_input(approved_by: "usr_previous") }
+      },
+      action_runs: { finding.legacy_idempotency_key => { "run_id" => "legacy-action" } }
+    )
+    with_api_client(client)
+    post approve_finding_console_workflow_path("github_dependency_maintenance"), params: {
+      run_id: finding.source_run_id, repository: finding.repository, finding_key: finding.key
+    }
+    assert_match(/already exists/, flash[:notice])
+    assert_empty client.created_runs
+  end
+
+  test "selected action status does not show the latest run status or an empty trigger" do
+    latest = fake_run(workflow_name: "github_dependency_maintenance_action", display_status: "completed")
+    with_api_client(FakeApiClient.new(run_details: {
+      "selected-failure" => { "run_id" => "selected-failure", "workflow_name" => latest.workflow_name, "status" => "failed", "failure" => { "message" => "fixture failure" } }
+    }))
+    with_workflow_history(latest.workflow_name, runs: [ latest ]) do
+      get console_workflow_url(latest.workflow_name, run_id: "selected-failure")
+    end
+    assert_select "div[role=status]", text: /Viewing selected run.*failed/m
+    assert_select "span", text: "failed"
+    assert_select "button", text: "Manually Trigger", count: 0
+    post run_console_workflow_path(latest.workflow_name)
+    assert_match(/approval card/, flash[:alert])
+  end
+
+  test "renders a ready Dependabot merge as a distinct, revalidated approval" do
+    run = fake_run(workflow_name: "github_dependency_maintenance")
+    detail = maintenance_run_detail(run.run_id)
+    route = detail.fetch("result").fetch("routes").first
+    route["security_advisories"] = {
+      "mode" => "approval_required",
+      "outcome" => "none",
+      "alert_numbers" => []
+    }
+    route["dependabot"] = {
+      "mode" => "approval_required",
+      "outcome" => "direct_ready",
+      "source_pr_numbers" => [ 42 ]
+    }
+    route["proposals"] = [
+      {
+        "kind" => "dependabot_pull_request",
+        "action" => "merge",
+        "source_numbers" => [ 42 ]
+      }
+    ]
+    with_api_client(FakeApiClient.new(run_details: { run.run_id => detail }))
+
+    with_workflow_history("github_dependency_maintenance", runs: [ run ]) do
+      get console_workflow_url("github_dependency_maintenance", run_id: run.run_id)
+    end
+
+    assert_response :ok
+    assert_select "p", text: /Merge the ready Dependabot PR/
+    assert_select "p", text: /squash-merge it through GitHub's normal protections/
+    assert_select "button", text: "Approve scoped action"
+  end
+
+  test "does not queue an action when a proposal fails the approval-required contract" do
+    source_run_id = "run-observation-1"
+    detail = maintenance_run_detail(source_run_id)
+    detail["result"]["routes"][0]["security_advisories"]["mode"] = "observe"
+    client = FakeApiClient.new(run_details: { source_run_id => detail })
+    with_api_client(client)
+
+    post approve_finding_console_workflow_path("github_dependency_maintenance"), params: {
+      run_id: source_run_id,
+      repository: "acme/widgets",
+      finding_key: "security:19"
+    }
+
+    assert_redirected_to console_workflow_path("github_dependency_maintenance")
+    assert_match(/Could not approve finding/, flash[:alert])
+    assert_empty client.created_runs
   end
 
   test "force starting a workflow surfaces api errors" do
@@ -186,6 +449,23 @@ class Console::WorkflowsControllerTest < ActionDispatch::IntegrationTest
     with_api_client(client)
 
     post run_console_workflow_url("slack_sync")
+
+    assert_redirected_to console_threads_path
+    assert_empty client.created_runs
+  end
+
+  test "a non-admin cannot approve a dependency-maintenance finding" do
+    delete logout_url
+    post login_url, params: { email: users(:member_user).email, password: "password123456" }
+    source_run_id = "run-observation-1"
+    client = FakeApiClient.new(run_details: { source_run_id => maintenance_run_detail(source_run_id) })
+    with_api_client(client)
+
+    post approve_finding_console_workflow_url("github_dependency_maintenance"), params: {
+      run_id: source_run_id,
+      repository: "acme/widgets",
+      finding_key: "security:19"
+    }
 
     assert_redirected_to console_threads_path
     assert_empty client.created_runs
@@ -216,6 +496,41 @@ class Console::WorkflowsControllerTest < ActionDispatch::IntegrationTest
       "input" => { "mode" => "incremental" },
       "enabled" => true,
       "no_delivery" => false
+    }
+  end
+
+  def maintenance_run_detail(run_id)
+    {
+      "workflow_name" => "github_dependency_maintenance",
+      "run_id" => run_id,
+      "status" => "completed",
+      "result" => {
+        "status" => "completed",
+        "routes" => [
+          {
+            "schema_version" => "2",
+            "repository" => "acme/widgets",
+            "base_branch" => "main",
+            "security_advisories" => {
+              "mode" => "approval_required",
+              "outcome" => "observed",
+              "alert_numbers" => [ 19 ]
+            },
+            "dependabot" => {
+              "mode" => "approval_required",
+              "outcome" => "none",
+              "source_pr_numbers" => []
+            },
+            "proposals" => [
+              {
+                "kind" => "security_advisory",
+                "action" => "draft_pr",
+                "source_numbers" => [ 19 ]
+              }
+            ]
+          }
+        ]
+      }
     }
   end
 

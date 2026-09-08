@@ -54,6 +54,24 @@ export class SessionApiError extends Error {
   }
 }
 
+// GitHub repair and review turns must eventually settle. A bounded default
+// prevents a stuck provider/tool call from holding a management session (and
+// blocking the next explicit repair) indefinitely. Deployments can extend or
+// shorten either bound through the existing environment options.
+export const DEFAULT_SESSION_IDLE_TIMEOUT_MS = 15 * 60 * 1000;
+export const DEFAULT_SESSION_MAX_DURATION_MS = 60 * 60 * 1000;
+
+export function sessionTimeouts(
+  options: Pick<GithubbotOptions, "idleTimeoutMs" | "maxDurationMs">,
+): { idleTimeoutMs: number; maxDurationMs: number } {
+  const maxDurationMs = options.maxDurationMs ?? DEFAULT_SESSION_MAX_DURATION_MS;
+  const idleTimeoutMs = Math.min(
+    options.idleTimeoutMs ?? DEFAULT_SESSION_IDLE_TIMEOUT_MS,
+    maxDurationMs,
+  );
+  return { idleTimeoutMs, maxDurationMs };
+}
+
 export function isRetryableSessionApiError(error: unknown): boolean {
   if (error instanceof SessionApiError) return error.retryable;
   if (!(error instanceof Error)) return false;
@@ -71,7 +89,7 @@ type ForwardSessionApiCallbacks = {
   onMessagesAppended?(): Promise<void>;
   /**
    * Fires when session creation restarted the thread onto a new harness
-   * (explicit --claude/--amp/--codex on a thread pinned to another harness).
+   * (explicit --claude/--codex on a thread pinned to another harness).
    * Runs before append/execute, so the callback may set `input.contextPreamble`
    * to re-feed the issue + comment history to the fresh harness.
    */
@@ -191,7 +209,9 @@ export async function forwardToSessionApi(
     input.executeMessage,
     input.model,
     input.provider,
+    input.reasoning,
     input.contextPreamble,
+    input.executionMetadata,
   );
   traceLog(options, "githubbot_session_execute_complete", input.trace, {
     execution_id: execution.execution_id,
@@ -222,7 +242,9 @@ export async function executeSessionTurn(
     input.executeMessage,
     input.model,
     input.provider,
+    input.reasoning,
     input.contextPreamble,
+    input.executionMetadata,
   );
   traceLog(options, "githubbot_session_execute_complete", input.trace, {
     execution_id: execution.execution_id,
@@ -389,7 +411,7 @@ async function createSession(
 ): Promise<CreateSessionOutcome> {
   const requested =
     harnessType ?? options.defaultHarnessType ?? DEFAULT_HARNESS_TYPE;
-  // An explicit --claude/--amp/--codex restarts a thread pinned to another
+  // An explicit --claude/--codex restarts a thread pinned to another
   // harness; the implicit default never forces a switch.
   const response = await postCreateSession(
     options,
@@ -512,19 +534,26 @@ async function executeSession(
   message: GithubbotApiMessage,
   model?: string,
   provider?: string,
+  reasoning?: string,
   contextPreamble?: string,
+  executionMetadata?: JsonObject,
 ): Promise<GithubbotExecuteSessionResponse> {
   const fetchFn = options.fetch ?? fetch;
+  const timeouts = sessionTimeouts(options);
   const body: GithubbotExecuteSessionRequest = {
     idempotency_key: message.id,
-    metadata: sessionMetadata(message, { action: "execute" }),
-    input_lines: toCodexInputLines(message, threadId, model, provider, contextPreamble),
-    ...(options.idleTimeoutMs === undefined
-      ? {}
-      : { idle_timeout_ms: options.idleTimeoutMs }),
-    ...(options.maxDurationMs === undefined
-      ? {}
-      : { max_duration_ms: options.maxDurationMs }),
+    metadata: sessionMetadata(message, { ...executionMetadata, action: "execute" }),
+    input_lines: toCodexInputLines(
+      message,
+      threadId,
+      model,
+      provider,
+      reasoning,
+      contextPreamble,
+      executionMetadata,
+    ),
+    idle_timeout_ms: timeouts.idleTimeoutMs,
+    max_duration_ms: timeouts.maxDurationMs,
   };
   const response = await fetchFn(
     apiSessionUrl(options.apiUrl, threadId, "execute"),
@@ -745,7 +774,9 @@ function toCodexInputLines(
   threadId: string,
   model?: string,
   provider?: string,
+  reasoning?: string,
   contextPreamble?: string,
+  executionMetadata?: JsonObject,
 ): string[] {
   const staged = new Map<GithubbotApiAttachment, string>();
   const lines: string[] = [];
@@ -779,7 +810,9 @@ function toCodexInputLines(
     staged,
     model,
     provider,
+    reasoning,
     contextPreamble,
+    executionMetadata,
   );
   if (inlineLine.length > MAX_CODEX_INPUT_LINE_CHARS) {
     const remaining = message.attachments
@@ -793,7 +826,9 @@ function toCodexInputLines(
         staged,
         model,
         provider,
+        reasoning,
         contextPreamble,
+        executionMetadata,
       );
       if (inlineLine.length <= MAX_CODEX_INPUT_LINE_CHARS) break;
     }
@@ -808,14 +843,17 @@ function toCodexInputLineWithStaged(
   staged: Map<GithubbotApiAttachment, string>,
   model?: string,
   provider?: string,
+  reasoning?: string,
   contextPreamble?: string,
+  executionMetadata?: JsonObject,
 ): string {
   return JSON.stringify({
     type: "user",
     thread_key: threadId,
-    trace_metadata: sessionMetadata(message, { action: "execute" }),
+    trace_metadata: sessionMetadata(message, { ...executionMetadata, action: "execute" }),
     ...(model ? { model } : {}),
     ...(provider ? { provider } : {}),
+    ...(reasoning ? { reasoning } : {}),
     message: {
       role: "user",
       content: codexInputContent(message, staged, contextPreamble),
@@ -938,20 +976,33 @@ type ParsedSessionEvent = {
   id?: number;
 };
 
-async function* parseSessionEventStream(
+/**
+ * Converts the durable session SSE feed into renderer input. Exported for the
+ * adapter transport regression test: GitHub must wait for the structured
+ * completion event instead of terminating on a raw provider record.
+ */
+export async function* parseSessionEventStream(
   stream: ReadableStream<Uint8Array>,
   onEventId: (eventId: number) => void,
 ): AsyncIterable<GithubbotRendererSource> {
+  let rawTerminalSuppressed = false;
   for await (const event of parseSseEvents(stream)) {
     if (typeof event.id === "number") onEventId(event.id);
     if (event.event === "session.output.line") {
-      yield {
-        data: event.data,
-        event: event.event,
-        eventId: event.id,
-        eventKind: event.event,
-      } satisfies RustSessionStreamEvent;
-      if (isTerminalCodexOutputLine(event.data)) return;
+      // A raw Codex terminal record makes the renderer stop consuming before
+      // api-rs emits the structured session.execution_completed event. GitHub
+      // needs that event's canonical result_text, so suppress the raw terminal
+      // protocol record and continue until the durable completion arrives.
+      if (!isTerminalCodexOutputLine(event.data)) {
+        yield {
+          data: event.data,
+          event: event.event,
+          eventId: event.id,
+          eventKind: event.event,
+        } satisfies RustSessionStreamEvent;
+      } else {
+        rawTerminalSuppressed = true;
+      }
       continue;
     }
     if (
@@ -984,6 +1035,14 @@ async function* parseSessionEventStream(
       } satisfies RustSessionStreamEvent;
       return;
     }
+  }
+  if (rawTerminalSuppressed) {
+    // api-rs terminalizes every recognized raw terminal record as a durable
+    // execution event. If that invariant is ever broken, fail visibly and
+    // safely instead of publishing raw provider text or claiming success.
+    yield sessionStreamError(
+      new Error("Session stream ended before durable execution completion"),
+    );
   }
 }
 

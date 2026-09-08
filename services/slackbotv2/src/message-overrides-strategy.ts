@@ -13,8 +13,8 @@ const SYSTEM_PROMPT = [
   'Decide whether the Slack message asks to use a specific AI harness, model, provider, or reasoning effort.',
   'Return only canonical override values from the schema.',
   'Use null for every field when the message does not ask to change model selection.',
-  'Allowed harness values: codex, claudecode, amp, nanocodex.',
-  'Allowed provider values: responses, amazon-bedrock, openrouter.',
+  'Allowed harness values: codex, claudecode, nanocodex.',
+  'Provider selection is disabled; always return null for provider.',
   'Allowed reasoning values: none, minimal, low, medium, high, xhigh, max.',
   'Treat inline flags such as "--claude", "--claude --model=fable", and "--fable" as model selection requests.',
   'In this Slackbot, a request to use Claude without another named Claude model means harness claudecode and model claude-opus-4-8. Examples: "--claude what model are you?" and "using claude:" select harness claudecode and model claude-opus-4-8. Explicit Fable requests such as "--claude --model=fable" and "using claude fable:" select harness claudecode and model claude-fable-5.',
@@ -23,8 +23,7 @@ const SYSTEM_PROMPT = [
   'Return reasoning even when the requested model is not Codex; validation will ignore reasoning that cannot apply.',
   'Map OpenAI model aliases to canonical IDs: sol -> gpt-5.6-sol, terra -> gpt-5.6-terra, luna -> gpt-5.6-luna, 5.5 -> gpt-5.5, 5.5 pro -> gpt-5.5-pro, 5.4 -> gpt-5.4, 5.4 pro -> gpt-5.4-pro, 5.4 mini -> gpt-5.4-mini, 5.4 nano -> gpt-5.4-nano.',
   'Map Claude model aliases to canonical IDs: fable -> claude-fable-5, opus -> claude-opus-4-8, opus 4.7 -> claude-opus-4-7, opus 5 -> claude-opus-5, opus 5 fast -> claude-opus-5-fast, sonnet -> claude-sonnet-4-6, sonnet 5 -> claude-sonnet-5, haiku -> claude-haiku-4-5.',
-  'Map Amp model aliases to canonical IDs: deep -> deep, fast -> fast. Select an Amp model only when the user explicitly names Amp or clearly asks for the deep or fast model/mode. Requests such as "use the deep model" and "switch to fast mode" select the corresponding Amp model. Do not infer Amp from superlatives, coined terms, or casual requests to be more intelligent, thorough, or fast.',
-  'Words containing or merely evoking model aliases are not model requests. For example, "think deeply", "do a deep analysis", "use your strongest thinking", and "give me a fast answer" do not select Amp. Unless another explicit selector is present, return null for every field.',
+  'Words containing or merely evoking model aliases are not model requests. Unless another explicit selector is present, return null for every field.',
   'For example, "use max effort and the sol model" should return model "gpt-5.6-sol" and reasoning "max".',
   'Do not treat ordinary discussion of model names as a selection request.'
 ].join('\n')
@@ -38,8 +37,6 @@ const MODEL_VALUES = [
   'claude-opus-5-fast',
   'claude-sonnet-4-6',
   'claude-sonnet-5',
-  'deep',
-  'fast',
   'gpt-5.4',
   'gpt-5.4-mini',
   'gpt-5.4-nano',
@@ -56,7 +53,7 @@ const MESSAGE_OVERRIDES_SCHEMA = {
   additionalProperties: false,
   properties: {
     harness: {
-      enum: ['codex', 'claudecode', 'amp', 'nanocodex', null],
+      enum: ['codex', 'claudecode', 'nanocodex', null],
       type: ['string', 'null']
     },
     model: {
@@ -64,7 +61,7 @@ const MESSAGE_OVERRIDES_SCHEMA = {
       type: ['string', 'null']
     },
     provider: {
-      enum: ['responses', 'amazon-bedrock', 'openrouter', null],
+      enum: [null],
       type: ['string', 'null']
     },
     reasoning: {

@@ -89,6 +89,10 @@ export type LinearbotFetch = (
 export type LinearbotOptions = {
   apiKey?: string;
   apiUrl: string;
+  /** Console internal URL used solely for policy evaluation and workstream audit. */
+  automationApiUrl?: string;
+  /** Single-purpose credential accepted only by Console automation ingress. */
+  automationIngressToken?: string;
   /**
    * Connect the Postgres state (and initialize the adapter) at startup.
    * Defaults to true; tests pass false to skip the live connect against mock
@@ -96,8 +100,8 @@ export type LinearbotOptions = {
    */
   connectStateOnStart?: boolean;
   /**
-   * Harness for new threads when no --claude/--amp/--codex flag is given
-   * (HarnessType wire value: codex | amp | claudecode). Defaults to codex.
+   * Harness for new threads when no --claude/--codex flag is given
+   * (HarnessType wire value: codex | claudecode). Defaults to codex.
    */
   defaultHarnessType?: string;
   fetch?: LinearbotFetch;
@@ -152,10 +156,22 @@ export type LinearbotThreadState = {
    */
   ingestedCommentIds?: string[];
   /**
+   * Console's authorized durable issue session for this comment thread. When a
+   * direct mention is policy-gated, later non-mention replies must append to
+   * this same workspace instead of creating a sibling comment-key session.
+   */
+  policySessionKey?: string;
+  /**
    * Centaur-forward model: the last assignment trigger (issue `updatedAt`) the
    * bot ran a turn for, so a redelivered Issue webhook doesn't re-run.
    */
   lastAssignmentTrigger?: string;
+  /**
+   * Last policy-selected Issue create/update trigger consumed by the durable
+   * issue workstream. Keeps a Linear webhook redelivery from starting a second
+   * execution while preserving ordinary assignment ownership separately.
+   */
+  lastAutomationTrigger?: string;
 };
 
 export type LinearbotRendererSource = RustSessionStreamEvent | JsonObject;
@@ -185,12 +201,12 @@ export type ForwardSessionInput = {
   contextPreamble?: string;
   executionId?: string;
   executeMessage?: LinearbotApiMessage;
-  /** Harness override parsed from message flags (--claude/--amp/--codex). */
+  /** Harness override parsed from message flags (--claude/--codex). */
   harnessType?: string;
   messages: LinearbotApiMessage[];
   /** Per-turn model override parsed from message flags (--model/--opus/...). */
   model?: string;
-  /** Per-turn model provider override parsed from message flags (--meta). */
+  /** Legacy model provider persisted by older sessions; new selection is disabled. */
   provider?: string;
   onEventId(eventId: number): void;
   openStream: boolean;

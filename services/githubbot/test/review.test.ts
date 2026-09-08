@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { handleReviewRequest } from "../src/review";
+import { DEFAULT_REVIEW_PROMPT } from "../src/review-prompt";
+import { handleReviewRequest, isReviewRequestedForBot } from "../src/review";
 import type { GithubbotOptions } from "../src/types";
 
 // Non-retryable fetch so the (backgrounded) review turn settles instantly in the
@@ -37,6 +38,19 @@ const input = {
   state: stubState(),
 };
 
+describe("DEFAULT_REVIEW_PROMPT", () => {
+  test("requires evidence-backed, fingerprinted, bounded findings", () => {
+    expect(DEFAULT_REVIEW_PROMPT).toContain("Apply this evidence gate");
+    expect(DEFAULT_REVIEW_PROMPT).toContain("reachable case");
+    expect(DEFAULT_REVIEW_PROMPT).toContain("<!-- centaur-finding:");
+    expect(DEFAULT_REVIEW_PROMPT).toContain("Post at most five findings");
+    expect(DEFAULT_REVIEW_PROMPT).toContain(
+      "Do not request, re-request, or @-mention an external AI reviewer",
+    );
+    expect(DEFAULT_REVIEW_PROMPT).not.toContain("nits (optional)");
+  });
+});
+
 function reviewRequestedBody(reviewerLogin: string | null): string {
   return JSON.stringify({
     action: "review_requested",
@@ -53,6 +67,15 @@ function reviewRequestedBody(reviewerLogin: string | null): string {
 }
 
 describe("handleReviewRequest", () => {
+  test("normalizes only a direct request for this bot", async () => {
+    await expect(
+      isReviewRequestedForBot(reviewRequestedBody("Review-Bot"), input),
+    ).resolves.toBe(true);
+    await expect(
+      isReviewRequestedForBot(reviewRequestedBody("someone-else"), input),
+    ).resolves.toBe(false);
+  });
+
   test("ignores non-JSON bodies", () => {
     expect(handleReviewRequest("not json", input)).toBeNull();
   });

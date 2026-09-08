@@ -13,7 +13,6 @@ import claudeSettings from '../../../harness/claude/settings.json'
 import codexConfig from '../../../harness/codex/config.toml'
 
 const HARNESS_DISPLAY_NAMES: Record<string, string> = {
-  amp: 'Amp',
   claudecode: 'Claude Code',
   codex: 'Codex',
   nanocodex: 'Nanocodex'
@@ -69,8 +68,7 @@ const CODEX_CONFIG = codexConfig as {
 // Deployers who override the sandbox model via CLAUDE_MODEL / CODEX_MODEL
 // (sandbox.extraEnv) get the same values mirrored into slackbotv2 by the chart
 // and passed here through SlackbotV2Options.harnessDefaultModels, which takes
-// precedence. Amp has no fixed default model (deep/fast modes), so it is
-// intentionally absent.
+// precedence.
 const BAKED_DEFAULT_MODELS: Record<string, string | undefined> = {
   claudecode: typeof claudeSettings.model === 'string' ? claudeSettings.model : undefined,
   codex: typeof CODEX_CONFIG.model === 'string' ? CODEX_CONFIG.model : undefined,
@@ -109,7 +107,7 @@ function titleCase(value: string): string {
 }
 
 /**
- * Maps a harness wire value (codex | claudecode | amp) to a human display name.
+ * Maps a harness wire value (codex | claudecode) to a human display name.
  * Unknown harnesses fall back to a title-cased form of the raw value. Returns
  * undefined when no harness is provided.
  */
@@ -125,7 +123,7 @@ export function harnessDisplayName(harnessType: string | null | undefined): stri
  * the deployment-configured value (CLAUDE_MODEL / CODEX_MODEL via
  * SlackbotV2Options.harnessDefaultModels, keyed by harness wire value) when
  * set, else the model pinned in this repo's harness config files. Undefined
- * for harnesses without a fixed default (amp, unknown harnesses).
+ * for unknown harnesses without a fixed default.
  */
 export function defaultModelForHarness(
   harnessType: string | null | undefined,
@@ -231,12 +229,17 @@ export function buildSlackResponseContextBlock(params: {
   model?: string | null
   reasoning?: string | null
   serviceTier?: string | null
+  /** Render an obvious escape hatch on the first response in a thread. */
+  stopHintEnabled?: boolean
 }): SlackContextBlock | undefined {
   const url = consoleSessionUrl(params.consoleBaseUrl, params.threadKey)
   const includeMetadata = params.metadataEnabled === true
-  if (!url && !includeMetadata) return undefined
+  if (!url && !includeMetadata && params.stopHintEnabled !== true) return undefined
   const segments: string[] = []
   if (url) segments.push(`<${url}|Open chat in Console>`)
+  if (params.stopHintEnabled === true) {
+    segments.push('Reply `@Centaur stop` to cancel and mute')
+  }
   if (includeMetadata) {
     const model = params.model?.trim()
     if (model) segments.push(escapeSlackMrkdwn(model.toUpperCase()))

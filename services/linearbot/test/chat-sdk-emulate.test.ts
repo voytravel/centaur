@@ -81,7 +81,7 @@ function createTestBot(overrides: Partial<LinearbotOptions> = {}): Linearbot {
 describe("linearbot comment-thread pipeline", () => {
   // Assertions filter by this thread's own key / parent comment id: a prior
   // test's detached run can post into the shared mock servers after reset.
-  it("answers a comment @-mention with one comment (answer + collapsed CoT) on the comment-thread sandbox", async () => {
+  it("answers a comment @-mention with one concise final comment on the comment-thread sandbox", async () => {
     const threadKey = `linear:${ISSUE_ID}:c:comment-q`;
     const res = await postWebhook(
       commentCreatedPayload({
@@ -111,8 +111,8 @@ describe("linearbot comment-thread pipeline", () => {
 
     codexApi.emitOutputLines(threadKey, sampleCodexOutputLines("About a day."));
 
-    // The live comment is posted with the first thought, then finalized in
-    // place — wait for the settled answer body, not just the comment.
+    // The concise working status is finalized in place — wait for the settled
+    // answer body, not just the initial comment.
     await waitFor(() =>
       linearApi.botComments.some(
         (c) => c.parentId === "comment-q" && c.body.includes("About a day."),
@@ -123,11 +123,9 @@ describe("linearbot comment-thread pipeline", () => {
     )!;
     expect(reply.issueId).toBe(ISSUE_ID);
     expect(reply.body).toContain("About a day.");
-    expect(reply.body).toContain(">>> Chain of thought");
-    // The command renders as an inline code span, not a fenced block that
-    // would swallow the rest of the chain-of-thought list.
-    expect(reply.body).toContain("Command execution: `pnpm test`");
-    expect(reply.body).not.toContain("```");
+    expect(reply.body).not.toContain("Chain of thought");
+    expect(reply.body).not.toContain("Command execution");
+    expect(reply.body).not.toContain("pnpm test");
     // Edited in place, not re-posted: exactly one comment in this thread.
     expect(
       linearApi.botComments.filter((c) => c.parentId === "comment-q"),
@@ -135,6 +133,69 @@ describe("linearbot comment-thread pipeline", () => {
     // The vestigial session is never the surface: no session-keyed execution.
     expect(codexApi.executes.some((e) => e.threadKey.includes(":s:"))).toBe(
       false,
+    );
+  });
+
+  it("authorizes a direct mention before starting the issue-scoped policy workspace", async () => {
+    const policyEvents: Array<Record<string, unknown>> = [];
+    bot = createTestBot({
+      automationApiUrl: "http://console",
+      automationIngressToken: "automation-token",
+      fetch: async (request, init) => {
+        const url = request instanceof Request ? request.url : request.toString();
+        if (!url.startsWith("http://console/")) {
+          return globalThis.fetch(request, init);
+        }
+        const body = JSON.parse(String(init?.body)) as {
+          event?: Record<string, unknown>;
+        };
+        policyEvents.push(body.event ?? {});
+        return Response.json({
+          data: {
+            actions: [ "respond_to_mention" ],
+            decision: "act",
+            github_repository: "acme/widgets",
+            move_to_in_progress: false,
+            reason: "policy authorizes automation",
+            reviewer_logins: [],
+            reviewer_team_slugs: [],
+            session_key: `linear:${ISSUE_ID}`,
+          },
+        });
+      },
+    });
+
+    const response = await postWebhook(
+      commentCreatedPayload({
+        id: "comment-policy-mention",
+        body: "@centaur please investigate",
+      }),
+    );
+    expect(response.status).toBe(200);
+    await waitFor(() =>
+      codexApi.executes.some((execution) => execution.threadKey === `linear:${ISSUE_ID}`),
+    );
+    expect(policyEvents).toEqual([
+      expect.objectContaining({
+        deduplication_key: "linear:manual-mention:issue-1:comment-policy-mention",
+        event_action: "manual_mention",
+        linear_issue_id: ISSUE_ID,
+        mentioned_bot: true,
+      }),
+    ]);
+
+    const appendsBeforeFollowup = codexApi.appends.length;
+    await postWebhook(
+      commentCreatedPayload({
+        id: "comment-policy-followup",
+        parentId: "comment-policy-mention",
+        body: "More context for the investigation.",
+      }),
+    );
+    await waitFor(() =>
+      codexApi.appends.slice(appendsBeforeFollowup).some(
+        (append) => append.threadKey === `linear:${ISSUE_ID}`,
+      ),
     );
   });
 
@@ -190,7 +251,7 @@ describe("linearbot comment-thread pipeline", () => {
     ).toBe(false);
   });
 
-  it("reuses a persisted Codex provider on a later turn", async () => {
+  it("clears a removed direct provider on a later turn", async () => {
     const threadKey = `linear:${ISSUE_ID}:c:comment-provider`;
     await postWebhook(
       commentCreatedPayload({
@@ -225,7 +286,7 @@ describe("linearbot comment-thread pipeline", () => {
     const secondInput = JSON.parse(secondExecute.body.input_lines.at(-1)!) as {
       provider?: string;
     };
-    expect(secondInput.provider).toBe("private_responses");
+    expect(secondInput.provider).toBeUndefined();
 
     codexApi.emitOutputLines(threadKey, sampleCodexOutputLines("Two."));
     await waitFor(() =>
@@ -236,7 +297,7 @@ describe("linearbot comment-thread pipeline", () => {
     );
   });
 
-  it("posts a live 'Thinking…' comment on the first thought, then swaps it to the answer in place", async () => {
+  it("posts a concise working status, keeps streamed details private, and swaps it to the answer in place", async () => {
     const threadKey = `linear:${ISSUE_ID}:c:comment-live`;
     await postWebhook(
       commentCreatedPayload({ id: "comment-live", body: "@centaur go" }),
@@ -245,21 +306,24 @@ describe("linearbot comment-thread pipeline", () => {
       codexApi.executes.some((e) => e.threadKey === threadKey),
     );
 
-    // Stream the thinking phase only — enough to settle one chain-of-thought
-    // line, with no answer or terminal event yet.
-    codexApi.emitOutputLines(threadKey, thinkingOnlyOutputLines());
+    // The status appears before any agent output, and does not include a
+    // streamed command or thought.
     await waitFor(() =>
       linearApi.botComments.some((c) => c.parentId === "comment-live"),
     );
     const live = linearApi.botComments.find(
       (c) => c.parentId === "comment-live",
     )!;
-    expect(live.body).toContain(">>> Thinking…");
-    expect(live.body).toContain("pnpm test");
-    expect(live.body).not.toContain(">>> Chain of thought");
+    expect(live.body).toContain("I’m assessing this issue");
+    expect(live.body).not.toContain("Thinking");
+    expect(live.body).not.toContain("pnpm test");
+
+    codexApi.emitOutputLines(threadKey, activityOnlyOutputLines());
+    await Bun.sleep(25);
+    expect(live.body).not.toContain("pnpm test");
 
     // Stream the answer + terminal — the SAME comment switches to its final
-    // form (answer above a "Chain of thought" section).
+    // form without exposing the preceding activity.
     codexApi.emitOutputLines(threadKey, answerOutputLines("All set."));
     await waitFor(() =>
       linearApi.botComments.some(
@@ -271,8 +335,9 @@ describe("linearbot comment-thread pipeline", () => {
     )!;
     expect(finalReply.id).toBe(live.id);
     expect(finalReply.body).toContain("All set.");
-    expect(finalReply.body).toContain(">>> Chain of thought");
-    expect(finalReply.body).not.toContain(">>> Thinking…");
+    expect(finalReply.body).not.toContain("Chain of thought");
+    expect(finalReply.body).not.toContain("Thinking");
+    expect(finalReply.body).not.toContain("pnpm test");
     // Edited in place, never re-posted.
     expect(
       linearApi.botComments.filter((c) => c.parentId === "comment-live"),
@@ -545,7 +610,7 @@ describe("linearbot comment-thread pipeline", () => {
     )!;
     expect(reply.body).toContain("Shipped.");
     expect(reply.body).not.toContain("Linear-Status:");
-    expect(reply.body).toContain(">>> Chain of thought");
+    expect(reply.body).not.toContain("Chain of thought");
     // Terminal marker moves the assigned issue to Done.
     await waitFor(() =>
       linearApi.issueStateUpdates.some((u) => u.stateId === "st-done"),
@@ -556,7 +621,7 @@ describe("linearbot comment-thread pipeline", () => {
     ).toBe(true);
   });
 
-  it("posts a 'starting work' comment up front on assignment, then swaps it to the answer", async () => {
+  it("posts a concise working comment up front on assignment, then swaps it to the answer", async () => {
     const threadKey = `linear:${ISSUE_ID}`;
     await postWebhook(
       issueAssignmentPayload({ updatedAt: "2026-06-16T04:00:00.000Z" }),
@@ -568,8 +633,8 @@ describe("linearbot comment-thread pipeline", () => {
     const start = linearApi.botComments.find(
       (c) => c.issueId === ISSUE_ID && !c.parentId,
     )!;
-    expect(start.body).toContain("On it");
-    expect(start.body).toContain(">>> Thinking…");
+    expect(start.body).toContain("I’m assessing this issue");
+    expect(start.body).not.toContain("Thinking");
 
     codexApi.emitOutputLines(threadKey, sampleCodexOutputLines("All done."));
     await waitFor(() =>
@@ -690,6 +755,119 @@ describe("linearbot comment-thread pipeline", () => {
     ).toBe(before);
   });
 
+  it("picks up a later-ready policy issue once on its durable issue session", async () => {
+    const threadKey = `linear:${ISSUE_ID}`;
+    const policyEvents: Array<{ deduplication_key?: string }> = [];
+    bot = createTestBot({
+      automationApiUrl: "http://console",
+      automationIngressToken: "automation-token",
+      fetch: async (request, init) => {
+        const url = request instanceof Request ? request.url : request.toString();
+        if (!url.startsWith("http://console/")) {
+          return globalThis.fetch(request, init);
+        }
+        const body = JSON.parse(String(init?.body)) as {
+          event?: { deduplication_key?: string };
+        };
+        const event = body.event ?? {};
+        policyEvents.push(event);
+        const ready = event.deduplication_key?.endsWith("07:01:00.000Z") === true;
+        return Response.json({
+          data: ready
+            ? {
+                actions: [ "implement_issue" ],
+                decision: "act",
+                github_repository: "acme/widgets",
+                base_branch: "develop",
+                move_to_in_progress: false,
+                preview_label: "preview",
+                reason: "policy authorizes automation",
+                reviewer_logins: [],
+                reviewer_team_slugs: [],
+                session_key: threadKey,
+              }
+            : {
+                actions: [],
+                decision: "ignored",
+                reason: "issue description is missing",
+                session_key: threadKey,
+              },
+        });
+      },
+    });
+
+    const notReady = issueAutomationPayload({
+      updatedAt: "2026-06-16T07:00:00.000Z",
+    });
+    const notReadyResponse = await postWebhook(notReady);
+    expect(notReadyResponse.status).toBe(200);
+    await Bun.sleep(100);
+    expect(codexApi.executes).toHaveLength(0);
+    expect(policyEvents.map((event) => event.deduplication_key)).toEqual([
+      "linear:issue-1:2026-06-16T07:00:00.000Z",
+    ]);
+
+    const ready = issueAutomationPayload({
+      updatedAt: "2026-06-16T07:01:00.000Z",
+    });
+    const readyResponse = await postWebhook(ready);
+    expect(readyResponse.status).toBe(200);
+    expect(policyEvents.map((event) => event.deduplication_key)).toEqual([
+      "linear:issue-1:2026-06-16T07:00:00.000Z",
+      "linear:issue-1:2026-06-16T07:01:00.000Z",
+    ]);
+    await waitFor(() =>
+      codexApi.executes.some((execution) => execution.threadKey === threadKey),
+    );
+    expect(
+      executeInputTexts(threadKey).some((text) =>
+        text.includes("selected by an automation policy"),
+      ),
+    ).toBe(true);
+    expect(
+      executeInputTexts(threadKey).some((text) =>
+        text.includes("exact Linear issue identifier"),
+      ),
+    ).toBe(true);
+    expect(
+      executeInputTexts(threadKey).some((text) =>
+        text.includes('policy-selected default base branch is "develop"') &&
+        text.includes('pass `--base develop` to `gh pr create`'),
+      ),
+    ).toBe(true);
+    expect(
+      executeInputTexts(threadKey).some((text) =>
+        text.includes("do not use closing magic words"),
+      ),
+    ).toBe(true);
+    expect(
+      executeInputTexts(threadKey).some((text) =>
+        text.includes("configured preview label \"preview\""),
+      ),
+    ).toBe(true);
+    expect(
+      executeInputTexts(threadKey).some((text) =>
+        text.includes("Embed the screenshot inline as Markdown in the PR description"),
+      ),
+    ).toBe(true);
+    const executionsBeforeRedelivery = codexApi.executes.filter(
+      (execution) => execution.threadKey === threadKey,
+    ).length;
+
+    const redeliveryResponse = await postWebhook(ready);
+    expect(redeliveryResponse.status).toBe(200);
+    await Bun.sleep(100);
+    expect(
+      codexApi.executes.filter((execution) => execution.threadKey === threadKey)
+        .length,
+    ).toBe(executionsBeforeRedelivery);
+    expect(policyEvents.map((event) => event.deduplication_key)).toEqual([
+      "linear:issue-1:2026-06-16T07:00:00.000Z",
+      "linear:issue-1:2026-06-16T07:01:00.000Z",
+      "linear:issue-1:2026-06-16T07:01:00.000Z",
+    ]);
+  });
+
   it("settles a vestigial agent session minimally (no widget render)", async () => {
     const sessionId = "sess-settle";
     linearApi.addAgentSession({ id: sessionId, rootCommentId: "comment-x" });
@@ -741,7 +919,15 @@ describe("linearbot comment-thread pipeline", () => {
     });
     expect(response.status).toBeGreaterThanOrEqual(400);
     await Bun.sleep(50);
-    expect(codexApi.executes).toHaveLength(0);
+    // A detached run from a preceding test can still settle after the shared
+    // mock reset. The security property is that this forged webhook cannot
+    // start work for its own comment thread.
+    expect(
+      codexApi.executes.some(
+        (execution) =>
+          execution.threadKey === `linear:${ISSUE_ID}:c:comment-forged`,
+      ),
+    ).toBe(false);
   });
 });
 
@@ -889,6 +1075,24 @@ function issueAssignmentPayload(input: {
   };
 }
 
+function issueAutomationPayload(input: { updatedAt: string }) {
+  return {
+    action: "update",
+    type: "Issue",
+    createdAt: new Date().toISOString(),
+    organizationId: ORG_ID,
+    webhookTimestamp: Date.now(),
+    webhookId: "wh-automation",
+    actor: { id: USER_ID, name: "Ada Lovelace", type: "user" },
+    data: {
+      id: ISSUE_ID,
+      assigneeId: null,
+      delegateId: null,
+      updatedAt: input.updatedAt,
+    },
+  };
+}
+
 async function postWebhook(payload: unknown): Promise<Response> {
   const body = JSON.stringify(payload);
   return bot.app.request("/api/webhooks/linear", {
@@ -987,17 +1191,17 @@ function sampleCodexOutputLines(answer: string): string[] {
   ];
 }
 
-// The thinking phase only: turn start, the answer item, a reasoning delta, and a
-// completed command — enough to settle the first chain-of-thought line, with no
-// answer text or terminal event. Pair with answerOutputLines to finish the run.
-function thinkingOnlyOutputLines(): string[] {
+// The activity phase only: turn start, the answer item, a reasoning delta, and a
+// completed command, with no answer text or terminal event. Pair with
+// answerOutputLines to finish the run; the activity must remain private.
+function activityOnlyOutputLines(): string[] {
   return sampleCodexNotifications("")
     .slice(0, 5)
     .map((notification) => JSON.stringify(notification));
 }
 
 // The answer delta + terminal event that finalize a run begun with
-// thinkingOnlyOutputLines.
+// activityOnlyOutputLines.
 function answerOutputLines(answer: string): string[] {
   return [
     JSON.stringify({
@@ -1241,6 +1445,10 @@ function startFakeLinearApi(): FakeLinearApi {
           url: "https://linear.app/acme/issue/ENG-1",
           state: { name: "Todo" },
           delegate: issueDelegateId ? { id: issueDelegateId } : null,
+          team: { id: "team-1" },
+          project: { id: "project-1" },
+          labels: { nodes: [] },
+          inverseRelations: { nodes: [], pageInfo: { hasNextPage: false } },
         },
       };
     }

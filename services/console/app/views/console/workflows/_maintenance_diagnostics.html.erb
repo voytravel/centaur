@@ -1,0 +1,33 @@
+<section class="mb-8">
+  <div class="mb-3 flex flex-wrap items-end justify-between gap-2">
+    <div>
+      <h2 class="text-xs font-semibold uppercase tracking-wider text-zinc-500">Checks needing attention</h2>
+      <p class="mt-1 text-xs text-zinc-500">
+        These messages explain runs whose outcome could not be confirmed. They are not approval requests.
+      </p>
+    </div>
+    <% if maintenance_run_detail["run_id"].present? %>
+      <span class="font-mono text-xs text-zinc-600" title="<%= maintenance_run_detail["run_id"] %>">
+        run <%= truncate_middle(maintenance_run_detail["run_id"], max: 28) %>
+      </span>
+    <% end %>
+  </div>
+
+  <div class="grid gap-3 xl:grid-cols-2">
+    <% diagnostics.each do |diagnostic| %>
+      <article class="console-panel border border-red-500/25 p-4">
+        <p class="text-sm font-medium text-zinc-100"><%= diagnostic.title %></p>
+        <p class="mt-1 text-xs text-zinc-400"><%= diagnostic.repository %></p>
+        <p class="mt-3 text-xs text-red-300"><%= diagnostic.detail %></p>
+        <div class="mt-3 flex flex-wrap gap-3 text-xs">
+          <%= link_to "Recent PRs", "https://github.com/#{diagnostic.repository}/pulls?q=is%3Apr+sort%3Aupdated-desc", class: "text-zinc-400 underline hover:text-zinc-100", target: "_blank", rel: "noopener noreferrer" %>
+          <%= link_to "Commits and merges", "https://github.com/#{diagnostic.repository}/activity", class: "text-zinc-400 underline hover:text-zinc-100", target: "_blank", rel: "noopener noreferrer" %>
+        </div>
+        <details class="mt-4 text-xs text-zinc-500">
+          <summary class="cursor-pointer">Technical detail</summary>
+          <p class="mt-1 font-mono"><%= diagnostic.code %></p>
+        </details>
+      </article>
+    <% end %>
+  </div>
+</section>

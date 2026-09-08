@@ -280,6 +280,60 @@ describe('session event streaming', () => {
     expect(seenEventIds).toEqual([1, 2])
   })
 
+  test('terminal-only streams skip historical harness output and wait for the durable result', async () => {
+    const harnessTerminal = JSON.stringify({
+      method: 'turn/completed',
+      params: { threadId: 'thread-1', turn: { status: 'completed' } }
+    })
+    const encoded = new TextEncoder().encode(
+      [
+        'id: 1',
+        'event: session.output.line',
+        `data: ${harnessTerminal}`,
+        '',
+        'id: 2',
+        'event: session.activity_summary',
+        'data: {"summary":"historical progress"}',
+        '',
+        'id: 3',
+        'event: session.execution_completed',
+        'data: {"result_text":"bounded durable answer"}',
+        '',
+      ].join('\n')
+    )
+    const fetchFn: SlackbotV2Options['fetch'] = async () =>
+      new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(encoded)
+            controller.close()
+          }
+        }),
+        { headers: { 'content-type': 'text/event-stream' } }
+      )
+    const seenEventIds: number[] = []
+
+    const stream = await openSessionEventStream(options(fetchFn), {
+      afterEventId: 0,
+      executionId: 'exec-1',
+      onEventId: eventId => seenEventIds.push(eventId),
+      terminalOnly: true,
+      threadId: 'slack:C1:1700000000.000100'
+    })
+    const events = []
+    for await (const event of stream) events.push(event)
+
+    expect(events).toEqual([
+      expect.objectContaining({
+        data: { result_text: 'bounded durable answer' },
+        event: 'session.execution_completed',
+        eventId: 3,
+        eventKind: 'session.execution_completed'
+      })
+    ])
+    expect(seenEventIds).toEqual([1, 2, 3])
+  })
+
   test('uses interrupted wording for cancelled executions without error text', async () => {
     const encoded = new TextEncoder().encode(
       [

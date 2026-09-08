@@ -34,6 +34,15 @@
             "oauthAppSlug": { "type": "string" }
           }
         },
+        "githubAppInstallation": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "existingSecretName": { "type": "string" },
+            "privateKeySecretKey": { "type": "string" },
+            "privateKeyMountPath": { "type": "string" }
+          }
+        },
         "service": {
           "type": "object",
           "properties": {
@@ -194,26 +203,6 @@
               "personasSubdir": { "type": "string" }
             },
             "required": ["repo"]
-          }
-        }
-      }
-    },
-    "codex": {
-      "type": "object",
-      "properties": {
-        "customProviders": {
-          "type": "object",
-          "propertyNames": { "pattern": "^[a-z][a-z0-9_-]*$" },
-          "additionalProperties": {
-            "type": "object",
-            "properties": {
-              "name": { "type": "string", "minLength": 1 },
-              "baseUrl": { "type": "string", "pattern": "^https://" },
-              "apiKeyEnv": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]*$" },
-              "defaultModel": { "type": "string", "minLength": 1 }
-            },
-            "required": ["name", "baseUrl", "apiKeyEnv"],
-            "additionalProperties": false
           }
         }
       }
@@ -437,6 +426,16 @@
           "type": "string",
           "enum": ["first", "always", "never"]
         },
+        "continueThreadReplies": { "type": "boolean" },
+        "threadReplyMode": {
+          "type": "string",
+          "enum": ["", "mentions_only", "actionable", "all"]
+        },
+        "streamTaskDisplayMode": {
+          "type": "string",
+          "enum": ["", "none", "plan", "timeline"]
+        },
+        "visionModel": { "type": "string" },
         "responseServiceTierEnabled": { "type": "boolean" },
         "metrics": {
           "type": "object",

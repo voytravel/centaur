@@ -48,6 +48,17 @@ export function stringValue(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
+/**
+ * GitHub exposes an App actor as `<slug>[bot]`, but users invoke it in comment
+ * markdown as `@<slug>`. Keep the full actor login for API identity checks and
+ * use this form only where Chat parses human-authored text mentions.
+ */
+export function githubTextMentionName(userName: string): string {
+  const trimmed = userName.trim();
+  const normalized = trimmed.replace(/\[bot\]$/i, "");
+  return normalized || trimmed;
+}
+
 export function isJsonObject(value: unknown): value is JsonObject {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }

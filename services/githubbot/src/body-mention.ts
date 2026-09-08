@@ -1,15 +1,27 @@
 import { resolveAllowedAuthorAssociations } from "./authorization";
 import { backgroundWaitUntil } from "./context";
-import { buildCommentReplyBody } from "./comment-bot";
+import { buildWorkingReplyBody } from "./comment-bot";
 import type { PrManagerContext } from "./pr-manager";
 import { reactWorkingOnSubject, settleSubjectReaction } from "./reactions";
-import { githubContextPreamble, runTurnStream } from "./turn";
+import {
+  buildTurnPublicReply,
+  githubContextPreamble,
+  githubTurnPreamble,
+  runTurnStream,
+} from "./turn";
 import type {
   ForwardSessionInput,
   GithubbotApiMessage,
   GithubbotTrace,
 } from "./types";
-import { errorMessage, noopLogger, nowMs, stringValue, traceLog } from "./utils";
+import {
+  errorMessage,
+  githubTextMentionName,
+  noopLogger,
+  nowMs,
+  stringValue,
+  traceLog,
+} from "./utils";
 
 /**
  * The adapter only surfaces issue/PR *comments*, so an @-mention written into the
@@ -98,10 +110,22 @@ export function handleBodyMention(
       subject: `${repo.owner}/${repo.repo}#${number}`,
     });
     await reactWorkingOnSubject(ctx.octokit, repo.owner, repo.repo, number, logger);
+    try {
+      await ctx.octokit.rest.issues.createComment({
+        owner: repo.owner,
+        repo: repo.repo,
+        issue_number: number,
+        body: buildWorkingReplyBody(),
+      });
+    } catch (error) {
+      logger.warn("githubbot_body_mention_acknowledgement_failed", {
+        error: errorMessage(error),
+      });
+    }
 
     const forwardInput: ForwardSessionInput = {
       afterEventId: 0,
-      contextPreamble: githubContextPreamble(threadKey),
+      contextPreamble: githubTurnPreamble(githubContextPreamble(threadKey)),
       conversationName: `${repo.owner}/${repo.repo}#${number}`,
       executeMessage: bodyMentionMessage(threadKey, number, body),
       messages: [],
@@ -113,22 +137,13 @@ export function handleBodyMention(
     };
 
     const result = await runTurnStream(options, forwardInput);
-    const reply = result.failed
-      ? buildCommentReplyBody({
-          answer: `⚠️ I ran into an error before finishing:\n\n${result.errorText || "unknown error"}`,
-          cotLines: result.cotLines,
-        })
-      : buildCommentReplyBody({
-          answer: result.answer,
-          cotLines: result.cotLines,
-          fallback: result.fallbackText,
-        });
+    const publicReply = buildTurnPublicReply(options, trace, result);
     try {
       await ctx.octokit.rest.issues.createComment({
         owner: repo.owner,
         repo: repo.repo,
         issue_number: number,
-        body: reply,
+        body: publicReply.body,
       });
     } catch (error) {
       logger.warn("githubbot_body_mention_reply_failed", {
@@ -150,10 +165,17 @@ const BODY_MENTION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
 /** Whether `body` contains a standalone @-mention of `userName` (case-insensitive). */
 export function mentionsBot(body: string, userName: string): boolean {
-  const escaped = userName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return new RegExp(`(^|[^a-zA-Z0-9_/-])@${escaped}(?![a-zA-Z0-9_-])`, "i").test(
-    body,
-  );
+  // A GitHub App's API actor is `<slug>[bot]`, while normal Markdown uses
+  // `@<slug>`. Accept both here so an older stored/configured actor name never
+  // prevents a valid App mention in a newly opened issue or pull request.
+  return [userName, githubTextMentionName(userName)]
+    .filter((candidate, index, candidates) => candidate && candidates.indexOf(candidate) === index)
+    .some((candidate) => {
+      const escaped = candidate.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      return new RegExp(`(^|[^a-zA-Z0-9_/-])@${escaped}(?![a-zA-Z0-9_-])`, "i").test(
+        body,
+      );
+    });
 }
 
 function bodyMentionMessage(

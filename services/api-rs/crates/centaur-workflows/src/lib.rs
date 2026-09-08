@@ -869,24 +869,35 @@ impl WorkflowRuntime {
         &self,
         limit: i64,
         workflow_name: Option<&str>,
+        idempotency_key: Option<&str>,
     ) -> Result<Vec<WorkflowRun>, WorkflowRuntimeError> {
         let limit = list_runs_limit(limit);
         let mut runs = Vec::new();
         runs.extend(
-            self.list_runs_for_queue(WORKFLOW_QUEUE, limit, workflow_name)
+            self.list_runs_for_queue(WORKFLOW_QUEUE, limit, workflow_name, idempotency_key)
                 .await?,
         );
         runs.extend(
-            self.list_runs_for_queue(WORKFLOW_SLACK_LIVE_QUEUE, limit, workflow_name)
+            self.list_runs_for_queue(
+                WORKFLOW_SLACK_LIVE_QUEUE,
+                limit,
+                workflow_name,
+                idempotency_key,
+            )
+            .await?,
+        );
+        runs.extend(
+            self.list_runs_for_queue(WORKFLOW_ETL_QUEUE, limit, workflow_name, idempotency_key)
                 .await?,
         );
         runs.extend(
-            self.list_runs_for_queue(WORKFLOW_ETL_QUEUE, limit, workflow_name)
-                .await?,
-        );
-        runs.extend(
-            self.list_runs_for_queue(WORKFLOW_ETL_BACKFILL_QUEUE, limit, workflow_name)
-                .await?,
+            self.list_runs_for_queue(
+                WORKFLOW_ETL_BACKFILL_QUEUE,
+                limit,
+                workflow_name,
+                idempotency_key,
+            )
+            .await?,
         );
         runs.sort_by(|a, b| {
             b.created_at
@@ -902,6 +913,7 @@ impl WorkflowRuntime {
         queue_name: &str,
         limit: i64,
         workflow_name: Option<&str>,
+        idempotency_key: Option<&str>,
     ) -> Result<Vec<WorkflowRun>, WorkflowRuntimeError> {
         let (task_table, run_table) = absurd_queue_tables(queue_name)?;
         let rows = sqlx::query(&format!(
@@ -923,12 +935,14 @@ impl WorkflowRuntime {
                 $2::text is null
                 or coalesce(t.params->>'workflow_name', '{WORKFLOW_TASK}') = $2
             )
+            and ($3::text is null or t.idempotency_key = $3)
             order by t.enqueue_at desc, t.task_id desc
             limit $1
             "#,
         ))
         .bind(limit)
         .bind(workflow_name)
+        .bind(idempotency_key)
         .fetch_all(self.inner.client.pool())
         .await?;
 

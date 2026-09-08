@@ -1,9 +1,14 @@
 import { describe, expect, test } from "bun:test";
 import {
+  classifyTurnFailure,
+  buildTurnPublicReply,
+  GithubRenderFallback,
   githubContextPreamble,
+  githubTurnPreamble,
   parseGithubThreadKey,
   reviewCommentContextFromRaw,
 } from "../src/turn";
+import type { GithubbotOptions } from "../src/types";
 
 describe("parseGithubThreadKey", () => {
   test("parses a PR-level thread key", () => {
@@ -81,6 +86,20 @@ describe("githubContextPreamble", () => {
     expect(preamble).toContain("gh pr diff 123");
   });
 
+  test("manual conflict repair turns require an actual branch repair", () => {
+    const preamble = githubContextPreamble(
+      "github:0xSplits/centaur:123",
+      undefined,
+      "resolve_conflict",
+    );
+    expect(preamble).toContain("explicit, authorized repair request");
+    expect(preamble).toContain("Resolve the merge conflict");
+    expect(preamble).toContain("commit and push the repair");
+    expect(preamble).toContain("Do not stop at diagnosis");
+    expect(preamble).toContain("⚠️ Human review needed — merge conflict");
+    expect(preamble).toContain("Do not leave only a generic blocked message");
+  });
+
   test("issue thread: uses issue wording", () => {
     const preamble = githubContextPreamble("github:0xSplits/centaur:issue:42");
     expect(preamble).toContain("issue 0xSplits/centaur#42");
@@ -99,5 +118,100 @@ describe("githubContextPreamble", () => {
 
   test("returns undefined for an unparseable key", () => {
     expect(githubContextPreamble("not-a-github-key")).toBeUndefined();
+  });
+
+  test("adds a concise public-response and CI-verification contract", () => {
+    const preamble = githubTurnPreamble("Inspect the pull request.");
+    expect(preamble).toContain("Public GitHub response contract:");
+    expect(preamble).toContain("do not narrate intermediate reasoning");
+    expect(preamble).toContain("compact Markdown update");
+    expect(preamble).toContain("detailed nit lists");
+    expect(preamble).toContain("closest local equivalent");
+    expect(preamble).toContain("monitor checks for the new head");
+    expect(preamble).toContain("Try the documented whole-stack or local-application flow");
+    expect(preamble).toContain("Put it inline in the PR description or a PR comment");
+    expect(preamble).toContain("Do not leave it only as an attachment");
+  });
+
+  test("forbids conversational turns from triggering external AI reviewers", () => {
+    const preamble = githubTurnPreamble("Inspect the pull request.");
+    expect(preamble).toContain("External GitHub AI reviewer guard:");
+    expect(preamble).toContain("configured internal Codex and Claude reviewer profiles");
+    expect(preamble).toContain("Do not request, re-request, @-mention");
+    expect(preamble).toContain("gh pr edit --add-reviewer");
+  });
+});
+
+describe("GithubRenderFallback", () => {
+  test("captures the canonical terminal result for the public reply", async () => {
+    const fallback = new GithubRenderFallback();
+    async function* source() {
+      yield {
+        eventKind: "session.execution_completed",
+        data: { result_text: "Pushed the fix; CI is running." },
+      };
+    }
+
+    const forwarded: unknown[] = [];
+    for await (const event of fallback.collectSource(source())) {
+      forwarded.push(event);
+    }
+
+    expect(forwarded).toHaveLength(1);
+    expect(fallback.text()).toBe("Pushed the fix; CI is running.");
+  });
+});
+
+describe("classifyTurnFailure", () => {
+  test("permits fallback only for provider or capability failures", () => {
+    expect(classifyTurnFailure("HTTP 503 Service Unavailable")).toBe("provider_unavailable");
+    expect(classifyTurnFailure("TypeError: fetch failed")).toBe("provider_unavailable");
+    expect(classifyTurnFailure("glm-5.3 is not a multimodal model")).toBe("unsupported_capability");
+  });
+
+  test("keeps credential, cancellation, and ambiguous failures fail-closed", () => {
+    expect(classifyTurnFailure("401 Unauthorized: invalid API key")).toBe("credential");
+    expect(classifyTurnFailure("execution cancelled by caller")).toBe("cancelled");
+    expect(classifyTurnFailure("unexpected result")).toBe("unknown");
+  });
+});
+
+describe("buildTurnPublicReply", () => {
+  test("records a missing structured summary without logging its content", () => {
+    const entries: Array<{ event: string; fields: Record<string, unknown> }> = [];
+    const logger = {
+      debug: () => undefined,
+      info(event: string, fields: Record<string, unknown>) {
+        entries.push({ event, fields });
+      },
+      warn: () => undefined,
+      error: () => undefined,
+      child: () => logger,
+    };
+    const options = {
+      apiUrl: "http://console.test",
+      logger,
+      webhookSecret: "test",
+    } satisfies GithubbotOptions;
+    const reply = buildTurnPublicReply(
+      options,
+      {
+        includeContext: false,
+        messageId: "message-1",
+        mode: "execute",
+        openStream: true,
+        startedAtMs: 0,
+        threadId: "github:owner/repo:1",
+      },
+      { failed: false, fallbackText: "unmarked terminal result" },
+    );
+
+    expect(reply.summaryAvailable).toBe(false);
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({
+      event: "githubbot_public_summary_unavailable",
+      fields: { terminal_result_available: true },
+    });
+    expect(JSON.stringify(entries)).not.toContain("unmarked terminal result");
   });
 });

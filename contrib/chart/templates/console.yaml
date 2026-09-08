@@ -127,10 +127,6 @@ spec:
                   name: {{ $secretEnv }}
                   key: {{ printf "%sSLACK_BOT_TOKEN" $prefix }}
                   optional: true
-{{- if .Values.codex.customProviders }}
-            - name: CODEX_CUSTOM_PROVIDERS
-              value: {{ .Values.codex.customProviders | toJson | quote }}
-{{- end }}
 {{- range $name := tuple "CLAUDE_MODEL" "CODEX_MODEL" }}
 {{- if hasKey $.Values.sandbox.extraEnv $name }}
             # Mirror the deployer's harness default-model override
@@ -186,9 +182,23 @@ spec:
             # matches regardless of what Host the sync request carried.
             - name: CENTAUR_CONSOLE_URL
               value: {{ include "centaur.consoleUrl" . | quote }}
+{{- if .Values.automation.enabled }}
+            # Single-purpose credential for verified platform ingress services
+            # to submit normalized automation events. This is not an operator
+            # Console API key and is accepted only by the internal endpoint.
+            - name: CENTAUR_AUTOMATION_INGRESS_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secretEnv }}
+                  key: {{ printf "%sCENTAUR_AUTOMATION_INGRESS_TOKEN" $prefix }}
+{{- end }}
 {{- if $console.publicUrl }}
             - name: CENTAUR_CONSOLE_PUBLIC_URL
               value: {{ $console.publicUrl | quote }}
+{{- end }}
+{{- if $console.sandboxUrl }}
+            - name: CENTAUR_CONSOLE_SANDBOX_URL
+              value: {{ $console.sandboxUrl | quote }}
 {{- end }}
 {{- with $console.allowedHosts }}
             - name: CENTAUR_CONSOLE_ALLOWED_HOSTS
@@ -324,6 +334,16 @@ spec:
         - podSelector:
             matchLabels:
               centaur.ai/iron-proxy: "true"
+{{- if and .Values.automation.enabled .Values.githubbot.enabled }}
+        - podSelector:
+            matchLabels:
+{{ include "centaur.componentSelectorLabels" (dict "root" . "component" "githubbot") | nindent 14 }}
+{{- end }}
+{{- if and .Values.automation.enabled .Values.linearbot.enabled }}
+        - podSelector:
+            matchLabels:
+{{ include "centaur.componentSelectorLabels" (dict "root" . "component" "linearbot") | nindent 14 }}
+{{- end }}
 {{- if $console.ingress.enabled }}
         # Ingress controller pods (Tailscale operator, Cloudflare, ...)
         # forwarding external traffic to console.

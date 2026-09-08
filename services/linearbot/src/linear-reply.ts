@@ -62,8 +62,8 @@ export async function postIssueReply(
 }
 
 /**
- * Edits an already-posted comment in place — used to update the live "Thinking…"
- * reply as the run streams and to swap it to the final answer when it settles.
+ * Edits an already-posted comment in place — used to replace the concise
+ * working status with the final answer when a run settles.
  * No-op when the client lacks the raw GraphQL escape hatch; best-effort.
  */
 export async function updateIssueReply(

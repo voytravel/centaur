@@ -20,8 +20,7 @@ use centaur_iron_control::{
     SessionRegistrar, register_role,
 };
 use centaur_iron_proxy::{
-    ProxyFragment, SourceKind, SourcePolicy, bedrock_enabled, custom_provider_auth_fragments,
-    harness_auth_fragment, infra_fragment,
+    ProxyFragment, SourceKind, SourcePolicy, harness_auth_fragment, infra_fragment,
 };
 use centaur_sandbox_agent_k8s::{
     AgentSandboxBackend, AgentSandboxConfig, GitHubTokenRef, IronControlSettings, IronProxyConfig,
@@ -680,6 +679,15 @@ struct SandboxArgs {
         env = "SESSION_SANDBOX_RUNTIME_CLASS_NAME"
     )]
     runtime_class_name: Option<String>,
+    /// `priorityClassName` for sandbox and iron-proxy pods. Giving sandbox
+    /// workloads a dedicated (low) PriorityClass lets the cluster scope a
+    /// ResourceQuota to them and evict/preempt them before the control plane.
+    /// The chart renders `sandbox.priorityClassName` into this.
+    #[arg(
+        long = "session-sandbox-priority-class-name",
+        env = "SESSION_SANDBOX_PRIORITY_CLASS_NAME"
+    )]
+    priority_class_name: Option<String>,
     #[command(flatten)]
     tools: ToolDiscoveryArgs,
     #[command(flatten)]
@@ -1017,10 +1025,10 @@ impl SandboxArgs {
 
         // Inject the infra/harness placeholder credentials so env-based
         // consumers send the proxy_value iron-proxy replaces with the real
-        // secret: codex's OPENAI_API_KEY (api_key mode -> codex logs in and
-        // hits OPENAI_BASE_URL (api.openai.com by default) instead of falling
-        // back to the ChatGPT auth.json), git/gh's GITHUB_TOKEN, the slack tool's
-        // SLACK_BOT_TOKEN, and the rest of the infra set.
+        // secret: codex's OPENAI_API_KEY (api_key mode -> the entrypoint
+        // configures Codex's OpenAI-compatible provider from OPENAI_BASE_URL,
+        // avoiding a fallback to the ChatGPT auth.json), git/gh's GITHUB_TOKEN,
+        // the slack tool's SLACK_BOT_TOKEN, and the rest of the infra set.
         for (name, value) in self.iron_proxy.sandbox_placeholder_env()? {
             if !envs.iter().any(|(existing, _)| existing == &name) {
                 envs.push((name, value));
@@ -1032,30 +1040,6 @@ impl SandboxArgs {
                 .any(|(existing, _)| existing == "OPENAI_API_KEY")
         {
             envs.push(("OPENAI_API_KEY".to_owned(), "OPENAI_API_KEY".to_owned()));
-        }
-        if !envs
-            .iter()
-            .any(|(existing, _)| existing == "OPENROUTER_API_KEY")
-        {
-            envs.push((
-                "OPENROUTER_API_KEY".to_owned(),
-                "OPENROUTER_API_KEY".to_owned(),
-            ));
-        }
-        if !envs
-            .iter()
-            .any(|(existing, _)| existing == "META_AI_API_KEY")
-        {
-            envs.push(("META_AI_API_KEY".to_owned(), "META_AI_API_KEY".to_owned()));
-        }
-        // When Bedrock is enabled, codex's `amazon-bedrock` provider signs with
-        // these placeholder AWS credentials and iron-proxy re-signs (SigV4) with
-        // the real IAM keys. `aws_auth` is not a `secrets` transform, so the
-        // placeholders are injected here rather than via sandbox_placeholder_env.
-        for (name, value) in centaur_iron_proxy::bedrock_sandbox_env() {
-            if !envs.iter().any(|(existing, _)| existing == &name) {
-                envs.push((name, value));
-            }
         }
 
         // OTLP trace wiring rides from this process into every sandbox (the
@@ -1232,6 +1216,16 @@ impl SandboxArgs {
 
     fn workflow_host_env_template(&self) -> Result<Vec<(String, String)>, ServerError> {
         let mut envs = vec![("CENTAUR_API_URL".to_owned(), self.centaur_api_url())];
+
+        // A public Console URL is non-secret deployment metadata. Supplying it
+        // to the trusted workflow host lets a deterministic workflow report
+        // link back to its durable approval record without exposing a Console
+        // credential to an agent session.
+        if let Ok(console_public_url) = env::var("CENTAUR_CONSOLE_PUBLIC_URL")
+            && let Some(value) = clean_optional_value(Some(console_public_url.as_str()))
+        {
+            envs.push(("CENTAUR_CONSOLE_PUBLIC_URL".to_owned(), value));
+        }
 
         for (name, value) in self.iron_proxy.sandbox_placeholder_env()? {
             envs.push((name, value));
@@ -1470,6 +1464,12 @@ impl TryFrom<&SandboxArgs> for AgentSandboxConfig {
             .map(str::trim)
             .filter(|name| !name.is_empty())
             .map(str::to_owned);
+        config.priority_class_name = args
+            .priority_class_name
+            .as_deref()
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .map(str::to_owned);
         config.ready_timeout = Duration::from_secs(args.ready_timeout_secs);
         let mut proxy = args.iron_proxy.to_config()?;
         let mut fragments = vec![args.iron_proxy.infra_fragment()?];
@@ -1685,6 +1685,14 @@ struct IronProxyArgs {
         value_delimiter = ','
     )]
     upstream_deny_cidrs: Vec<String>,
+    /// Optional public Console URL used only by sandbox entitlement tools.
+    /// Keep iron-control on its private URL; a sandbox request is routed through
+    /// iron-proxy, which intentionally denies private Kubernetes CIDRs.
+    #[arg(
+        long = "kubernetes-iron-proxy-sandbox-console-url",
+        env = "KUBERNETES_IRON_PROXY_SANDBOX_CONSOLE_URL"
+    )]
+    sandbox_console_url: Option<String>,
     /// Per-sandbox iron-proxy container resources as a JSON Kubernetes
     /// `ResourceRequirements` object.
     #[arg(
@@ -1730,6 +1738,7 @@ impl IronProxyArgs {
             .filter_map(|cidr| non_empty(Some(cidr.as_str())))
             .map(ToOwned::to_owned)
             .collect();
+        config.sandbox_console_url = clean_optional_value(self.sandbox_console_url.as_deref());
         self.source.apply_to_config(&mut config);
         config.fragments = harness_fragments;
         config.env_from_secret_names = self.env_from_secret_names();
@@ -1958,23 +1967,6 @@ impl IronProxyHarnessArgs {
             {
                 fragments.push(fragment);
             }
-        }
-        if let Some(fragment) = harness_auth_fragment("openrouter", "api_key")? {
-            fragments.push(fragment);
-        }
-        if let Some(fragment) = harness_auth_fragment("meta-ai", "api_key")? {
-            fragments.push(fragment);
-        }
-        if let Ok(raw) = env::var("CODEX_CUSTOM_PROVIDERS") {
-            fragments.extend(custom_provider_auth_fragments(&raw)?);
-        }
-        // Bedrock is opt-in (not the default codex provider): only register its
-        // SigV4 re-signing fragment when the operator has set CODEX_BEDROCK_REGION,
-        // since the fragment expects AWS keys in the secrets backend.
-        if bedrock_enabled()
-            && let Some(fragment) = harness_auth_fragment("amazon-bedrock", "api_key")?
-        {
-            fragments.push(fragment);
         }
         Ok(fragments)
     }
@@ -2619,6 +2611,7 @@ mod tests {
             ),
             ("SLACK_ETL_ENABLED", "true"),
             ("SLACK_BACKFILL_ENABLED", "true"),
+            ("CENTAUR_CONSOLE_PUBLIC_URL", "https://console.example.test"),
         ]);
         let args = Args::try_parse_from([
             "centaur-api-server",
@@ -2639,6 +2632,13 @@ mod tests {
                 .find(|env| env.name == "CENTAUR_API_URL")
                 .map(|env| env.value.as_str()),
             Some("http://centaur-api-rs:8080")
+        );
+        assert_eq!(
+            spec.env
+                .iter()
+                .find(|env| env.name == "CENTAUR_CONSOLE_PUBLIC_URL")
+                .map(|env| env.value.as_str()),
+            Some("https://console.example.test")
         );
         assert_eq!(
             spec.env
@@ -2701,8 +2701,8 @@ mod tests {
             name == "OPENAI_BASE_URL" && value == "https://compatible-api.example/v1"
         }));
         // api_key mode (the default) injects the placeholder the egress proxy
-        // replaces, so codex logs in and hits api.openai.com instead of
-        // falling back to the ChatGPT auth.json.
+        // replaces, so Codex's configured gateway provider does not fall back
+        // to the ChatGPT auth.json.
         assert!(
             env.iter()
                 .any(|(name, value)| name == "OPENAI_API_KEY" && value == "OPENAI_API_KEY")
@@ -2715,14 +2715,8 @@ mod tests {
             env.iter()
                 .any(|(name, value)| name == SLACK_BOT_TOKEN_ENV && value == SLACK_BOT_TOKEN_ENV)
         );
-        assert!(
-            env.iter()
-                .any(|(name, value)| name == "OPENROUTER_API_KEY" && value == "OPENROUTER_API_KEY")
-        );
-        assert!(
-            env.iter()
-                .any(|(name, value)| name == "META_AI_API_KEY" && value == "META_AI_API_KEY")
-        );
+        assert!(env.iter().all(|(name, _)| name != "OPENROUTER_API_KEY"));
+        assert!(env.iter().all(|(name, _)| name != "META_AI_API_KEY"));
         assert!(env.iter().all(|(name, _)| name != "NOUS_API_KEY"));
     }
 
@@ -2739,6 +2733,7 @@ mod tests {
                 {"name":"OTEL_EXPORTER_OTLP_TRACES_ENDPOINT","value":"http://laminar-app-server.laminar.svc.cluster.local:8000/v1/traces"},
                 {"name":"OTEL_SERVICE_NAME","value":"codex"},
                 {"name":"CODEX_AUTH_MODE","value":"chatgpt"},
+                {"name":" TOOL_ALLOWLIST ","value":123},
                 {"name":"NULL_VALUE"},
                 {"name":"  ","value":"skipped"},
                 {"name":"BAD=NAME","value":"skipped"}
@@ -2760,6 +2755,8 @@ mod tests {
         assert_eq!(value("OTEL_SERVICE_NAME"), Some("codex"));
         // Operator extra env overrides template defaults.
         assert_eq!(value("CODEX_AUTH_MODE"), Some("chatgpt"));
+        // Names are trimmed and non-string values use their JSON representation.
+        assert_eq!(value("TOOL_ALLOWLIST"), Some("123"));
         // Null values become empty strings; invalid names are dropped.
         assert_eq!(value("NULL_VALUE"), Some(""));
         assert!(!env.iter().any(|(name, _)| name == "BAD=NAME"));
@@ -2833,6 +2830,8 @@ mod tests {
             r#"[{"key":"example.com/sandbox","operator":"Exists","effect":"NoSchedule"}]"#,
             "--session-sandbox-runtime-class-name",
             "gvisor",
+            "--session-sandbox-priority-class-name",
+            "centaur-sandbox",
         ])
         .unwrap();
 
@@ -2842,6 +2841,10 @@ mod tests {
         );
         assert_eq!(args.sandbox.tolerations().unwrap().len(), 1);
         assert_eq!(args.sandbox.runtime_class_name.as_deref(), Some("gvisor"));
+        assert_eq!(
+            args.sandbox.priority_class_name.as_deref(),
+            Some("centaur-sandbox")
+        );
     }
 
     #[test]
@@ -2855,6 +2858,7 @@ mod tests {
 
         assert!(args.sandbox.node_selector().unwrap().is_empty());
         assert!(args.sandbox.tolerations().unwrap().is_empty());
+        assert!(args.sandbox.priority_class_name.is_none());
     }
 
     /// Unlike `SESSION_SANDBOX_EXTRA_ENV`, bad node steering fails startup:
@@ -3036,6 +3040,8 @@ mod tests {
             "centaur-firewall-ca-key",
             "--kubernetes-iron-proxy-upstream-deny-cidrs",
             "127.0.0.0/8,10.42.0.0/16,10.43.0.0/16",
+            "--kubernetes-iron-proxy-sandbox-console-url",
+            "https://console.example.test",
         ])
         .unwrap();
 
@@ -3047,6 +3053,10 @@ mod tests {
                 "10.42.0.0/16".to_owned(),
                 "10.43.0.0/16".to_owned(),
             ]
+        );
+        assert_eq!(
+            config.sandbox_console_url.as_deref(),
+            Some("https://console.example.test")
         );
     }
 

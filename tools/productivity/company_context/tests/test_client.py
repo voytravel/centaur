@@ -177,6 +177,20 @@ def test_postgres_database_name_uses_default_for_blank_override(monkeypatch):
     assert company_context_client._postgres_database_name() == "ai_v2"
 
 
+def test_openai_client_kwargs_uses_the_configured_gateway(monkeypatch):
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://litellm.example/v1")
+
+    assert company_context_client._openai_client_kwargs() == {
+        "base_url": "https://litellm.example/v1"
+    }
+
+
+def test_openai_client_kwargs_omits_a_blank_gateway(monkeypatch):
+    monkeypatch.setenv("OPENAI_BASE_URL", " ")
+
+    assert company_context_client._openai_client_kwargs() == {}
+
+
 @pytest.mark.parametrize("sql", ["", "   "])
 def test_query_rejects_empty_sql(sql):
     result = CompanyContextClient("postgresql://example").query(sql)

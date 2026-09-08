@@ -1,0 +1,173 @@
+<% content_for :title, "Automations · Centaur Console" %>
+
+<%= render "console/page_header",
+           title: "Repository Automations",
+           subtitle: "Policy-gated GitHub and Linear work that continues on one durable PR or issue workstream.",
+           icon: "workflow",
+           actions: link_to("New policy", new_console_automation_policy_path, class: "btn-primary") %>
+
+<section class="space-y-6">
+  <div class="console-panel overflow-hidden">
+    <table class="console-table">
+      <thead class="console-table-head">
+        <tr>
+          <th class="console-th">Policy</th>
+          <th class="console-th">Scope</th>
+          <th class="console-th">Behavior</th>
+          <th class="console-th">Mode</th>
+          <th class="console-th"><span class="sr-only">Actions</span></th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-ink-700">
+        <% if @policies.empty? %>
+          <tr>
+            <td colspan="5" class="px-5 py-10 text-center text-zinc-600">
+              No automation policies yet. Start in observe mode to see what would run.
+            </td>
+          </tr>
+        <% end %>
+        <% @policies.each do |policy| %>
+          <tr class="console-row-hover align-top">
+            <td class="console-td">
+              <div class="font-medium text-zinc-100"><%= policy.name %></div>
+              <% if policy.source_managed? %>
+                <div class="mt-1 text-xs text-zinc-500">
+                  <span class="rounded border border-violet-400/40 bg-violet-400/10 px-1.5 py-0.5 text-violet-200">managed in source</span>
+                  <% if (source_url = policy.safe_managed_source_url) %>
+                    <%= link_to policy.managed_source_label, source_url,
+                                target: "_blank", rel: "noopener noreferrer", class: "console-link ml-1 font-mono" %>
+                  <% else %>
+                    <span class="ml-1 font-mono"><%= policy.managed_source_label %></span>
+                  <% end %>
+                </div>
+                <div class="mt-1 text-xs text-zinc-600">Change the reviewed source and deploy; Console does not mutate this scope.</div>
+              <% else %>
+                <div class="mt-1 text-xs text-zinc-600"><%= policy.provider.capitalize %> · created by <%= policy.created_by.email %></div>
+              <% end %>
+            </td>
+            <td class="console-td font-mono text-xs text-zinc-300"><%= policy.scope_label %></td>
+            <td class="console-td text-xs text-zinc-400"><%= policy.automation_summary %></td>
+            <td class="console-td text-xs">
+              <% if !policy.enabled? %>
+                <span class="rounded border border-zinc-700 px-2 py-1 text-zinc-500">disabled</span>
+              <% elsif policy.mode == "act" %>
+                <span class="rounded border border-amber-400/40 bg-amber-400/10 px-2 py-1 text-amber-200">act</span>
+                <div class="mt-2 text-zinc-500"><%= policy.execution_role&.name || "missing role" %></div>
+              <% else %>
+                <span class="rounded border border-sky-400/40 bg-sky-400/10 px-2 py-1 text-sky-200">observe</span>
+              <% end %>
+            </td>
+            <td class="console-td">
+              <div class="flex justify-end gap-2">
+                <% if policy.source_managed? %>
+                  <span class="py-1.5 text-xs text-zinc-500">reconciled on deploy</span>
+                <% else %>
+                  <%= link_to "Edit", edit_console_automation_policy_path(policy.oid), class: "btn-secondary py-1.5" %>
+                  <%= button_to "Delete", console_automation_policy_path(policy.oid), method: :delete,
+                                class: "btn-secondary py-1.5 text-red-300",
+                                data: { turbo_confirm: "Delete #{policy.name}?" } %>
+                <% end %>
+              </div>
+            </td>
+          </tr>
+        <% end %>
+      </tbody>
+    </table>
+  </div>
+
+  <div>
+    <h2 class="mb-3 text-sm font-semibold text-zinc-200">Recent workstreams</h2>
+    <%= form_with url: console_automation_policies_path,
+                  method: :get,
+                  class: "mb-3 flex flex-wrap items-end gap-2" do |form| %>
+      <div class="min-w-64 flex-1">
+        <%= form.label :q, "Search workstreams", class: "sr-only" %>
+        <%= form.search_field :q,
+                              value: @workstream_query,
+                              placeholder: "Work key, session, execution, repository, or delivery ID",
+                              class: "form-input w-full" %>
+      </div>
+      <%= form.submit "Search", class: "btn-secondary" %>
+      <% if @workstream_query.present? %>
+        <%= link_to "Clear", console_automation_policies_path, class: "btn-secondary" %>
+      <% end %>
+    <% end %>
+    <div class="console-panel overflow-hidden">
+      <table class="console-table">
+        <thead class="console-table-head">
+          <tr>
+            <th class="console-th">Subject</th>
+            <th class="console-th">Session</th>
+            <th class="console-th">Policy</th>
+            <th class="console-th">Events</th>
+            <th class="console-th">Latest decision</th>
+            <th class="console-th">Latest execution</th>
+            <th class="console-th">Last event</th>
+            <th class="console-th"><span class="sr-only">Audit trail</span></th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-ink-700">
+          <% if @workstreams.empty? %>
+            <tr>
+              <td colspan="8" class="px-5 py-8 text-center text-zinc-600">
+                <%= @workstream_query.present? ? "No workstreams match that audit query." : "No inbound automation events yet." %>
+              </td>
+            </tr>
+          <% end %>
+          <% @workstreams.each do |workstream| %>
+            <tr class="console-row-hover">
+              <td class="console-td font-mono text-xs text-zinc-300">
+                <%= link_to workstream.subject_key,
+                            console_automation_workstream_path(workstream.oid),
+                            class: "console-link" %>
+                <% if workstream.safe_source_url %>
+                  <div class="mt-1 font-sans text-xs">
+                    <%= link_to "Open source", workstream.safe_source_url,
+                                target: "_blank", rel: "noopener noreferrer", class: "console-link" %>
+                  </div>
+                <% end %>
+              </td>
+              <td class="console-td text-xs">
+                <%= link_to workstream.session_key,
+                            console_threads_path(thread: workstream.session_key),
+                            class: "console-link font-mono" %>
+              </td>
+              <td class="console-td text-xs text-zinc-400"><%= workstream.automation_policy&.name || "no matching policy" %></td>
+              <td class="console-td text-xs text-zinc-400"><%= workstream.event_count %></td>
+              <td class="console-td text-xs">
+                <% if workstream.latest_automation_decision.present? %>
+                  <% decision_class = case workstream.latest_automation_decision
+                                      when "act" then "border-amber-400/40 bg-amber-400/10 text-amber-200"
+                                      when "observe" then "border-sky-400/40 bg-sky-400/10 text-sky-200"
+                                      else "border-zinc-700 text-zinc-400"
+                                      end %>
+                  <span class="rounded border px-2 py-1 <%= decision_class %>"><%= workstream.latest_automation_decision %></span>
+                  <% if workstream.latest_automation_action_kind.present? %>
+                    <div class="mt-2 text-zinc-500"><%= workstream.latest_automation_action_kind.split(",").join(", ") %></div>
+                  <% end %>
+                  <% if workstream.latest_automation_reason.present? %>
+                    <div class="automation-workstream-reason mt-1 max-w-sm text-zinc-500"><%= workstream.latest_automation_reason %></div>
+                  <% end %>
+                <% else %>
+                  <span class="text-zinc-600">not recorded</span>
+                <% end %>
+              </td>
+              <td class="console-td text-xs">
+                <% if (execution = @latest_executions[workstream.session_key]) %>
+                  <div class="automation-workstream-execution text-zinc-300"><%= execution.status.presence || "unknown" %></div>
+                  <div class="automation-workstream-execution-id mt-1 max-w-xs truncate font-mono text-zinc-500" title="<%= execution.execution_id %>"><%= execution.execution_id %></div>
+                <% else %>
+                  <span class="text-zinc-600">not started</span>
+                <% end %>
+              </td>
+              <td class="console-td text-xs text-zinc-500"><%= local_time(workstream.last_event_at, relative: true, format: :compact) %></td>
+              <td class="console-td text-right text-xs">
+                <%= link_to "Audit", console_automation_workstream_path(workstream.oid), class: "console-link" %>
+              </td>
+            </tr>
+          <% end %>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>

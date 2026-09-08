@@ -42,6 +42,24 @@ module ApplicationHelper
     end
   end
 
+  # The engine can finish successfully while the external QA run fails. Read
+  # the typed QA result, never infer an outcome from an agent's prose.
+  def workflow_application_outcome(detail)
+    return unless detail.is_a?(Hash) && detail["workflow_name"] == "linear_qa_control_plane"
+
+    result = detail["result"]
+    output = result["output"] if result.is_a?(Hash)
+    return unless output.is_a?(Hash)
+
+    case output["conclusion"]
+    when "success" then { label: "QA passed", status: "completed" }
+    when "failure", "timed_out", "action_required", "startup_failure", "stale"
+      { label: "QA #{output["conclusion"].tr("_", " ")}", status: "failed" }
+    when "cancelled" then { label: "QA cancelled", status: "cancelled" }
+    when "skipped", "neutral" then { label: "QA #{output["conclusion"]} — not a pass", status: "pending" }
+    end
+  end
+
   # Engine names rendered the way the Chats page renders harness types
   # (Console::ThreadsController#thread_harness_label): known harnesses get
   # their product names, anything else is capitalized word-wise.

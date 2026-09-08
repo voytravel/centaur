@@ -1,0 +1,8 @@
+<% content_for :title, "Edit Automation Policy · Centaur Console" %>
+
+<%= render "console/page_header",
+           title: "Edit Automation Policy",
+           subtitle: @policy.scope_label,
+           icon: "workflow" %>
+
+<%= render "form", policy: @policy %>

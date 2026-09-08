@@ -107,6 +107,9 @@ console:
   # When set, the slackbotv2 deployment also links the first assistant message
   # in a Slack thread to the Console session view; leave empty to omit the link.
   publicUrl: ""
+  # Optional sandbox-only Console origin (no interactive SSO). This is used
+  # for path-scoped sandbox credential rules, not operator authentication.
+  sandboxUrl: ""
   # Additional exact Host headers accepted by Rails Host Authorization. Use for
   # service DNS names that differ from the chart's short in-cluster URL;
   # publicUrl and the short service host are already included.
@@ -162,6 +165,15 @@ console:
   # worker. Keep this aligned with the Console OAuth app users authorize.
   slackDmSync:
     oauthAppSlug: slack
+  # Optional GitHub App installation-token broker. When enabled, only the
+  # Console *worker* mounts this PEM and mints one-hour installation tokens.
+  # The App Client ID and installation ID live on a BrokerCredential; sandboxes
+  # receive only the short-lived token through a token_broker source.
+  githubAppInstallation:
+    enabled: false
+    existingSecretName: ""
+    privateKeySecretKey: private-key.pem
+    privateKeyMountPath: /var/run/centaur/github-app
   service:
     httpPort: 3000
   # Optional Ingress for the console. Bring your own controller — Tailscale
@@ -271,21 +283,6 @@ overlays:
   #   toolsSubdir: ""
   #   skillsSubdir: ""
 
-codex:
-  # Operator-defined OpenAI-compatible Responses providers. Each provider is
-  # added to sandbox Codex config, exposed through `--provider <id>`, and given
-  # a hostname-scoped iron-proxy bearer-token replacement. `apiKeyEnv` names a
-  # field in the configured secret source; sandboxes receive only a placeholder.
-  # Example:
-  #   customProviders:
-  #     private_responses:
-  #       name: Private Responses
-  #       baseUrl: https://inference.example.com/v1
-  #       apiKeyEnv: PRIVATE_RESPONSES_API_KEY
-  #       # Optional; callers must pass --model when omitted.
-  #       defaultModel: example-model
-  customProviders: {}
-
 sandbox:
   controller: pod
   image:
@@ -309,6 +306,11 @@ sandbox:
   #   effect: NoSchedule
   # RuntimeClass for sandbox + iron-proxy pods, e.g. gVisor.
   runtimeClassName: ""
+  # PriorityClass for sandbox + iron-proxy pods. Point this at a dedicated
+  # (low-priority) PriorityClass to scope a ResourceQuota to sandbox
+  # workloads and let the kubelet/scheduler sacrifice them before the
+  # control plane under node pressure.
+  priorityClassName: ""
   reposPath: ""
   # How the in-sandbox harness authenticates upstream. Single source of truth:
   # the control plane reads it to register the matching iron-proxy credential
@@ -320,10 +322,10 @@ sandbox:
   #                  subscription token (proxy injects the brokered credential).
   codexAuthMode: api_key
   claudeCodeAuthMode: api_key
-  # The deployment's default harness: codex | amp | claudecode. Decides what
+  # The deployment's default harness: codex | claudecode. Decides what
   # warm sandboxes boot (SESSION_SANDBOX_HARNESS) and which harness auth
   # fragment is required at startup (the other harnesses' fragments are
-  # registered too when available, so per-session --claude/--amp/--codex
+  # registered too when available, so per-session --claude/--codex
   # overrides keep working credentials). Per-session sandboxes always run
   # their session's harness via container args; the sandbox image CMD only
   # matters for containers started outside api-rs.
@@ -532,6 +534,10 @@ apiRs:
   terminationGracePeriodSeconds: 35
   extraEnv: {}
   resources: {}
+  # PriorityClass for the api-rs control plane pod itself. Pair with
+  # Guaranteed-QoS resources so runaway sandboxes are evicted before the
+  # control plane.
+  priorityClassName: ""
 
 # Chat SDK Slackbot v2. Forwards Slack events to the api-rs control plane
 # (:8080) and streams responses back. Listens on :3001.
@@ -547,6 +553,25 @@ slackbotv2:
   # Join newly-created public channels after subscribed channel_created events.
   # Requires the Slack app to grant channels:read and channels:join.
   autoJoinCreatedChannels: false
+  # After an accepted mention (or allowlisted DM) opens a thread subscription,
+  # forward later human replies in that same thread without requiring another
+  # mention. Unmentioned replies remain unable to issue the deterministic stop
+  # command or acquire requester credential context.
+  continueThreadReplies: false
+  # Explicit policy for unmentioned replies in subscribed threads. Leave empty
+  # to retain the legacy continueThreadReplies behavior; new deployments
+  # should use mentions_only, actionable, or all.
+  threadReplyMode: ""
+  # Controls structured task rendering in Slack. Leave empty to retain the
+  # runtime default (plan, or none when activity summaries are enabled).
+  streamTaskDisplayMode: ""
+  # Optional paired harness/model selected for the first execution in a new
+  # Slack thread containing an image. Use the same harness vocabulary as
+  # channelDefaults (claude, codex, or nanocodex). Explicit/sticky thread
+  # selections always win, and an existing thread is never restarted just to
+  # switch to vision. Leave both empty to keep normal model selection.
+  visionHarness: ""
+  visionModel: ""
   # Sticky percentage of otherwise-default Codex Slack threads assigned to
   # Nanocodex. A non-default model selection bypasses the rollout.
   codexNanocodexRolloutPercent: 0
@@ -562,10 +587,13 @@ slackbotv2:
   mcpPublicUrl: "http://localhost:3000"
   externalOrgAllowlist: ""
   triggerBotAllowlist: ""
+  # Slack member IDs allowed to start a one-to-one direct-message session.
+  # Empty keeps DMs disabled. Group DMs are never treated as direct messages.
+  directMessageUserAllowlist: ""
   # Per-channel default harness / model / provider / reasoning, keyed by Slack
   # conversation id (the C…/G…/D… id). Each value is an object of optional
   # harness / model / provider / reasoning fields, using the same vocabulary as
-  # the inline Slack flags (harness: claude|codex|nanocodex|amp, provider: bedrock|meta,
+  # the inline Slack flags (harness: claude|codex|nanocodex,
   # model accepts Claude aliases like opus). A model is only meaningful within a
   # harness, so name the harness alongside it. Applied when a message in that
   # channel carries no explicit/sticky per-thread flag, below such a flag and
@@ -584,8 +612,10 @@ slackbotv2:
   # SLACKBOTV2_MESSAGE_OVERRIDES_OPENAI_API_KEY via extraEnv.
   messageOverridesStrategy:
     mode: flags
-    model: gpt-5.4-nano
-    openaiBaseUrl: https://api.openai.com/v1
+    # Empty inherits sandbox.extraEnv.CODEX_MODEL, then gpt-5.4-nano.
+    model: ""
+    # Empty inherits apiRs.extraEnv.OPENAI_BASE_URL, then api.openai.com.
+    openaiBaseUrl: ""
     timeoutMs: 1500
     maxOutputTokens: 300
   metrics:
@@ -613,13 +643,22 @@ linearbot:
   extraEnv: {}
   resources: {}
 
-# Chat SDK GitHub bot — GitHub teammate (PAT) ingress. Receives issue/PR comment
+# Durable repository and issue automation policy plane. When enabled, the
+# Console receives a single-purpose ingress token and GitHub/Linear ingress
+# services can submit verified, normalized event summaries for policy
+# evaluation. No policy can authorize work until an operator creates it; each
+# policy starts in observe mode by default.
+automation:
+  enabled: false
+
+# Chat SDK GitHub bot — GitHub teammate ingress. Receives issue/PR comment
 # webhooks on /api/webhooks/github (the @chat-adapter/github adapter), answers in
 # the comment thread, and runs a review when the bot account is requested as a
 # reviewer. Forwards sessions to the api-rs control plane (:8080). Disabled by
-# default: requires the GITHUBBOT_TOKEN (PAT) and GITHUBBOT_WEBHOOK_SECRET secrets
-# (see contrib/scripts/bootstrap-k8s-secrets.sh). userName must be the bot
-# account's GitHub login so @-mention and review-request matching work.
+# default: requires a GitHub App installation or the legacy GITHUBBOT_TOKEN,
+# plus GITHUBBOT_WEBHOOK_SECRET (see contrib/scripts/bootstrap-k8s-secrets.sh).
+# userName must be the bot account's GitHub login so @-mention and
+# review-request matching work.
 githubbot:
   enabled: false
   replicaCount: 1
@@ -628,11 +667,34 @@ githubbot:
     tag: latest
     pullPolicy: Always
   userName: ""
+  # Preferred fixed GitHub App auth. The receiver mounts its PEM read-only and
+  # mints short-lived installation tokens itself; no one-hour token is stored
+  # in the shared Secret. When false, legacy PAT auth uses GITHUBBOT_TOKEN.
+  githubAppInstallation:
+    enabled: false
+    existingSecretName: ""
+    clientIdSecretKey: client-id
+    installationIdSecretKey: installation-id
+    privateKeySecretKey: private-key.pem
+    webhookSecretKey: webhook-secret
+    privateKeyMountPath: /var/run/centaur/github-app
   # v2 PR self-management (only acts on PRs assigned to the bot account).
   # Auto-merge respects branch protection and is paused per-PR by the hold label
   # / draft status.
   autoMerge: true
   mergeMethod: squash
+  # One broad review plus two repair-validation passes per review epoch.
+  reviewMaxRoundsPerEpoch: 3
+  # Each automated reviewer gets a bounded response budget, while this aggregate
+  # ceiling prevents adding reviewers from creating an unbounded repair loop.
+  reviewMaxBotFeedbackRoundsPerReviewer: 3
+  reviewMaxBotFeedbackRoundsPerEpoch: 6
+  # Materially changed risk surfaces can start this many epochs automatically.
+  # Later epochs require an explicit human review request or a split PR.
+  reviewMaxEpochs: 3
+  # Non-generated diff growth that starts a new epoch. New production files and
+  # dependency/auth/data/API/infra surfaces can start one below this threshold.
+  reviewEpochMinChangedLines: 50
   # Emit CI and review workflow events to api-rs.
   workflowEvents: false
   # Fallback @handle (no leading @) the bot tags when it gives up; empty = none.

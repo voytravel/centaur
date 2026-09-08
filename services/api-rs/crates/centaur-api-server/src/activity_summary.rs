@@ -15,7 +15,7 @@ use tracing::{debug, info, warn};
 pub(crate) const SESSION_ACTIVITY_SUMMARY_EVENT: &str = "session.activity_summary";
 
 const SYSTEM_PROMPT: &str = "\
-You write live status text for a software agent. Use only the supplied event facts. \
+You write live status text for a software agent. Use only the supplied non-reasoning event facts. \
 Write one first-person present-tense sentence of at most 40 characters, including \
 spaces, as if you are the agent. The hard limit is 45 characters: anything longer is \
 thrown away, so when in doubt cut words and use the shortest name for things. \
@@ -23,8 +23,10 @@ Describe the current step or latest finding, not the overall session goal: say w
 you are doing or learned right now, like \"I'm computing TPS from blocks\", \
 \"I found the chain config\", or \"I'm blocked on metrics access\". Take the newest \
 facts labeled commentary, plan, or tool as the current step; earlier facts are only \
-context. Name one specific thing from the facts (a chain, PR, partner, tool, or \
-topic); avoid generic words like details, info, items, update, or summary, and avoid \
+context. Never use, restate, summarize, or infer from reasoning or thinking text; \
+that belongs only in the Console trace. Name one specific thing from the facts \
+(a chain, PR, partner, tool, or topic); avoid generic words like details, info, \
+items, update, or summary, and avoid \
 repeating the session goal word for word. Each status must say something new \
 compared to the previous status sentence; if you cannot, output exactly SKIP. If the \
 facts only show setup, help output, dependency installs, builds, command output, \
@@ -390,10 +392,10 @@ fn activity_fact_from_value(value: &Value) -> Option<ActivityFact> {
         "turn.plan.updated" => plan_fact(value),
         "item.plan.delta" => string_field(value, &["delta", "text"])
             .map(|text| ActivityFact::high("plan", format!("planning {}", one_line(&text, 180)))),
-        "item.reasoning.summaryTextDelta" | "item.reasoning.textDelta" => {
-            string_field(value, &["delta", "text"])
-                .map(|text| ActivityFact::high("thinking", one_line(&text, 220)))
-        }
+        // Reasoning is durable Console trace data, not chat-facing activity.
+        // The Slack surface gets compact status derived from explicit plans,
+        // commentary, tools, and file changes instead.
+        "item.reasoning.summaryTextDelta" | "item.reasoning.textDelta" => None,
         "item.commandExecution.outputDelta" => None,
         "item.mcpToolCall.progress" => Some(ActivityFact::high("tool", progress_fact_text(value))),
         "item.started" | "item.updated" | "item.completed" => item_fact(value, &normalized),
@@ -446,7 +448,9 @@ fn item_fact(value: &Value, normalized_event_type: &str) -> Option<ActivityFact>
             "files",
             file_change_text(item, completed),
         )),
-        "reasoning" => reasoning_item_fact(item, completed),
+        // Never promote model reasoning into a user-visible status. It remains
+        // available to operators in the durable Console trace.
+        "reasoning" => None,
         "mcpToolCall" | "mcp_tool_call" | "dynamicToolCall" | "dynamic_tool_call" => {
             let name = tool_name(item);
             let action = if completed { "finished using" } else { "using" };
@@ -492,20 +496,6 @@ fn protocol_item(value: &Value) -> Option<&Value> {
     value
         .get("item")
         .or_else(|| value.get("params").and_then(|params| params.get("item")))
-}
-
-fn reasoning_item_fact(item: &Value, completed: bool) -> Option<ActivityFact> {
-    let text = string_at(item, &["text"])
-        .or_else(|| array_text(item.get("summary")))
-        .or_else(|| array_text(item.get("content")))?;
-    Some(ActivityFact::high(
-        "thinking",
-        if completed {
-            format!("finished thinking about {}", one_line(&text, 180))
-        } else {
-            one_line(&text, 220)
-        },
-    ))
 }
 
 fn file_change_text(item: &Value, completed: bool) -> String {
@@ -682,21 +672,6 @@ fn is_low_signal_commentary(text: &str) -> bool {
         || lower == "i\u{2019}ll check."
         || lower == "i'm working on it."
         || lower == "i\u{2019}m working on it."
-}
-
-fn array_text(value: Option<&Value>) -> Option<String> {
-    let texts = value?
-        .as_array()?
-        .iter()
-        .filter_map(|item| {
-            if let Some(text) = item.as_str() {
-                return Some(text.to_owned());
-            }
-            string_at(item, &["text"])
-        })
-        .filter(|text| !text.trim().is_empty())
-        .collect::<Vec<_>>();
-    (!texts.is_empty()).then(|| texts.join(" "))
 }
 
 fn string_field(value: &Value, keys: &[&str]) -> Option<String> {
@@ -1051,11 +1026,41 @@ mod tests {
     }
 
     #[test]
+    fn does_not_project_reasoning_deltas_into_activity() {
+        let fact = activity_fact_from_output_event(&event(json!({
+            "method": "item/reasoning/summaryTextDelta",
+            "params": {
+                "itemId": "reasoning-1",
+                "delta": "I found a private implementation detail."
+            }
+        })));
+
+        assert_eq!(fact, None);
+    }
+
+    #[test]
+    fn does_not_project_reasoning_items_into_activity() {
+        let fact = activity_fact_from_output_event(&event(json!({
+            "method": "item/completed",
+            "params": {
+                "item": {
+                    "id": "reasoning-1",
+                    "type": "reasoning",
+                    "summary": [{"text": "I found a private implementation detail."}]
+                }
+            }
+        })));
+
+        assert_eq!(fact, None);
+    }
+
+    #[test]
     fn system_prompt_requires_conversational_step_status() {
         assert!(SYSTEM_PROMPT.contains("first-person"));
         assert!(SYSTEM_PROMPT.contains("at most 40 characters"));
         assert!(SYSTEM_PROMPT.contains("hard limit is 45 characters"));
         assert!(SYSTEM_PROMPT.contains("current step or latest finding"));
+        assert!(SYSTEM_PROMPT.contains("Never use, restate, summarize, or infer from reasoning"));
         assert!(SYSTEM_PROMPT.contains("not the overall session goal"));
         assert!(SYSTEM_PROMPT.contains("Name one specific thing"));
         assert!(SYSTEM_PROMPT.contains("output exactly SKIP"));

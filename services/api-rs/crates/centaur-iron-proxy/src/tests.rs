@@ -16,15 +16,10 @@ fn harness_auth_fragments_are_baked_in() {
         .unwrap();
     assert!(placeholder_env(&[codex_access]).is_empty());
 
-    let openrouter = harness_auth_fragment("openrouter", "api_key")
-        .unwrap()
-        .unwrap();
-    let openrouter_placeholders = placeholder_env(&[openrouter]);
-    assert_eq!(
-        openrouter_placeholders
-            .get("OPENROUTER_API_KEY")
-            .map(String::as_str),
-        Some("OPENROUTER_API_KEY")
+    assert!(
+        harness_auth_fragment("openrouter", "api_key")
+            .unwrap()
+            .is_none()
     );
 
     let hermes = harness_auth_fragment("hermes", "api_key").unwrap().unwrap();
@@ -38,15 +33,10 @@ fn harness_auth_fragments_are_baked_in() {
         Some("NOUS_API_KEY")
     );
 
-    let meta_ai = harness_auth_fragment("meta-ai", "api_key")
-        .unwrap()
-        .unwrap();
-    let meta_ai_placeholders = placeholder_env(&[meta_ai]);
-    assert_eq!(
-        meta_ai_placeholders
-            .get("META_AI_API_KEY")
-            .map(String::as_str),
-        Some("META_AI_API_KEY")
+    assert!(
+        harness_auth_fragment("meta-ai", "api_key")
+            .unwrap()
+            .is_none()
     );
 
     let claude_code = harness_auth_fragment("claude-code", "api_key")
@@ -70,67 +60,6 @@ fn harness_auth_fragments_are_baked_in() {
     let placeholders = placeholder_env(&[infra]);
     for name in ["GITHUB_TOKEN", "SLACK_BOT_TOKEN"] {
         assert_eq!(placeholders.get(name).map(String::as_str), None);
-    }
-}
-
-#[test]
-fn custom_provider_fragments_are_scoped_and_declare_placeholders() {
-    let fragments = custom_provider_auth_fragments(
-        r#"{
-            "private_responses": {
-                "name": "Private Responses",
-                "baseUrl": "https://inference.example.com/v1",
-                "apiKeyEnv": "PRIVATE_RESPONSES_API_KEY",
-                "defaultModel": "example-model"
-            }
-        }"#,
-    )
-    .unwrap();
-    let placeholders = placeholder_env(&fragments);
-    assert_eq!(
-        placeholders
-            .get("PRIVATE_RESPONSES_API_KEY")
-            .map(String::as_str),
-        Some("PRIVATE_RESPONSES_API_KEY")
-    );
-
-    let yaml = serde_yaml::to_string(&fragments[0]).unwrap();
-    assert!(yaml.contains("host: inference.example.com"));
-    assert!(yaml.contains("proxy_value: PRIVATE_RESPONSES_API_KEY"));
-    assert!(!yaml.contains("https://"));
-}
-
-#[test]
-fn custom_provider_default_model_is_optional() {
-    let fragments = custom_provider_auth_fragments(
-        r#"{
-            "private_responses": {
-                "name": "Private Responses",
-                "baseUrl": "https://inference.example.com/v1",
-                "apiKeyEnv": "PRIVATE_RESPONSES_API_KEY"
-            }
-        }"#,
-    )
-    .unwrap();
-    assert_eq!(fragments.len(), 1);
-}
-
-#[test]
-fn custom_provider_fragments_reject_unsafe_or_malformed_config() {
-    for raw in [
-        r#"{"bad.id":{"name":"Bad","baseUrl":"https://inference.example.com/v1","apiKeyEnv":"BAD_API_KEY","defaultModel":"model"}}"#,
-        r#"{"private":{"name":"Bad","baseUrl":"http://inference.example.com/v1","apiKeyEnv":"BAD_API_KEY","defaultModel":"model"}}"#,
-        r#"{"private":{"name":"Bad","baseUrl":"https://user@inference.example.com/v1","apiKeyEnv":"BAD_API_KEY","defaultModel":"model"}}"#,
-        r#"{"private":{"name":"Bad","baseUrl":"https://inference.example.com:443/v1","apiKeyEnv":"BAD_API_KEY","defaultModel":"model"}}"#,
-        r#"{"private":{"name":"Bad","baseUrl":"https://127.0.0.1/v1","apiKeyEnv":"BAD_API_KEY","defaultModel":"model"}}"#,
-        r#"{"private":{"name":"Bad","baseUrl":"https://inference.example.com/v1","apiKeyEnv":"bad-key","defaultModel":"model"}}"#,
-        r#"{"private":{"name":"Bad","baseUrl":"https://inference.example.com/v1","apiKeyEnv":"BAD_API_KEY","defaultModel":""}}"#,
-        "not-json",
-    ] {
-        assert!(
-            custom_provider_auth_fragments(raw).is_err(),
-            "accepted {raw}"
-        );
     }
 }
 

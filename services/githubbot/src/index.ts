@@ -24,14 +24,24 @@ import {
 } from "./issue-manager";
 import { extractMessageOverrides } from "./overrides";
 import {
+  evaluateGithubAutomation,
+  evaluateGithubManualMention,
+  type GithubAutomationDecision,
+  type GithubAutomationEvent,
+} from "./automation";
+import {
+  handleAutomaticReview,
   handleCiEvent,
   handlePullRequestEvent,
   handleReviewEvent,
+  fetchPrAutomationContext,
   isPrOwned,
   managementThreadKey,
+  type PolicyPrAutomation,
   type PrManagerContext,
 } from "./pr-manager";
-import { handleReviewRequest } from "./review";
+import { parseCrossModelReviewOrchestration } from "./review-orchestration";
+import { handleReviewRequest, isReviewRequestedForBot } from "./review";
 import {
   forwardToSessionApi,
   isRetryableSessionApiError,
@@ -39,6 +49,7 @@ import {
 } from "./session-api";
 import {
   githubContextPreamble,
+  type GithubPrExecutionIntent,
   parseGithubThreadKey,
   reactSafe,
   reviewCommentContextFromRaw,
@@ -51,7 +62,14 @@ import type {
   GithubbotThreadState,
   GithubbotTrace,
 } from "./types";
-import { errorMessage, noopLogger, nowMs, traceLog } from "./utils";
+import {
+  errorMessage,
+  githubTextMentionName,
+  noopLogger,
+  nowMs,
+  stringValue,
+  traceLog,
+} from "./utils";
 
 export type {
   Githubbot,
@@ -64,20 +82,55 @@ const POSTGRES_CONNECT_INITIAL_DELAY_MS = 250;
 const POSTGRES_CONNECT_MAX_DELAY_MS = 10_000;
 const DEDUP_WINDOW = 200;
 
+type ManualMentionAuthorization = {
+  executionIntent?: GithubPrExecutionIntent;
+  sessionKey: string;
+};
+
+const EXPLICIT_CONFLICT_REPAIR =
+  /\b(?:fix|resolve|repair|unblock|rebase)\b[\s\S]{0,80}\b(?:merge\s+)?conflicts?\b|\b(?:merge\s+)?conflicts?\b[\s\S]{0,80}\b(?:fix|resolve|repair|unblock|rebase)\b/i;
+
+/**
+ * A trusted direct mention remains conversational by default. When it names a
+ * concrete merge-conflict repair on a currently dirty PR, make the execution
+ * contract explicit so a sandbox is expected to repair and push—not merely
+ * investigate or propose a patch. This is deliberately narrower than a
+ * generic "fix it" classifier: policy authorization and a current conflict
+ * are both required.
+ */
+export function manualPrExecutionIntent(input: {
+  messageText: string;
+  mergeableState: string;
+}): GithubPrExecutionIntent | undefined {
+  if (input.mergeableState.toLowerCase() !== "dirty") return undefined;
+  return EXPLICIT_CONFLICT_REPAIR.test(input.messageText)
+    ? "resolve_conflict"
+    : undefined;
+}
+
 export function createGithubbot(options: GithubbotOptions): Githubbot {
+  // Keep GitHub's complete App actor login for lifecycle ownership/reviewer
+  // checks, but configure the chat parser with the valid Markdown mention
+  // form: GitHub Apps are invoked as `@<slug>`, not `@<slug>[bot]`.
   const userName = options.userName ?? "github-bot";
+  const mentionUserName = githubTextMentionName(userName);
   const logger = options.logger ?? noopLogger;
-  const github = createGitHubAdapter({
-    token: options.token,
+  const adapterConfig = {
     webhookSecret: options.webhookSecret,
-    userName,
+    userName: mentionUserName,
     ...(options.botUserId ? { botUserId: Number(options.botUserId) } : {}),
     ...(options.githubApiUrl ? { apiUrl: options.githubApiUrl } : {}),
     logger,
-  });
+  };
+  const github = options.token
+    ? createGitHubAdapter({ ...adapterConfig, token: options.token })
+    : createGitHubAdapter({
+        ...adapterConfig,
+        ...githubAppInstallationConfig(options),
+      });
   const state = options.state ?? createDefaultState(options, logger);
   const chat = new Chat<{ github: typeof github }, GithubbotThreadState>({
-    userName,
+    userName: mentionUserName,
     adapters: { github },
     state,
     // Serialize handling per thread so a redelivered or near-simultaneous comment
@@ -208,6 +261,24 @@ export function createGithubbot(options: GithubbotOptions): Githubbot {
   return { app, chat };
 }
 
+function githubAppInstallationConfig(options: GithubbotOptions): {
+  appId: string;
+  installationId: number;
+  privateKey: string;
+} {
+  const { githubAppId, githubInstallationId, githubPrivateKey } = options;
+  if (!githubAppId || !githubInstallationId || !githubPrivateKey) {
+    throw new Error(
+      "GitHubbot requires a token or a complete GitHub App installation",
+    );
+  }
+  return {
+    appId: githubAppId,
+    installationId: githubInstallationId,
+    privateKey: githubPrivateKey,
+  };
+}
+
 type MessageHandlerInput = {
   adapter: GitHubAdapter;
   mode: "execute" | "append";
@@ -279,14 +350,22 @@ async function handleMessage(
         });
       }
     }
-    const sessionThreadKey = await resolveManagementSession(
+    const serialized = await serializeMessage(message);
+    const overrides = extractMessageOverrides(serialized.text);
+    serialized.text = overrides.cleanedText;
+    const manualAuthorization = await authorizeManualMention(
+      thread,
+      message,
+      threadKey,
+      input,
+      serialized.text,
+    );
+    if (manualAuthorization === null) return;
+    const sessionThreadKey = manualAuthorization?.sessionKey ?? await resolveManagementSession(
       thread,
       threadKey,
       input,
     );
-    const serialized = await serializeMessage(message);
-    const overrides = extractMessageOverrides(serialized.text);
-    serialized.text = overrides.cleanedText;
     const trace: GithubbotTrace = {
       includeContext: false,
       messageId: message.id,
@@ -299,7 +378,11 @@ async function handleMessage(
     backgroundWaitUntil(
       runSessionTurn({
         adapter,
-        contextPreamble: githubContextPreamble(threadKey, reviewComment),
+        contextPreamble: githubContextPreamble(
+          threadKey,
+          reviewComment,
+          manualAuthorization?.executionIntent,
+        ),
         executeMessage: serialized,
         options,
         overrides: {
@@ -312,6 +395,9 @@ async function handleMessage(
         thread,
         threadKey,
         trace,
+        workingReplyKind: manualAuthorization?.executionIntent === "resolve_conflict"
+          ? "repair"
+          : undefined,
       }).catch((error) => {
         logger.warn("githubbot_turn_failed", { error: errorMessage(error) });
       }),
@@ -354,6 +440,130 @@ async function handleMessage(
     threadId: sessionKey,
   };
   backgroundWaitUntil(appendFollowup(options, serialized, sessionKey, trace));
+}
+
+/**
+ * On deployments with Console automation ingress, direct comments may start a
+ * sandbox only after the same source-managed policy used by webhook automation
+ * authorizes this PR. That policy activation gives api-rs a scoped principal
+ * role before the session is created, so Iron Proxy can replace its model-key
+ * placeholder with the brokered LiteLLM credential.
+ *
+ * Deployments without the optional ingress keep their existing conversational
+ * behavior. HZ configures it, so a failed policy lookup is deliberately a
+ * visible, fail-closed refusal rather than a later unauthenticated model call.
+ */
+async function authorizeManualMention(
+  thread: Thread<GithubbotThreadState>,
+  message: ChatMessage,
+  threadKey: string,
+  input: MessageHandlerInput,
+  messageText: string,
+): Promise<ManualMentionAuthorization | undefined | null> {
+  const { adapter, options, prManagerCtx } = input;
+  const logger = options.logger ?? noopLogger;
+  if (!options.automationApiUrl || !options.automationIngressToken) return undefined;
+
+  const ref = parseGithubThreadKey(threadKey);
+  if (!ref || ref.type !== "pr") {
+    await refuseManualMention(
+      thread,
+      adapter,
+      threadKey,
+      message.id,
+      "I can only start policy-authorized agent work from a pull request.",
+      logger,
+    );
+    return null;
+  }
+
+  const pr = await fetchPrAutomationContext(
+    prManagerCtx,
+    ref.owner,
+    ref.repo,
+    ref.number,
+  );
+  if (!pr) {
+    await refuseManualMention(
+      thread,
+      adapter,
+      threadKey,
+      message.id,
+      "I couldn't verify this pull request's policy context, so I didn't start an agent run.",
+      logger,
+    );
+    return null;
+  }
+
+  const repository = `${ref.owner}/${ref.repo}`.toLowerCase();
+  const decision = await evaluateGithubManualMention(options, {
+    baseBranch: pr.baseBranch,
+    commentId: message.id,
+    draft: pr.draft,
+    headSha: pr.headSha,
+    labels: pr.labels,
+    number: ref.number,
+    repository,
+  });
+  const [repositoryOwner, repositoryName] = repository.split("/");
+  const expectedSessionKey = managementThreadKey(
+    repositoryOwner!,
+    repositoryName!,
+    ref.number,
+  );
+  if (
+    !decision ||
+    decision.decision !== "act" ||
+    !decision.actions.includes("respond_to_mention") ||
+    decision.sessionKey !== expectedSessionKey
+  ) {
+    traceLog(options, "githubbot_manual_mention_denied", undefined, {
+      decision: decision?.decision ?? "unavailable",
+      policy_id: decision?.policyId,
+      reason: decision?.reason ?? "policy lookup unavailable",
+      repository,
+    });
+    await refuseManualMention(
+      thread,
+      adapter,
+      threadKey,
+      message.id,
+      "I couldn't start an agent run because this pull request is not enabled for a Centaur manual mention.",
+      logger,
+    );
+    return null;
+  }
+
+  try {
+    await thread.setState({ managementSessionKey: decision.sessionKey });
+  } catch {
+    // Best-effort cache only. The current turn still uses the authorized key.
+  }
+  return {
+    executionIntent: manualPrExecutionIntent({
+      messageText,
+      mergeableState: pr.mergeableState,
+    }),
+    sessionKey: decision.sessionKey,
+  };
+}
+
+async function refuseManualMention(
+  thread: Thread<GithubbotThreadState>,
+  adapter: GitHubAdapter,
+  threadKey: string,
+  messageId: string,
+  body: string,
+  logger: GithubbotOptions["logger"],
+): Promise<void> {
+  try {
+    await thread.post(body);
+  } catch (error) {
+    (logger ?? noopLogger).warn("githubbot_manual_mention_refusal_failed", {
+      error: errorMessage(error),
+    });
+  }
+  await reactSafe(adapter, threadKey, messageId, "confused", logger);
 }
 
 /**
@@ -458,7 +668,7 @@ const LIFECYCLE_EVENTS = new Set([
  * manager. Returns the work promise (awaited for the webhook's keep-alive) or
  * null when there's nothing to do.
  */
-function routeLifecycleEvent(
+async function routeLifecycleEvent(
   eventType: string,
   rawBody: string,
   input: {
@@ -468,9 +678,137 @@ function routeLifecycleEvent(
     prManagerCtx: PrManagerContext;
     state: StateAdapter;
   },
+): Promise<void> {
+  const reviewRequestedForBot =
+    eventType === "pull_request" && pullRequestAction(rawBody) === "review_requested"
+      ? await isReviewRequestedForBot(rawBody, {
+          botUserName: input.botUserName,
+          octokit: input.prManagerCtx.octokit,
+          options: input.options,
+          state: input.state,
+        })
+      : false;
+  const policyDecisions = await evaluateGithubAutomation(
+    input.options,
+    eventType,
+    rawBody,
+    input.deliveryId,
+    (event) => enrichGithubAutomationEvent(
+      input.prManagerCtx,
+      event,
+      reviewRequestedForBot,
+    ),
+    (repository, headSha) => associatedGithubPrNumbers(input.prManagerCtx, repository, headSha),
+  );
+  const policy = routePolicyLifecycleEvent(
+    eventType,
+    rawBody,
+    input,
+    policyDecisions,
+  );
+  const policyHandlesRequestedReview = reviewRequestedForBot &&
+    policyDecisions.some(
+      (decision) => decision.decision === "act" && decision.actions.includes("review"),
+    );
+  const legacy = routeLegacyLifecycleEvent(eventType, rawBody, {
+    ...input,
+    skipRequestedReview: policyHandlesRequestedReview,
+  });
+  await Promise.all([ legacy, policy ].filter(Boolean));
+}
+
+/**
+ * CI webhook payloads often carry only a PR number. Read the current compact
+ * PR metadata before Console evaluates branch/label filters rather than
+ * weakening those filters for a partially populated platform payload.
+ */
+async function enrichGithubAutomationEvent(
+  ctx: PrManagerContext,
+  event: GithubAutomationEvent,
+  reviewRequestedForBot = false,
+): Promise<GithubAutomationEvent> {
+  const [owner, repo] = event.repository.split("/", 2);
+  if (!owner || !repo) return event;
+
+  let enriched = event;
+  // Pull-request and review payloads already contain the full PR envelope.
+  // Check/status payloads tend to expose only a PR number and need enrichment.
+  if (event.event_type !== "pull_request" && event.event_type !== "pull_request_review") {
+    try {
+      const { data } = await ctx.octokit.rest.pulls.get({
+        owner,
+        repo,
+        pull_number: event.subject_number,
+      });
+      enriched = {
+        ...event,
+        base_branch: data.base.ref,
+        draft: data.draft === true,
+        head_sha: data.head.sha ?? event.head_sha,
+        labels: data.labels.flatMap((label) => {
+          const name = stringValue(label.name);
+          return name ? [ name ] : [];
+        }),
+      };
+    } catch (error) {
+      // A read failure must not manufacture filter facts. The normalized event
+      // remains usable for policies with no branch/label requirements; policies
+      // that require unavailable metadata reject it in Console.
+      traceLog(ctx.options, "githubbot_automation_pr_enrichment_failed", undefined, {
+        pr: event.repository + "#" + event.subject_number,
+        error: errorMessage(error),
+      });
+    }
+  }
+
+  return {
+    ...enriched,
+    bot_owned: await isPrOwned(ctx, owner, repo, event.subject_number),
+    ...(reviewRequestedForBot ? { review_requested_for_bot: true } : {}),
+  };
+}
+
+async function associatedGithubPrNumbers(
+  ctx: PrManagerContext,
+  repository: string,
+  headSha: string,
+): Promise<number[]> {
+  const [owner, repo] = repository.split("/", 2);
+  if (!owner || !repo) return [];
+  try {
+    const { data } = await ctx.octokit.rest.repos.listPullRequestsAssociatedWithCommit({
+      owner,
+      repo,
+      commit_sha: headSha,
+    });
+    return data.flatMap((pullRequest) =>
+      typeof pullRequest.number === "number" ? [ pullRequest.number ] : []
+    );
+  } catch (error) {
+    traceLog(ctx.options, "githubbot_automation_pr_association_failed", undefined, {
+      repository,
+      head_sha: headSha,
+      error: errorMessage(error),
+    });
+    return [];
+  }
+}
+
+function routeLegacyLifecycleEvent(
+  eventType: string,
+  rawBody: string,
+  input: {
+    botUserName: string;
+    deliveryId: string;
+    options: GithubbotOptions;
+    prManagerCtx: PrManagerContext;
+    skipRequestedReview?: boolean;
+    state: StateAdapter;
+  },
 ): Promise<void> | null {
   if (eventType === "pull_request") {
     if (pullRequestAction(rawBody) === "review_requested") {
+      if (input.skipRequestedReview) return null;
       return handleReviewRequest(rawBody, {
         botUserName: input.botUserName,
         deliveryId: input.deliveryId,
@@ -488,6 +826,64 @@ function routeLifecycleEvent(
     return handleIssueEvent(input.prManagerCtx, rawBody, input.deliveryId);
   }
   return handleCiEvent(input.prManagerCtx, eventType, rawBody);
+}
+
+function routePolicyLifecycleEvent(
+  eventType: string,
+  rawBody: string,
+  input: {
+    deliveryId: string;
+    prManagerCtx: PrManagerContext;
+  },
+  decisions: GithubAutomationDecision[],
+): Promise<void> | null {
+  const active = decisions.filter((decision) => decision.decision === "act");
+  const actions = new Set(active.flatMap((decision) => decision.actions));
+  if (actions.size === 0) return null;
+
+  const automation: PolicyPrAutomation = {
+    autoMerge: active.some((decision) => decision.autoMerge),
+    checks: actions.has("fix_checks"),
+    conflicts: actions.has("resolve_conflict"),
+    feedback: actions.has("address_feedback"),
+  };
+  const reviewDecision = active.find((decision) => decision.actions.includes("review"));
+  const reviewOrchestration = parseCrossModelReviewOrchestration(
+    reviewDecision?.reviewOrchestration,
+  );
+  if (reviewOrchestration) automation.reviewOrchestration = reviewOrchestration;
+
+  if (eventType === "pull_request") {
+    const work: Promise<void>[] = [];
+    if (actions.has("review")) {
+      work.push(handleAutomaticReview(
+        input.prManagerCtx,
+        rawBody,
+        input.deliveryId,
+        automation,
+      ));
+    }
+    if (automation.conflicts || automation.autoMerge) {
+      work.push(handlePullRequestEvent(input.prManagerCtx, rawBody, automation));
+    }
+    return Promise.all(work).then(() => undefined);
+  }
+  if (
+    eventType === "pull_request_review" &&
+    (automation.feedback || automation.autoMerge)
+  ) {
+    return handleReviewEvent(input.prManagerCtx, rawBody, automation);
+  }
+  if (
+    (eventType === "check_run" ||
+      eventType === "check_suite" ||
+      eventType === "status" ||
+      eventType === "workflow_run") &&
+    (automation.checks || automation.autoMerge)
+  ) {
+    return handleCiEvent(input.prManagerCtx, eventType, rawBody, automation);
+  }
+  return null;
 }
 
 function pullRequestAction(rawBody: string): string | undefined {

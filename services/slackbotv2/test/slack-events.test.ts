@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test'
 import type { Logger, Message } from 'chat'
-import { isAllowedSlackMessage } from '../src/slack-events'
+import { isAllowedSlackDirectMessage, isAllowedSlackMessage } from '../src/slack-events'
 import type { SlackbotV2Options } from '../src/types'
 
 const logger: Logger = {
@@ -17,6 +17,15 @@ function botMessage(botId: string): Message {
     id: '1700000000.000001',
     raw: { bot_id: botId, subtype: 'bot_message' },
     threadId: 'C1:1700000000.000001'
+  } as Message
+}
+
+function directMessage(userId: string, channelType = 'im'): Message {
+  return {
+    author: { isBot: false, userId },
+    id: '1700000000.000002',
+    raw: { channel_type: channelType, user: userId },
+    threadId: 'D1:1700000000.000002'
   } as Message
 }
 
@@ -113,5 +122,20 @@ describe('Slack trigger bot allowlist', () => {
 
     expect(await isAllowedSlackMessage(botMessage('BCHANNELBOT'), config, logger)).toBe(false)
     expect(requests).toBe(0)
+  })
+})
+
+describe('Slack direct-message allowlist', () => {
+  it('allows only configured users to trigger a one-to-one direct message', () => {
+    const config = {
+      ...options(async () => Response.json({ ok: true })),
+      directMessageUserAllowlist: ['UALLOWED']
+    }
+
+    expect(isAllowedSlackDirectMessage(directMessage('UALLOWED'), config, logger)).toBe(true)
+    expect(isAllowedSlackDirectMessage(directMessage('UOTHER'), config, logger)).toBe(false)
+    expect(isAllowedSlackDirectMessage(directMessage('UALLOWED', 'channel'), config, logger)).toBe(
+      false
+    )
   })
 })

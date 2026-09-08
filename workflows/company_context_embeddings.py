@@ -24,6 +24,7 @@ DEFAULT_MODEL = "text-embedding-3-small"
 EMBEDDING_DIMENSIONS = 1_536
 OPENAI_BATCH_SIZE = 25
 FALSE_ENV_VALUES = {"0", "false", "no", "off"}
+OPENAI_BASE_URL_ENV = "OPENAI_BASE_URL"
 EMBEDDING_UPSERTS = {
     "company_context": (
         "INSERT INTO company_context_document_embeddings "
@@ -166,8 +167,14 @@ class EmbeddingsClient(Protocol):
     embeddings: Any
 
 
+def _openai_client_kwargs() -> dict[str, str]:
+    """Route OpenAI-compatible SDK calls through the deployment gateway."""
+    base_url = os.getenv(OPENAI_BASE_URL_ENV, "").strip()
+    return {"base_url": base_url} if base_url else {}
+
+
 def _client() -> EmbeddingsClient:
-    return AsyncOpenAI()
+    return AsyncOpenAI(**_openai_client_kwargs())
 
 
 def _model(value: str | None) -> str:

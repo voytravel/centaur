@@ -17,6 +17,12 @@ import {
 import { Hono, type Context } from "hono";
 import pg from "pg";
 import {
+  evaluateLinearAutomation,
+  parseLinearIssueAutomationWebhook,
+  type LinearAutomationDecision,
+  type LinearIssueWebhook,
+} from "./automation";
+import {
   parseIssueAssignmentWebhook,
   parseIssueCommentWebhook,
   type IssueAssignmentEvent,
@@ -24,7 +30,8 @@ import {
 } from "./issue-comments";
 import {
   buildCommentReplyBody,
-  buildThinkingReplyBody,
+  buildFailedReplyBody,
+  buildWorkingReplyBody,
   commentMentionsBot,
   CommentReplyCollector,
 } from "./comment-bot";
@@ -34,6 +41,7 @@ import {
   formatIssueContext,
   formatIssueContextHeader,
   OWNERSHIP_CONTEXT,
+  type LinearIssueContext,
 } from "./linear-context";
 import { ackWorking } from "./linear-narrator";
 import {
@@ -241,6 +249,9 @@ export function createLinearbot(options: LinearbotOptions): Linearbot {
         ) ??
         requestContext.run(context, () =>
           handleIssueAssignment(rawBody, handlerInput),
+        ) ??
+        requestContext.run(context, () =>
+          handleIssueAutomation(rawBody, handlerInput),
         );
       if (handled) handoffTasks.push(handled);
       try {
@@ -355,20 +366,14 @@ function issueCommentMessage(
   } as unknown as ChatMessage;
 }
 
-const THREAD_TURN_MAX_RETRIES = 3;
-// Min gap between live edits of the streaming "Thinking…" comment. The first
-// thought posts immediately; subsequent thoughts coalesce to stay well under
-// Linear's mutation rate limits. The final answer always writes regardless.
-const LIVE_THINKING_EDIT_MIN_INTERVAL_MS = 2_500;
+// Reopening the event stream is a read-only replay from its watermark; give a
+// completed but temporarily disconnected execution enough chances to surface
+// its final answer before declaring the user-visible reply unsuccessful.
+const THREAD_TURN_MAX_RETRIES = 5;
 // Cap on the full issue-context preamble seeded on a thread's first turn. The
 // description rides inline in the execute, so keep it bounded (the whole issue
 // description, untruncated, could be huge).
 const ISSUE_CONTEXT_PREAMBLE_MAX_CHARS = 8_000;
-// Headline of the comment posted the moment the bot picks up a delegated issue
-// (an assignment turn has no triggering comment to react to, so the comment
-// itself is the "I've started" signal). Replaced by the live thought, then the
-// final answer, as the run proceeds.
-const WORK_START_HEADLINE = "On it — working on this issue.";
 const PROFILE_HANDLE_PATTERN = /\/profiles\/([^/?#]+)/;
 
 type ThreadHandlerInput = {
@@ -504,6 +509,13 @@ function handleCommentMention(
     });
     const client = (thread.adapter as unknown as LinearSessionCapableAdapter)
       .linearClient;
+    const authorization = await authorizeManualMention(
+      thread,
+      event,
+      client,
+      input,
+    );
+    if (!authorization) return;
     const serialized = await serializeMessage(
       issueCommentMessage(event, threadKey),
     );
@@ -525,11 +537,107 @@ function handleCommentMention(
         parentCommentId: rootCommentId,
         reactCommentId: event.commentId,
         thread,
-        threadKey,
+        threadKey: authorization.sessionKey ?? threadKey,
         trace,
+        issueContext: authorization.issueContext,
       }),
     );
   })();
+}
+
+/**
+ * A Linear comment is conversational input, not an authority to launch an
+ * agent. On installations that configure Console automation ingress, turn the
+ * verified mention into a normalized event first. Console then applies the
+ * same readiness, no-agent, and one-repository-route gates as issue pickup and
+ * activates the scoped execution role before api-rs creates the sandbox.
+ *
+ * Older installations without that optional ingress retain the pre-existing
+ * conversational behavior; HZ has ingress, so lookup failure is fail-closed.
+ */
+async function authorizeManualMention(
+  thread: Thread<LinearbotThreadState>,
+  event: IssueCommentEvent,
+  client: LinearSessionCapableAdapter["linearClient"],
+  input: ThreadHandlerInput,
+): Promise<{ issueContext?: LinearIssueContext; sessionKey?: string } | null> {
+  const { options } = input;
+  const logger = options.logger ?? noopLogger;
+  if (!options.automationApiUrl || !options.automationIngressToken) return {};
+
+  const issueContext = client
+    ? await fetchLinearIssueContext(client, event.issueId, logger)
+    : null;
+  if (!issueContext?.teamId) {
+    traceLog(options, "linearbot_manual_mention_context_missing", undefined, {
+      issue_id: event.issueId,
+    });
+    await refuseManualMention(
+      thread,
+      "I couldn't verify this issue's policy context, so I didn't start an agent run.",
+      logger,
+    );
+    return null;
+  }
+
+  const decision = await evaluateLinearAutomation(options, {
+    blocked: issueContext.blocked,
+    deduplication_key: `linear:manual-mention:${event.issueId}:${event.commentId}`,
+    description: issueContext.description,
+    event_action: "manual_mention",
+    event_type: "Issue",
+    labels: issueContext.labels ?? [],
+    linear_issue_id: event.issueId,
+    linear_issue_identifier: issueContext.identifier,
+    linear_issue_url: issueContext.url,
+    linear_project_id: issueContext.projectId,
+    linear_team_id: issueContext.teamId,
+    mentioned_bot: true,
+    provider: "linear",
+    status: issueContext.status,
+    title: issueContext.title,
+  });
+  const expectedSessionKey = "linear:" + event.issueId;
+  if (
+    !decision ||
+    decision.decision !== "act" ||
+    !decision.actions.includes("respond_to_mention") ||
+    decision.sessionKey !== expectedSessionKey
+  ) {
+    traceLog(options, "linearbot_manual_mention_denied", undefined, {
+      decision: decision?.decision ?? "unavailable",
+      issue_id: event.issueId,
+      policy_id: decision?.policyId,
+      reason: decision?.reason ?? "policy lookup unavailable",
+    });
+    await refuseManualMention(
+      thread,
+      "I couldn't start an agent run because this issue is not enabled for a Centaur manual mention.",
+      logger,
+    );
+    return null;
+  }
+
+  try {
+    await thread.setState({ policySessionKey: decision.sessionKey });
+  } catch {
+    // Best-effort cache only. The current turn still uses the authorized key.
+  }
+  return { issueContext, sessionKey: decision.sessionKey };
+}
+
+async function refuseManualMention(
+  thread: Thread<LinearbotThreadState>,
+  body: string,
+  logger: Logger,
+): Promise<void> {
+  try {
+    await thread.post(body);
+  } catch (error) {
+    logger.warn("linearbot_manual_mention_refusal_failed", {
+      error: errorMessage(error),
+    });
+  }
 }
 
 /**
@@ -609,8 +717,14 @@ function handleThreadFollowup(
     const serialized = await serializeMessage(
       issueCommentMessage(event, threadKey),
     );
+    const sessionKey = threadState.policySessionKey ?? threadKey;
     backgroundWaitUntil(
-      appendThreadFollowup({ options, serialized, threadKey, trace }),
+      appendThreadFollowup({
+        options,
+        serialized,
+        threadKey: sessionKey,
+        trace: { ...trace, threadId: sessionKey },
+      }),
     );
   })();
 }
@@ -690,7 +804,6 @@ function handleIssueAssignment(
       .linearClient;
     backgroundWaitUntil(
       runThreadTurn({
-        announceStart: true,
         applyStatus: true,
         botUserId: input.botUserId,
         client,
@@ -707,21 +820,104 @@ function handleIssueAssignment(
 }
 
 /**
- * Runs one agent turn on a thread's sandbox in a single, live comment. The
- * comment is posted with the first thought as a collapsed "Thinking…" section
- * that logs thoughts as the run streams (throttled), then swapped in place to
- * the final answer above a "Chain of thought" section when the run settles.
- * Seeds the issue context on the thread's first turn. Best-effort with a bounded
- * retry on transient (cold-start) failures; a hard failure shows an error.
+ * Policy-driven issue pickup. Unlike an explicit assignee/delegate handoff,
+ * this is only enabled by a matching Console policy and always reuses the
+ * issue-level session, so updates to one issue continue in one workspace.
+ */
+function handleIssueAutomation(
+  rawBody: string,
+  input: ThreadHandlerInput,
+): Promise<void> | null {
+  const event = parseLinearIssueAutomationWebhook(rawBody, input.botUserId);
+  if (!event) return null;
+  const { chat, options } = input;
+
+  return (async () => {
+    const bootstrapThread = chat.thread("linear:" + event.issueId);
+    const client = (bootstrapThread.adapter as unknown as LinearSessionCapableAdapter)
+      .linearClient;
+    const issueContext = client
+      ? await fetchLinearIssueContext(client, event.issueId, options.logger ?? noopLogger)
+      : null;
+    if (!issueContext?.teamId) {
+      traceLog(options, "linearbot_automation_context_missing", undefined, {
+        issue_id: event.issueId,
+      });
+      return;
+    }
+
+    const decision = await evaluateLinearAutomation(options, {
+      blocked: issueContext.blocked,
+      deduplication_key: "linear:" + event.issueId + ":" + event.trigger,
+      description: issueContext.description,
+      event_action: event.action,
+      event_type: "Issue",
+      labels: issueContext.labels ?? [],
+      linear_issue_id: event.issueId,
+      linear_issue_identifier: issueContext.identifier,
+      linear_issue_url: issueContext.url,
+      linear_project_id: issueContext.projectId,
+      linear_team_id: issueContext.teamId,
+      provider: "linear",
+      status: issueContext.status,
+      title: issueContext.title,
+      updated_fields: event.updatedFields,
+    });
+    if (
+      !decision ||
+      decision.decision !== "act" ||
+      !decision.actions.includes("implement_issue") ||
+      decision.sessionKey !== "linear:" + event.issueId
+    ) {
+      return;
+    }
+
+    const thread = chat.thread(decision.sessionKey);
+    const threadState = (await thread.state) ?? {};
+    const triggerKey = event.issueId + ":" + event.trigger;
+    if (threadState.lastAutomationTrigger === triggerKey) {
+      traceLog(options, "linearbot_automation_duplicate_skipped", undefined, {
+        issue_id: event.issueId,
+      });
+      return;
+    }
+    await thread.setState({ lastAutomationTrigger: triggerKey });
+    const trace: LinearbotTrace = {
+      includeContext: false,
+      messageId: "automation-" + triggerKey,
+      mode: "execute",
+      openStream: true,
+      startedAtMs: nowMs(),
+      threadId: decision.sessionKey,
+    };
+    const issueClient = (thread.adapter as unknown as LinearSessionCapableAdapter)
+      .linearClient;
+    backgroundWaitUntil(
+      runThreadTurn({
+        applyStatus: decision.moveToInProgress,
+        botUserId: input.botUserId,
+        client: issueClient,
+        executeMessage: automationInstructionMessage(event, decision),
+        issueId: event.issueId,
+        options,
+        overrides: {},
+        thread,
+        threadKey: decision.sessionKey,
+        trace,
+      }),
+    );
+  })();
+}
+
+/**
+ * Runs one agent turn on a thread's sandbox in one live-edited Linear comment.
+ * It starts with a concise status, then swaps that in place for the final answer.
+ * Detailed reasoning, tool activity, and provider errors remain in the durable
+ * session record for Console instead of being copied to the issue thread. Seeds
+ * the issue context on the thread's first turn. Best-effort with a bounded retry
+ * on transient (cold-start) failures; a hard failure has a safe public summary.
  */
 async function runThreadTurn(input: {
-  /**
-   * Post the reply (and move the issue to In Progress) the moment work starts,
-   * before any thought streams — for assignment turns, which have no triggering
-   * comment to react to. Mentions leave this off (they post on the first thought
-   * and ack with a 👀 reaction instead).
-   */
-  announceStart?: boolean;
   applyStatus: boolean;
   /** Bot's app-user id; used to detect whether the issue is delegated to it. */
   botUserId?: string;
@@ -733,12 +929,13 @@ async function runThreadTurn(input: {
   parentCommentId?: string;
   /** Comment to react to (👀 → ✅/❌); the triggering mention, if any. */
   reactCommentId?: string;
+  /** A preflight fetch may provide this so one mention does not query Linear twice. */
+  issueContext?: LinearIssueContext;
   thread: Thread<LinearbotThreadState>;
   threadKey: string;
   trace: LinearbotTrace;
 }): Promise<void> {
   const {
-    announceStart,
     applyStatus,
     botUserId,
     client,
@@ -748,6 +945,7 @@ async function runThreadTurn(input: {
     overrides,
     parentCommentId,
     reactCommentId,
+    issueContext: suppliedIssueContext,
     thread,
     threadKey,
     trace,
@@ -781,9 +979,9 @@ async function runThreadTurn(input: {
   // message, so a recycled sandbox or a single failed fetch never leaves the
   // agent guessing what "this task" is. Full context (with description) on the
   // thread's first turn; a compact id/title header thereafter.
-  const issueContext = client
+  const issueContext = suppliedIssueContext ?? (client
     ? await fetchLinearIssueContext(client, issueId, logger)
-    : null;
+    : null);
   // "Owned" = handed to the bot via the assignment turn (applyStatus) OR the
   // issue is delegated to the bot (true on a comment turn too, e.g. a question
   // on a delegated issue). Ownership injects the work-it-forward contract
@@ -849,57 +1047,13 @@ async function runThreadTurn(input: {
     threadId: threadKey,
     trace,
   };
-  // The live reply: posted with the first thought as a "Thinking…" section,
-  // edited (throttled) as more thoughts settle, then swapped to the final
-  // answer. `liveCommentId` persists across retries so a transient failure
-  // mid-stream keeps editing the same comment.
+  // Post a single concise status now and update it in place when the turn
+  // settles. The durable event stream remains the source of the full trace.
   let liveCommentId: string | undefined;
-  let livePostStarted = false;
-  let lastLiveRenderAtMs = 0;
-  let lastLiveLineCount = 0;
-  const renderThinking = async (
-    collector: CommentReplyCollector,
-  ): Promise<void> => {
-    if (!client) return;
-    const cotLines = collector.cotLines;
-    if (cotLines.length === 0) return;
-    try {
-      if (!livePostStarted) {
-        livePostStarted = true;
-        lastLiveLineCount = cotLines.length;
-        lastLiveRenderAtMs = nowMs();
-        liveCommentId = await postIssueReply(client, {
-          body: buildThinkingReplyBody(cotLines, collector.latestThought),
-          issueId,
-          parentCommentId,
-        });
-        return;
-      }
-      if (!liveCommentId || cotLines.length === lastLiveLineCount) return;
-      if (nowMs() - lastLiveRenderAtMs < LIVE_THINKING_EDIT_MIN_INTERVAL_MS)
-        return;
-      lastLiveLineCount = cotLines.length;
-      lastLiveRenderAtMs = nowMs();
-      await updateIssueReply(client, {
-        body: buildThinkingReplyBody(cotLines, collector.latestThought),
-        commentId: liveCommentId,
-      });
-    } catch (error) {
-      logger.debug("linearbot_live_render_failed", {
-        error: errorMessage(error),
-      });
-    }
-  };
-  // Assignment turns have no triggering comment to react to, so post the reply
-  // up front as the "I've started" signal — the chain of thought then fills in
-  // live (renderThinking) and the answer takes over when the run settles.
-  if (announceStart && client) {
-    livePostStarted = true;
-    lastLiveLineCount = 0;
-    lastLiveRenderAtMs = nowMs();
+  if (client) {
     try {
       liveCommentId = await postIssueReply(client, {
-        body: buildThinkingReplyBody([], WORK_START_HEADLINE),
+        body: buildWorkingReplyBody(),
         issueId,
         parentCommentId,
       });
@@ -930,7 +1084,6 @@ async function runThreadTurn(input: {
         rendererOptions(options),
       )) {
         collector.update(chunk);
-        await renderThinking(collector);
       }
       await thread.setState({
         historyForwarded: true,
@@ -943,10 +1096,7 @@ async function runThreadTurn(input: {
       });
       if (collector.failed) {
         failed = true;
-        body = buildCommentReplyBody({
-          answer: `⚠️ I ran into an error before finishing:\n\n${collector.errorText || "unknown error"}`,
-          cotLines: collector.cotLines,
-        });
+        body = buildFailedReplyBody();
       } else {
         const extracted = extractStatusMarker(
           collector.answer || fallback.text(),
@@ -954,7 +1104,6 @@ async function runThreadTurn(input: {
         marker = extracted.marker;
         body = buildCommentReplyBody({
           answer: extracted.text,
-          cotLines: collector.cotLines,
           fallback: fallback.text(),
         });
       }
@@ -974,14 +1123,14 @@ async function runThreadTurn(input: {
         error: errorMessage(error),
       });
       failed = true;
-      body = `⚠️ I ran into an error before finishing: ${errorMessage(error)}`;
+      body = buildFailedReplyBody();
       break;
     }
   }
   if (client && body !== undefined) {
     try {
-      // Swap the live "Thinking…" comment to the final answer in place; if no
-      // thought ever streamed (no live comment), post the answer fresh.
+      // Swap the concise status to the final answer in place; if the initial
+      // status could not be posted, publish the final answer fresh.
       if (liveCommentId) {
         await updateIssueReply(client, { body, commentId: liveCommentId });
       } else {
@@ -1041,6 +1190,56 @@ function assignmentInstructionMessage(
     raw: { linearbotAssignment: true },
     text: EMPTY_PROMPT_INSTRUCTION,
     threadId: threadKey,
+    timestamp: new Date().toISOString(),
+  };
+}
+
+function automationInstructionMessage(
+  event: LinearIssueWebhook,
+  decision: LinearAutomationDecision,
+): LinearbotApiMessage {
+  const reviewers = [
+    ...decision.reviewerLogins.map((login) => "@" + login),
+    ...decision.reviewerTeamSlugs.map((team) => "@" + team),
+  ];
+  const reviewerInstruction = reviewers.length
+    ? "Request review from " + reviewers.join(", ") + " when you open the PR."
+    : "Request the appropriate human reviewers using CODEOWNERS and GitHub suggestions.";
+  const inlineScreenshotInstruction =
+    "For a user-visible change, capture a real screenshot only from a verified local or preview flow when the sandbox can safely publish it. Embed the screenshot inline as Markdown in the PR description; if the PR body cannot be updated after upload, add it as an inline Markdown image in a PR comment. Do not leave a screenshot as a standalone attachment, a local file path, or a link-only artifact. If no safe inline-image publishing path is available, say so in the PR; never fabricate a screenshot.";
+  const previewInstruction = decision.previewLabel
+    ? "For a user-visible change, after opening the draft PR apply the configured preview label " +
+      JSON.stringify(decision.previewLabel) +
+      " with `gh pr edit --add-label`. Then inspect the PR's verified checks and comments for a preview URL. Include it only after it exists; otherwise say that preview provisioning is pending. Do not apply the label for a non-visual change, and never create or guess a preview URL yourself."
+    : "If the repository's normal verified deployment flow provides a preview URL for a user-visible change, include that URL in the PR and Linear update; otherwise state that no preview URL is available. Never create or guess a preview URL yourself. For a non-visual change, say that no screenshot or preview URL applies.";
+  const baseBranchInstruction = decision.baseBranch
+    ? "The policy-selected default base branch is " + JSON.stringify(decision.baseBranch) + ". Fetch that exact remote branch, create the work branch from its current tip, and pass `--base " + decision.baseBranch + "` to `gh pr create`. Do not infer `main` from the local checkout. Use another base only when the initiating Linear issue or an authorized human explicitly names it; state that override in the PR."
+    : "Resolve the repository's current default branch with `gh repo view --json defaultBranchRef`; create the work branch from that exact remote tip and pass it explicitly to `gh pr create --base`. Do not infer `main` from the local checkout.";
+  const text = [
+    "This Linear issue was selected by an automation policy after a new or updated issue event.",
+    "First assess whether the issue is genuinely ready and actionable. If scope, acceptance criteria, repository fit, or a dependency is unclear, do not create a PR; post one concise Linear comment naming what is missing and stop.",
+    "If it is actionable, implement it in " + (decision.githubRepository ?? "the mapped GitHub repository") + ". Use git and gh in your sandbox, run the relevant verification, open a draft PR that links this Linear issue, and do not merge it.",
+    baseBranchInstruction,
+    "Use the exact Linear issue identifier from the injected issue context as a prefix in the draft PR title (for example, `ENG-123: concise summary`). This is the durable link contract for review and release evidence. Include the issue URL in the PR body, but do not use closing magic words such as `Fixes`, `Closes`, or `Resolves`; the issue must not move to Done merely because its PR merges.",
+    inlineScreenshotInstruction,
+    previewInstruction,
+    reviewerInstruction,
+    "When and only when the PR exists, finish with Linear-Status: in_review so the issue can move to review. If no PR is appropriate, finish with Linear-Status: todo."
+  ].join("\n\n");
+  return {
+    attachments: [],
+    author: {
+      fullName: "Centaur automation",
+      isBot: false,
+      isMe: false,
+      userId: "linear-automation",
+      userName: "linear-automation",
+    },
+    id: "automation-" + event.issueId + "-" + event.trigger,
+    isMention: true,
+    raw: { linearbotAutomation: true },
+    text,
+    threadId: decision.sessionKey,
     timestamp: new Date().toISOString(),
   };
 }

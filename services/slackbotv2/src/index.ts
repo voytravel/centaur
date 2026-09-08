@@ -66,11 +66,17 @@ import { resolveChannelDefault } from './channel-defaults'
 import { extractMessageOverrides, type HarnessOverrides } from './overrides'
 import { createFlagMessageOverridesStrategy } from './message-overrides-strategy'
 import {
+  isAllowedSlackDirectMessage,
   isAllowedSlackMessage,
   isAllowedSlackWebhookBody,
   parseSlackWebhookPayload
 } from './slack-events'
 import { isSlackStopCommand } from './stop-command'
+import {
+  slackThreadReplyDecision,
+  slackThreadReplyInstruction,
+  slackThreadReplyMode
+} from './thread-reply-policy'
 import type {
   ForwardSessionInput,
   JsonObject,
@@ -351,9 +357,11 @@ export function createSlackbotV2(options: SlackbotV2Options): SlackbotV2 {
 
   // Slack does not classify mentions inside Block Kit or legacy attachments as
   // app_mention events. Alertmanager uses attachment.pretext, so inspect rich
-  // payloads after Chat SDK has verified the webhook and before executing.
+  // payloads after Chat SDK has verified the webhook and before executing. An
+  // allowlisted one-to-one DM is also an explicit execution trigger.
   chat.onNewMessage(/^.*$/s, async (thread, message) => {
-    if (!slackRichTextMentionsUser(message.raw, options.botUserId)) return
+    const directMessage = isAllowedSlackDirectMessage(message, options, logger)
+    if (!directMessage && !slackRichTextMentionsUser(message.raw, options.botUserId)) return
     if (!(await isAllowedSlackMessage(message, options, logger))) return
     message.isMention = true
     await handleSlackMessageHandoff(thread, message, {
@@ -362,14 +370,74 @@ export function createSlackbotV2(options: SlackbotV2Options): SlackbotV2 {
       options,
       state,
       subscribe: true,
-      trigger: 'new_mention'
+      trigger: directMessage ? 'direct_message' : 'new_mention'
     })
   })
 
   chat.onSubscribedMessage(async (thread, message) => {
+    const directMessage = isAllowedSlackDirectMessage(message, options, logger)
     if (!(await isAllowedSlackMessage(message, options, logger))) return
-    if (slackRichTextMentionsUser(message.raw, options.botUserId)) message.isMention = true
-    if (message.isMention !== true) {
+    if (directMessage || slackRichTextMentionsUser(message.raw, options.botUserId)) {
+      message.isMention = true
+    }
+    const currentState = (await thread.state) ?? {}
+    if (message.isMention === true && currentState.muted === true) {
+      // An explicit new mention is an intentional opt-in after `@Centaur stop`.
+      await thread.setState({ muted: false })
+      traceLog(
+        options,
+        'slackbotv2_thread_reactivated_by_mention',
+        createHandoffTrace(thread, message, 'execute')
+      )
+    }
+
+    let threadReplyInstruction: string | undefined
+    let threadReplyContinuation = false
+    if (message.isMention !== true && isSlackThreadReply(message)) {
+      // Never append unmentioned messages into a run that is already active.
+      // They are still available in Slack history when the next explicit
+      // mention refreshes context, but cannot steer or interrupt the run.
+      if (currentState.activeExecution === true) {
+        traceLog(
+          options,
+          'slackbotv2_subscribed_thread_reply_ignored_during_active_execution',
+          createHandoffTrace(thread, message, 'append')
+        )
+        return
+      }
+      if (currentState.muted === true) {
+        traceLog(
+          options,
+          'slackbotv2_subscribed_thread_reply_ignored_while_muted',
+          createHandoffTrace(thread, message, 'append')
+        )
+        return
+      }
+      // Chat SDK can strip ordinary member mentions from `message.text`, but
+      // Slack's signed event retains them in `raw.text`. The reply policy uses
+      // that canonical source to avoid mistaking a request to another person
+      // for a continuation directed to Centaur.
+      const rawThreadReplyText = stringField(slackRawRecord(message).text)
+      const decision = slackThreadReplyDecision(
+        slackThreadReplyMode(options),
+        rawThreadReplyText || message.text,
+        options.botUserId
+      )
+      if (decision.kind === 'ignore') {
+        traceLog(
+          options,
+          'slackbotv2_subscribed_thread_reply_ignored_by_policy',
+          createHandoffTrace(thread, message, 'append'),
+          { mode: slackThreadReplyMode(options), reason: decision.reason }
+        )
+        return
+      }
+      threadReplyContinuation = true
+      if (decision.kind === 'investigate' || decision.kind === 'act') {
+        threadReplyInstruction = slackThreadReplyInstruction(decision)
+      }
+    }
+    if (message.isMention !== true && !threadReplyContinuation) {
       traceLog(
         options,
         'slackbotv2_subscribed_message_without_mention_ignored',
@@ -378,13 +446,18 @@ export function createSlackbotV2(options: SlackbotV2Options): SlackbotV2 {
       )
       return
     }
-    lateSlackFiles.rememberFilelessMention(thread, message)
+    if (message.isMention === true) lateSlackFiles.rememberFilelessMention(thread, message)
     await handleSlackMessageHandoff(thread, message, {
       assistantStatusRequested: true,
+      instructionPreamble: threadReplyInstruction,
       mode: 'execute',
       options,
       state,
-      trigger: 'subscribed_message'
+      trigger: directMessage
+        ? 'direct_message'
+        : threadReplyContinuation
+          ? 'subscribed_thread_reply'
+          : 'subscribed_message'
     })
   })
 
@@ -497,6 +570,8 @@ async function handleSlackMessageHandoff(
   message: ChatMessage,
   input: {
     assistantStatusRequested: boolean
+    /** Transport-owned constraints that accompany the user input, not thread history. */
+    instructionPreamble?: string
     mode: SlackbotV2MessageMode
     options: SlackbotV2Options
     state: StateAdapter
@@ -510,6 +585,7 @@ async function handleSlackMessageHandoff(
     subscribe: input.subscribe === true,
     trigger: input.trigger
   })
+  if (await handleStopCommand(thread, message, input.options, input.trigger)) return
   let initialAssistantStatusVisible = false
   const assistantStatus = input.assistantStatusRequested
     ? setInitialAssistantStatus(thread, input.options, trace)
@@ -522,9 +598,6 @@ async function handleSlackMessageHandoff(
     backgroundWaitUntil(assistantStatus.then(() => undefined).catch(() => undefined))
   }
   try {
-    if (await handleStopCommand(thread, message, input.options, input.trigger)) {
-      return
-    }
     if (input.subscribe) {
       await subscribeSlackThreadForHandoff(thread, input.options, trace, input.trigger)
     }
@@ -537,6 +610,7 @@ async function handleSlackMessageHandoff(
     await syncThreadMessageToSession(thread, message, {
       initialAssistantStatusRequested: input.assistantStatusRequested,
       initialAssistantStatusVisible,
+      instructionPreamble: input.instructionPreamble,
       mode: input.mode,
       options: input.options,
       state: input.state
@@ -574,12 +648,15 @@ async function handleStopCommand(
   const reason = `Interrupted from Slack by ${slackUserIdForMessage(message) ?? 'unknown user'}`
   try {
     const response = await interruptSessionExecution(options, thread.id, reason)
+    await thread.unsubscribe()
     await thread.setState({
       activeExecution: false,
       lastEventId: latest.lastEventId ?? latest.renderObligation?.afterEventId ?? 0,
+      muted: true,
       renderObligation: null
     })
     await setAssistantStatus(thread, '', options, trace)
+    await thread.post('Stopped and muted this thread. Mention me again to resume.')
     traceLog(options, 'slackbotv2_stop_command_complete', trace, {
       execution_id: response.execution_id,
       interrupted: response.interrupted,
@@ -613,6 +690,8 @@ async function subscribeSlackThreadForHandoff(
   )
   try {
     await thread.subscribe()
+    const currentState = (await thread.state) ?? {}
+    if (currentState.muted === true) await thread.setState({ muted: false })
     traceLog(options, 'slackbotv2_handoff_subscribe_complete', trace, {
       ...fields,
       phase_ms: elapsedMs(startedAtMs)
@@ -938,6 +1017,7 @@ async function ensureStateConnected(
 type SyncThreadMessageInput = {
   initialAssistantStatusRequested?: boolean
   initialAssistantStatusVisible?: boolean
+  instructionPreamble?: string
   mode: SlackbotV2MessageMode
   options: SlackbotV2Options
   /** Number of in-process retries already spent on this message's handoff. */
@@ -1074,7 +1154,7 @@ async function syncThreadMessageToSession(
   const requestedStickyOverrides = stickyThreadOverrideUpdate(overrides)
   // Once a thread is pinned, only another explicit flag may move it. The LLM
   // strategy can still infer per-turn reasoning, but a false-positive harness,
-  // model, or provider selection must not replace --claude/--amp/--codex/
+  // model selection must not replace --claude/--codex/
   // --nanocodex state.
   const preserveStickyOverrides = Boolean(
     requestedStickyOverrides &&
@@ -1099,63 +1179,18 @@ async function syncThreadMessageToSession(
   // (unlike it) ridden on the input line to take effect. harness/model/provider
   // are sticky (effectiveOverrides); reasoning is per-turn.
   const channelDefault = resolveChannelDefault(input.options.channelDefaults, thread.id)
-  const resolvedHarnessType = effectiveOverrides.harnessType ?? channelDefault?.harnessType
+  const configuredHarnessType = effectiveOverrides.harnessType ?? channelDefault?.harnessType
+  const stickyHarness = stickyOverrideRaw(state, stickyOverridesUpdate, 'harnessType')
   // A `null` sticky model/provider is a tombstone from a harness switch: honor
   // it, don't re-pair a stale channel default with the new harness. Only
   // `undefined` (never set) falls through to the channel default.
-  const resolvedModel =
-    stickyOverrideRaw(state, stickyOverridesUpdate, 'model') === null
-      ? undefined
-      : effectiveOverrides.model ?? channelDefault?.model
+  const stickyModel = stickyOverrideRaw(state, stickyOverridesUpdate, 'model')
+  const configuredModel =
+    stickyModel === null ? undefined : effectiveOverrides.model ?? channelDefault?.model
   const resolvedProvider =
     stickyOverrideRaw(state, stickyOverridesUpdate, 'provider') === null
       ? undefined
       : effectiveOverrides.provider ?? channelDefault?.provider
-  const effectiveHarnessType = resolvedHarnessType ?? input.options.defaultHarnessType ?? 'codex'
-  // Without an explicit override or channel default the harness runs its
-  // configured default (CLAUDE_MODEL/CODEX_MODEL, else the baked harness
-  // config); show and record that instead of dropping the model entirely.
-  const harnessDefaultModel = defaultModelForHarness(
-    effectiveHarnessType,
-    input.options.harnessDefaultModels
-  )
-  const effectiveModel = resolvedModel ?? harnessDefaultModel
-  const modelOverride = resolvedModel !== harnessDefaultModel ? resolvedModel : undefined
-  const harnessRollout = resolveHarnessRollout({
-    modelOverride,
-    requestedHarness: effectiveHarnessType,
-    rolloutPercent: input.options.codexNanocodexRolloutPercent ?? 0,
-    threadId: thread.id
-  })
-  const rolloutSelected = harnessRollout.assignment !== undefined
-  const resolvedReasoning = reasoningForModel(
-    effectiveHarnessType,
-    effectiveModel,
-    overrides.reasoning ?? channelDefault?.reasoning
-  )
-  const effectiveReasoning = effectiveReasoningForHarness(
-    effectiveHarnessType,
-    resolvedReasoning,
-    input.options.harnessDefaultReasoning
-  )
-  const responseMetadataMode = input.options.responseMetadataMode ?? 'first'
-  const includeResponseMetadata =
-    responseMetadataMode === 'always' ||
-    (responseMetadataMode === 'first' && isFirstAssistantMessage)
-  let responseContextBlock = isFirstAssistantMessage || includeResponseMetadata
-    ? buildSlackResponseContextBlock({
-        consoleBaseUrl: isFirstAssistantMessage ? input.options.consolePublicUrl : undefined,
-        threadKey: thread.id,
-        harnessType: effectiveHarnessType,
-        metadataEnabled: includeResponseMetadata,
-        model: effectiveModel,
-        reasoning: effectiveReasoning,
-        serviceTier:
-          input.options.responseServiceTierEnabled === true && !resolvedProvider
-            ? defaultServiceTierForHarness(effectiveHarnessType)
-            : undefined
-      })
-    : undefined
   if (overrides.harnessType || overrides.model || overrides.provider || overrides.reasoning) {
     traceLog(input.options, 'slackbotv2_forward_overrides_parsed', trace, {
       harness_type: overrides.harnessType,
@@ -1213,6 +1248,84 @@ async function syncThreadMessageToSession(
   const renderLease: { release: (() => Promise<void>) | null } = { release: null }
   const candidateMessages = context ?? [serializedMessage]
   const messagesToAppend = candidateMessages.filter(item => !messageIds.has(item.id))
+  const hasVisualAttachment = candidateMessages.some(item =>
+    item.attachments.some(attachment =>
+      attachment.type === 'image' || attachment.mimeType?.startsWith('image/') === true
+    )
+  )
+  // A channel default is deployment policy, not an explicit user override.
+  // Let a deployment route the first visual execution to a paired multimodal
+  // harness/model while honoring any sticky or inline user selection. Do not
+  // switch a live thread's harness implicitly: a session keeps its harness for
+  // its lifetime and changing it would otherwise require a restart.
+  const selectVisionRoute =
+    shouldStartExecution &&
+    isFirstAssistantMessage &&
+    hasVisualAttachment &&
+    !stickyHarness &&
+    !stickyModel &&
+    Boolean(input.options.visionHarnessType || input.options.visionModel)
+  const resolvedHarnessType = selectVisionRoute
+    ? input.options.visionHarnessType ?? configuredHarnessType
+    : configuredHarnessType
+  const effectiveHarnessType = resolvedHarnessType ?? input.options.defaultHarnessType ?? 'codex'
+  const resolvedModel =
+    selectVisionRoute && input.options.visionModel
+      ? input.options.visionModel
+      : configuredModel
+  // Without an explicit override or channel default the harness runs its
+  // configured default (CLAUDE_MODEL/CODEX_MODEL, else the baked harness
+  // config); show and record that instead of dropping the model entirely.
+  const harnessDefaultModel = defaultModelForHarness(
+    effectiveHarnessType,
+    input.options.harnessDefaultModels
+  )
+  const effectiveModel = resolvedModel ?? harnessDefaultModel
+  const modelOverride = resolvedModel !== harnessDefaultModel ? resolvedModel : undefined
+  const harnessRollout = resolveHarnessRollout({
+    modelOverride,
+    requestedHarness: effectiveHarnessType,
+    rolloutPercent: input.options.codexNanocodexRolloutPercent ?? 0,
+    threadId: thread.id
+  })
+  const rolloutSelected = harnessRollout.assignment !== undefined
+  const resolvedReasoning = reasoningForModel(
+    effectiveHarnessType,
+    effectiveModel,
+    overrides.reasoning ?? channelDefault?.reasoning
+  )
+  const effectiveReasoning = effectiveReasoningForHarness(
+    effectiveHarnessType,
+    resolvedReasoning,
+    input.options.harnessDefaultReasoning
+  )
+  const responseMetadataMode = input.options.responseMetadataMode ?? 'first'
+  const includeResponseMetadata =
+    responseMetadataMode === 'always' ||
+    (responseMetadataMode === 'first' && isFirstAssistantMessage)
+  let responseContextBlock = isFirstAssistantMessage || includeResponseMetadata
+    ? buildSlackResponseContextBlock({
+        consoleBaseUrl: isFirstAssistantMessage ? input.options.consolePublicUrl : undefined,
+        threadKey: thread.id,
+        harnessType: effectiveHarnessType,
+        metadataEnabled: includeResponseMetadata,
+        model: effectiveModel,
+        reasoning: effectiveReasoning,
+        serviceTier:
+          input.options.responseServiceTierEnabled === true && !resolvedProvider
+            ? defaultServiceTierForHarness(effectiveHarnessType)
+            : undefined,
+        stopHintEnabled: isFirstAssistantMessage
+      })
+    : undefined
+  if (hasVisualAttachment) {
+    traceLog(input.options, 'slackbotv2_visual_attachment_detected', trace, {
+      selected_vision_harness: selectVisionRoute && resolvedHarnessType === input.options.visionHarnessType,
+      selected_vision_model: resolvedModel === input.options.visionModel,
+      vision_harness_configured: Boolean(input.options.visionHarnessType),
+      vision_model_configured: Boolean(input.options.visionModel)
+    })
+  }
 
   const forwardInput: ForwardSessionInput = {
     afterEventId: lastEventId,
@@ -1227,6 +1340,7 @@ async function syncThreadMessageToSession(
         : resolvedHarnessType
       : undefined,
     harnessAssignment: shouldStartExecution ? harnessRollout.assignment : undefined,
+    instructionPreamble: input.instructionPreamble,
     metadataHarnessType: shouldStartExecution ? effectiveHarnessType : undefined,
     messages: messagesToAppend,
     model: shouldStartExecution ? resolvedModel : undefined,
@@ -1388,7 +1502,8 @@ async function syncThreadMessageToSession(
             serviceTier:
               input.options.responseServiceTierEnabled === true && !resolvedProvider
                 ? defaultServiceTierForHarness(harnessType)
-                : undefined
+                : undefined,
+            stopHintEnabled: isFirstAssistantMessage
           })
         }
         traceLog(input.options, 'slackbotv2_session_harness_resolved', trace, {
@@ -1780,7 +1895,12 @@ const FALLBACK_OPEN_MAX_ATTEMPTS = 4
 async function renderFallbackFinalAnswer(
   thread: Thread,
   options: SlackbotV2Options,
-  source: { afterEventId: number; executionId?: string; threadId: string },
+  source: {
+    afterEventId: number
+    executionId?: string
+    terminalOnly?: boolean
+    threadId: string
+  },
   trace?: SlackbotV2Trace,
   replacement?: { replaceMessageId: string }
 ): Promise<{ lastEventId: number } | null> {
@@ -1797,6 +1917,7 @@ async function renderFallbackFinalAnswer(
           onEventId: eventId => {
             lastEventId = Math.max(lastEventId, eventId)
           },
+          terminalOnly: source.terminalOnly,
           threadId: source.threadId,
           trace
         })
@@ -2120,9 +2241,11 @@ async function recoverRenderObligation(
   }
   const thread = chat.thread(threadId)
   // Replay from the obligation's starting position, not the thread's
-  // lastEventId: the failed render may have consumed events (including the
-  // terminal result) past which a resumed stream would never see the final
-  // answer again. Session events are durable, so a full replay is safe.
+  // lastEventId: the failed render may have consumed the terminal result past
+  // which a resumed stream would never see the final answer again. Recovery
+  // deliberately skips historical harness output and waits for api-rs's
+  // bounded terminal event; rebuilding a long progress stream can require
+  // memory proportional to the complete execution history.
   let lastEventId = obligation.afterEventId
   const input: ForwardSessionInput = {
     afterEventId: obligation.afterEventId,
@@ -2140,7 +2263,10 @@ async function recoverRenderObligation(
 
   let openedStream: AsyncIterable<SlackbotV2RendererSource>
   try {
-    openedStream = await openSessionEventStream(options, input)
+    openedStream = await openSessionEventStream(options, {
+      ...input,
+      terminalOnly: true
+    })
   } catch (error) {
     const retryable = isRetryableSessionApiError(error)
     traceLog(options, 'slackbotv2_render_recovery_deferred', trace, {
@@ -2190,6 +2316,7 @@ async function recoverRenderObligation(
         {
           afterEventId: obligation.afterEventId,
           executionId: obligation.executionId,
+          terminalOnly: true,
           threadId
         },
         trace,
@@ -2252,6 +2379,7 @@ async function recoverRenderObligation(
         {
           afterEventId: obligation.afterEventId,
           executionId: obligation.executionId,
+          terminalOnly: true,
           threadId
         },
         trace,

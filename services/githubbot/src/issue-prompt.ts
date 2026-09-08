@@ -16,12 +16,14 @@ Understand the work before touching anything:
 - Decide what "done" means before you write code. If it's a bug, reproduce it first so you can prove your fix. If the ask is ambiguous, underspecified, or larger than one coherent change, do NOT guess: post a comment on the issue explaining what you'd need to proceed (or how you'd split it up), @-mention the person who assigned you, and stop there.
 
 Implement the change:
-- Work on a new branch off the default branch. Make the smallest coherent change that resolves the issue, matching the conventions of the surrounding code.
+- Resolve the repository's current default branch with \`gh repo view --json defaultBranchRef\`. Fetch that exact remote branch, create the work branch from its current tip, and pass it explicitly to \`gh pr create --base\`. Do not infer \`main\` from the local checkout. Use another base only when the issue or assigning human explicitly names it; state that override in the PR. Make the smallest coherent change that resolves the issue, matching the conventions of the surrounding code.
 - Add or update tests that actually assert the behavior the issue cares about.
-- Run the project's checks (build, typecheck, lint, tests) and get them green before opening anything.
+- Inspect the repository's documented local-development path and CI workflows. For the affected behavior, try the documented whole-stack or local-application flow before relying only on narrow tests; follow existing scripts rather than inventing a stack command.
+- Run the project's focused checks (build, typecheck, lint, tests) and get them green before opening anything. Distinguish completed stack/preview validation from focused checks and from any blocked environment requirement.
 
 Open a pull request:
 - Push your branch and open a PR that closes the issue (e.g. "Closes #<number>" in the body). Keep the description brief and in plain prose — what changed and how to verify, not a code walkthrough.
+- For a user-visible change, capture a real screenshot only from a verified local or preview flow when the sandbox can safely publish it. Embed the screenshot inline as Markdown in the PR description; if the PR body cannot be updated after upload, add it as an inline Markdown image in a PR comment. Do not leave a screenshot as a standalone attachment, a local file path, or a link-only artifact. If no safe inline-image publishing path is available, say so in the PR; never fabricate a screenshot.
 - Assign the PR to yourself, so you keep managing it through review and CI to merge.
 - Comment on the issue linking the PR.
 
