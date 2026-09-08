@@ -45,6 +45,37 @@ class AutomationActivityReportTest < ActiveSupport::TestCase
     end
   end
 
+  test "shows the normalized Linear issue being worked on" do
+    workstream = AutomationWorkstream.create!(
+      provider: "linear",
+      subject_key: "linear:16d949d4-b08d-409f-9476-343d0089e508",
+      session_key: "linear:16d949d4-b08d-409f-9476-343d0089e508",
+      last_event_at: Time.current,
+      metadata: {
+        "linear_issue_identifier" => "ENG-1423",
+        "linear_issue_title" => "Show the automated issue in activity notices",
+        "linear_issue_url" => "https://linear.app/acme/issue/ENG-1423"
+      }
+    )
+    event = AutomationEvent.create!(
+      automation_workstream: workstream,
+      provider: "linear",
+      deduplication_key: "activity-report-#{SecureRandom.hex(8)}",
+      event_type: "Issue",
+      decision: "act",
+      action_kind: "implement_issue",
+      metadata: {
+        "activity_report" => { "kind" => "accepted", "slack_channel" => "C0123456789" }
+      },
+      received_at: Time.current
+    )
+
+    input = AutomationActivityReport.new(event).workflow_input
+
+    assert_includes input.fetch("text"),
+      "Issue: <https://linear.app/acme/issue/ENG-1423|ENG-1423 — Show the automated issue in activity notices>"
+  end
+
   test "omits a malformed public console URL rather than emitting it" do
     event, workstream = configured_event
     with_env("CENTAUR_CONSOLE_PUBLIC_URL" => "https://user@example.test/?token=not-for-slack") do
