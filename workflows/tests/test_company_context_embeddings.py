@@ -18,6 +18,13 @@ def _load():
     return importlib.import_module("workflows.company_context_embeddings")
 
 
+def test_workflow_openai_client_kwargs_uses_the_configured_gateway(monkeypatch):
+    embeddings = _load()
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://gateway.example/v1")
+
+    assert embeddings._openai_client_kwargs() == {"base_url": "https://gateway.example/v1"}
+
+
 class FakeConnection:
     def __init__(self, rows):
         self.rows = rows

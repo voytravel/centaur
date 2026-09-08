@@ -273,6 +273,30 @@ if custom_providers_raw:
     else:
         text = tomli_w.dumps(config)
 
+# OPENAI_BASE_URL is the deployment-wide OpenAI-compatible endpoint. Codex
+# does not treat it as a durable provider override, so configure the default
+# provider explicitly for both app-server sessions and direct CLI use.
+base_url = (os.environ.get("OPENAI_BASE_URL") or "").strip().rstrip("/")
+if base_url:
+    import tomllib
+    import tomli_w
+
+    try:
+        config = tomllib.loads(text)
+    except tomllib.TOMLDecodeError as exc:
+        print(f"ignoring OPENAI_BASE_URL provider patch: {exc}", file=sys.stderr)
+    else:
+        config["model_provider"] = "configured-gateway"
+        config.setdefault("model_providers", {})["configured-gateway"] = {
+            "name": "Configured OpenAI-compatible gateway",
+            "base_url": base_url,
+            "env_key": "OPENAI_API_KEY",
+            "wire_api": "responses",
+            "requires_openai_auth": False,
+            "supports_websockets": False,
+        }
+        text = tomli_w.dumps(config)
+
 # CODEX_CONFIG_OVERLAY: deep-merge an operator-supplied TOML fragment over the
 # baked config so a deployment can configure codex -- e.g. point it at a custom
 # model provider via a [model_providers.*] block -- through sandbox.extraEnv,

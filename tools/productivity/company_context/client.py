@@ -28,6 +28,7 @@ DEFAULT_EMBEDDINGS_DIMENSIONS = 1_536
 # these vectors for the matching bound.
 MAX_EMBEDDINGS_DIMENSIONS = 2_000
 OPENAI_API_KEY_ENV = "OPENAI_API_KEY"
+OPENAI_BASE_URL_ENV = "OPENAI_BASE_URL"
 COMPANY_CONTEXT_EMBEDDINGS_ENABLED_ENV = "COMPANY_CONTEXT_EMBEDDINGS_ENABLED"
 COMPANY_CONTEXT_EMBEDDINGS_MODEL_ENV = "COMPANY_CONTEXT_EMBEDDINGS_MODEL"
 COMPANY_CONTEXT_EMBEDDINGS_DIMENSIONS_ENV = "COMPANY_CONTEXT_EMBEDDINGS_DIMENSIONS"
@@ -131,6 +132,12 @@ def _database_url_with_name(value: str, database: str) -> str:
 def _postgres_database_name() -> str:
     value = os.getenv(COMPANY_CONTEXT_DATABASE_ENV, DEFAULT_POSTGRES_DATABASE)  # noqa: TID251
     return value.strip() or DEFAULT_POSTGRES_DATABASE
+
+
+def _openai_client_kwargs() -> dict[str, str]:
+    """Route embeddings through the deployment's configured gateway."""
+    base_url = os.getenv(OPENAI_BASE_URL_ENV, "").strip()  # noqa: TID251
+    return {"base_url": base_url} if base_url else {}
 
 
 def _as_dict(value: Any) -> dict[str, Any]:
@@ -636,7 +643,7 @@ class CompanyContextClient:
                 raise RuntimeError(f"{OPENAI_API_KEY_ENV} is not configured")
             from openai import AsyncOpenAI
 
-            client = AsyncOpenAI(api_key=api_key)
+            client = AsyncOpenAI(api_key=api_key, **_openai_client_kwargs())
             self._embeddings_client = client
 
         response = await client.embeddings.create(
