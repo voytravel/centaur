@@ -50,7 +50,7 @@ class AutomationActivityReport
     return pr_created_message_text if report_kind == "pr_created"
 
     lines = [ ":gear: *Centaur automation accepted*" ]
-    lines << "Source: #{source_reference}"
+    lines << "#{source_label}: #{source_reference}"
     lines << "Actions: #{action_summary}"
     lines << "Audit: #{audit_reference}"
     lines.join("\n")
@@ -65,8 +65,25 @@ class AutomationActivityReport
   end
 
   def source_reference
-    slack_link(@workstream.safe_source_url, @workstream.subject_key) ||
-      "`#{slack_escape(@workstream.subject_key)}`"
+    label = linear_issue_label || @workstream.subject_key
+    slack_link(@workstream.safe_source_url, label) ||
+      "`#{slack_escape(label)}`"
+  end
+
+  def source_label
+    @workstream.provider == "linear" ? "Issue" : "Source"
+  end
+
+  def linear_issue_label
+    return unless @workstream.provider == "linear"
+
+    identifier = @workstream.metadata["linear_issue_identifier"].to_s.strip
+    return unless identifier.match?(AutomationQaDispatch::ISSUE_IDENTIFIER_PATTERN)
+
+    title = AutomationWorkstream.normalize_linear_issue_title(
+      @workstream.metadata["linear_issue_title"]
+    )
+    [ identifier, title ].compact.join(" — ")
   end
 
   def audit_reference
