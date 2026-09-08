@@ -53,8 +53,21 @@ export class SessionApiError extends Error {
   }
 }
 
+/**
+ * Session events are replayable SSE. A clean transport close before a terminal
+ * event does not finish the turn: callers retain their event watermark and
+ * reopen the stream without executing the turn again.
+ */
+export class IncompleteSessionEventStreamError extends Error {
+  constructor() {
+    super("session event stream closed before terminal completion");
+    this.name = "IncompleteSessionEventStreamError";
+  }
+}
+
 export function isRetryableSessionApiError(error: unknown): boolean {
   if (error instanceof SessionApiError) return error.retryable;
+  if (error instanceof IncompleteSessionEventStreamError) return true;
   if (!(error instanceof Error)) return false;
   return error.name === "AbortError" || error.name === "TypeError";
 }
@@ -917,6 +930,10 @@ async function* parseSessionEventStream(
       return;
     }
   }
+  // Proxies can close a live SSE response cleanly. Do not turn that into an
+  // empty Linear reply; the caller will reopen this replayable stream from its
+  // most recent event watermark.
+  throw new IncompleteSessionEventStreamError();
 }
 
 async function* parseSseEvents(

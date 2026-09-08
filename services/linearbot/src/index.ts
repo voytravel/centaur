@@ -357,7 +357,9 @@ function issueCommentMessage(
   } as unknown as ChatMessage;
 }
 
-const THREAD_TURN_MAX_RETRIES = 3;
+// Reopening a session event stream is a watermark-based replay, so allow
+// bounded recovery from transient stream closes without re-executing a turn.
+const THREAD_TURN_MAX_RETRIES = 5;
 // Min gap between live edits of the streaming "Thinking…" comment. The first
 // thought posts immediately; subsequent thoughts coalesce to stay well under
 // Linear's mutation rate limits. The final answer always writes regardless.
