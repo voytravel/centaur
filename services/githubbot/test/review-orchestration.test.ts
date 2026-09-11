@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  crossModelReviewEventInstructions,
   parseCrossModelReviewOrchestration,
   planCrossModelReview,
 } from "../src/review-orchestration";
@@ -39,6 +40,14 @@ const valid = {
 };
 
 describe("cross-model review orchestration", () => {
+  test("requires a terminal GitHub review state instead of a comment-only follow-up", () => {
+    const prompt = crossModelReviewEventInstructions();
+
+    expect(prompt).toContain("submit it as REQUEST_CHANGES");
+    expect(prompt).toContain("submit an APPROVE review");
+    expect(prompt).toContain("Never substitute a comment-only review");
+  });
+
   test("accepts a bounded distinct reviewer group", () => {
     expect(parseCrossModelReviewOrchestration(valid)).toMatchObject({
       maxConcurrency: 2,
