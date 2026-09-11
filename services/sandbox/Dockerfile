@@ -244,7 +244,7 @@ RUN uv tool install "playwright==${PLAYWRIGHT_VERSION}" \
 
 # ── Agent skills + workspace setup (rarely changes) ─────────────────────────
 RUN --mount=type=cache,target=/home/agent/.npm,uid=1001,gid=1001,sharing=locked \
-    npx -y skills add vercel-labs/agent-browser
+    npx -y skills add vercel-labs/agent-browser --agent '*' -y
 # git-branch configures each writable clone with the publishing GitHub account.
 # A baked agent identity would reappear as a co-author when GitHub squash-merges its commits.
 RUN mkdir -p ~/.codex ~/.pi/agent ~/github ~/workspace \
