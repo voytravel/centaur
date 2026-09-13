@@ -86,6 +86,16 @@ class RequestRpc(FakeRpc):
                 "run_id": "run-child",
                 "created": True,
             }
+        if message_type == "ctx.workflow.history":
+            return {
+                "runs": [
+                    {
+                        "run_id": "run-previous",
+                        "status": "completed",
+                        "result": {"status": "completed"},
+                    }
+                ]
+            }
         if message_type == "ctx.post_to_slack":
             return {"channel": payload["channel"], "ts": "1710000000.000100"}
         if message_type == "ctx.sleep":
@@ -434,6 +444,39 @@ class WorkflowHostTests(unittest.TestCase):
                 }
             ],
         )
+
+    def test_previous_workflow_runs_requests_bounded_result_history(self) -> None:
+        host = load_workflow_host()
+        rpc = RequestRpc()
+        ctx = host.WorkflowContext(
+            rpc,
+            run_id="run-123",
+            task_id="task-456",
+            workflow_name="sample",
+        )
+
+        runs = asyncio.run(ctx.previous_workflow_runs(limit=3))
+
+        self.assertEqual(runs[0]["run_id"], "run-previous")
+        self.assertEqual(
+            rpc.requests,
+            [{"type": "ctx.workflow.history", "limit": 3}],
+        )
+
+    def test_previous_workflow_runs_rejects_out_of_range_limit_before_rpc(self) -> None:
+        host = load_workflow_host()
+        rpc = RequestRpc()
+        ctx = host.WorkflowContext(
+            rpc,
+            run_id="run-123",
+            task_id="task-456",
+            workflow_name="sample",
+        )
+
+        with self.assertRaisesRegex(ValueError, "between 1 and 20"):
+            asyncio.run(ctx.previous_workflow_runs(limit=21))
+
+        self.assertEqual(rpc.requests, [])
 
     def test_post_to_slack_sends_optional_custom_identity(self) -> None:
         host = load_workflow_host()
