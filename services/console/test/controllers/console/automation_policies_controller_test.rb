@@ -29,6 +29,7 @@ class Console::AutomationPoliciesControllerTest < ActionDispatch::IntegrationTes
           github_required_labels: "agent-ok",
           github_excluded_labels: "no-agent",
           github_auto_merge: "0",
+          github_merge_after_human_approval: "1",
           activity_reporting_slack_channel: "c0123456789",
           activity_reporting_accepted: "1",
           activity_reporting_pr_created: "1"
@@ -41,6 +42,7 @@ class Console::AutomationPoliciesControllerTest < ActionDispatch::IntegrationTes
     assert_equal @operator, policy.created_by
     assert_equal "all_eligible", policy.github_settings["review"]
     assert_equal [ "main" ], policy.github_settings["base_branches"]
+    assert_equal true, policy.github_settings["merge_after_human_approval"]
     assert_equal "C0123456789", policy.activity_reporting_settings["slack_channel"]
     assert policy.reports_activity?("accepted")
     assert policy.reports_activity?("pr_created")
