@@ -57,6 +57,8 @@ export type PrManagerContext = {
  */
 export type PolicyPrAutomation = {
   autoMerge?: boolean;
+  /** Merge only this bot's PR after the current head has trusted human approval. */
+  mergeAfterHumanApproval?: boolean;
   checks?: boolean;
   conflicts?: boolean;
   feedback?: boolean;
@@ -574,6 +576,8 @@ async function fetchPrFileSnapshot(
 
 type PullRequestSummary = {
   assignees: string[];
+  authorLogin: string;
+  authorType: string;
   baseBranch: string;
   draft: boolean;
   headRef: string;
@@ -605,9 +609,12 @@ function summarizePr(pr: {
   state: string;
   title: string;
   assignees?: ({ login?: string } | null)[] | null;
+  user?: { login?: string | null; type?: string | null } | null;
 }): PullRequestSummary {
   return {
     assignees: assigneeLogins(pr.assignees),
+    authorLogin: pr.user?.login ?? "",
+    authorType: pr.user?.type ?? "",
     baseBranch: pr.base?.ref ?? "",
     draft: pr.draft === true,
     headRef: pr.head.ref,
@@ -642,6 +649,140 @@ async function fetchPr(
     });
     return null;
   }
+}
+
+type PullRequestReview = {
+  authorAssociation: string;
+  commitId: string;
+  login: string;
+  state: string;
+  userType: string;
+};
+
+type ReviewThreadsConnection = {
+  nodes?: ({ isResolved?: boolean } | null)[];
+  pageInfo?: { endCursor?: string | null; hasNextPage?: boolean };
+};
+
+type ReviewThreadsResult = {
+  repository?: {
+    pullRequest?: {
+      reviewThreads?: ReviewThreadsConnection;
+    };
+  };
+};
+
+function trustedHumanApprovalState(
+  reviews: PullRequestReview[],
+  headSha: string,
+  botUserName: string,
+): { approved: boolean; changesRequested: boolean } {
+  const latest = new Map<string, string>();
+  for (const review of reviews) {
+    const login = review.login.toLowerCase();
+    if (
+      review.commitId !== headSha ||
+      !login ||
+      login === botUserName.toLowerCase() ||
+      review.userType.toLowerCase() === "bot" ||
+      login.endsWith("[bot]") ||
+      (review.authorAssociation !== "OWNER" && review.authorAssociation !== "MEMBER")
+    ) continue;
+    const state = review.state.toUpperCase();
+    if (state === "APPROVED" || state === "CHANGES_REQUESTED" || state === "DISMISSED") {
+      latest.set(login, state);
+    }
+  }
+  const states = [...latest.values()];
+  return {
+    approved: states.includes("APPROVED"),
+    changesRequested: states.includes("CHANGES_REQUESTED"),
+  };
+}
+
+async function hasUnresolvedReviewThreads(
+  ctx: PrManagerContext,
+  owner: string,
+  repo: string,
+  number: number,
+): Promise<boolean | null> {
+  let after: string | null = null;
+  for (let page = 0; page < 10; page += 1) {
+    try {
+      const result = await ctx.octokit.graphql(
+        `query($owner: String!, $repo: String!, $number: Int!, $after: String) {
+          repository(owner: $owner, name: $repo) {
+            pullRequest(number: $number) {
+              reviewThreads(first: 100, after: $after) {
+                nodes { isResolved }
+                pageInfo { endCursor hasNextPage }
+              }
+            }
+          }
+        }`,
+        { after, number, owner, repo },
+      ) as ReviewThreadsResult;
+      const threads: ReviewThreadsConnection | undefined =
+        result.repository?.pullRequest?.reviewThreads;
+      if (!threads?.nodes || !threads.pageInfo) return null;
+      if (threads.nodes.some((thread) => thread?.isResolved === false)) return true;
+      if (!threads.pageInfo.hasNextPage) return false;
+      after = threads.pageInfo.endCursor ?? null;
+      if (!after) return null;
+    } catch (error) {
+      logger(ctx).warn("githubbot_merge_review_threads_failed", {
+        error: errorMessage(error),
+        pr: `${owner}/${repo}#${number}`,
+      });
+      return null;
+    }
+  }
+  return null;
+}
+
+async function hasSafeHumanApprovedHead(
+  ctx: PrManagerContext,
+  owner: string,
+  repo: string,
+  pr: PullRequestSummary,
+): Promise<boolean> {
+  if (
+    pr.authorLogin.toLowerCase() !== ctx.userName.toLowerCase() ||
+    pr.authorType.toLowerCase() !== "bot"
+  ) return false;
+
+  const reviews: PullRequestReview[] = [];
+  try {
+    for (let page = 1; page <= 10; page += 1) {
+      const { data } = await ctx.octokit.rest.pulls.listReviews({
+        owner,
+        repo,
+        pull_number: pr.number,
+        page,
+        per_page: 100,
+      });
+      reviews.push(...data.map((review) => ({
+        authorAssociation: String(review.author_association ?? ""),
+        commitId: String(review.commit_id ?? ""),
+        login: String(review.user?.login ?? ""),
+        state: String(review.state ?? ""),
+        userType: String(review.user?.type ?? ""),
+      })));
+      if (data.length < 100) break;
+      if (page === 10) return false;
+    }
+  } catch (error) {
+    logger(ctx).warn("githubbot_merge_reviews_failed", {
+      error: errorMessage(error),
+      pr: `${owner}/${repo}#${pr.number}`,
+    });
+    return false;
+  }
+  const approval = trustedHumanApprovalState(reviews, pr.headSha, ctx.userName);
+  if (!approval.approved || approval.changesRequested) return false;
+  if ((await hasUnresolvedReviewThreads(ctx, owner, repo, pr.number)) !== false) return false;
+  const ci = await fetchCiEvaluation(ctx, owner, repo, pr.headSha);
+  return ci?.settled === true && ci.failed === false;
 }
 
 /**
@@ -731,7 +872,12 @@ export async function handlePullRequestEvent(
   // The legacy route already manages owned PRs. Policy routes extend that
   // behavior to non-owned PRs and must not create a duplicate management turn.
   if (owned && automation) return;
-  if (!owned && !automation?.conflicts && !automation?.autoMerge) return;
+  if (
+    !owned &&
+    !automation?.conflicts &&
+    !automation?.autoMerge &&
+    !automation?.mergeAfterHumanApproval
+  ) return;
   // Being assigned the PR is the explicit signal to take it over: evaluate CI now
   // (forcing past the human-commit back-off — the assignment is a human handing
   // it to us) so an already-red or already-green PR is acted on immediately,
@@ -1224,7 +1370,12 @@ export async function handleReviewEvent(
   if (!pr) return;
   const owned = owns(ctx, pr);
   if (owned && automation) return;
-  if (!owned && !automation?.feedback && !automation?.autoMerge) return;
+  if (
+    !owned &&
+    !automation?.feedback &&
+    !automation?.autoMerge &&
+    !automation?.mergeAfterHumanApproval
+  ) return;
   // Never act on the bot's own review (it shouldn't review its own PRs anyway).
   if (reviewer && reviewer.toLowerCase() === ctx.userName.toLowerCase()) return;
 
@@ -1367,7 +1518,12 @@ async function processCi(
   if (!pr) return;
   const owned = owns(ctx, pr);
   if (owned && automation) return;
-  if (!owned && !automation?.checks && !automation?.autoMerge) return;
+  if (
+    !owned &&
+    !automation?.checks &&
+    !automation?.autoMerge &&
+    !automation?.mergeAfterHumanApproval
+  ) return;
   // Ignore CI for a SHA that's already been superseded by a newer push.
   if (pr.headSha !== headSha) return;
 
@@ -1392,7 +1548,7 @@ async function processCi(
       await saveState(ctx, owner, repo, number, { ...state, consecutiveCiFixes: 0 });
     }
     traceLog(ctx.options, "githubbot_ci_green", trace, { pr: `${owner}/${repo}#${number}` });
-    if (owned || automation?.autoMerge) {
+    if (owned || automation?.autoMerge || automation?.mergeAfterHumanApproval) {
       await tryMerge(ctx, owner, repo, number, automation);
     }
     return;
@@ -1440,13 +1596,29 @@ async function tryMerge(
   const pr = await fetchPr(ctx, owner, repo, number);
   if (!pr) return;
   const owned = owns(ctx, pr);
-  if (!owned && !automation?.conflicts && !automation?.autoMerge) return;
+  if (
+    !owned &&
+    !automation?.conflicts &&
+    !automation?.autoMerge &&
+    !automation?.mergeAfterHumanApproval
+  ) return;
   if (!owned && automation?.conflicts && pr.mergeableState === "dirty") {
     fireConflictTurn(ctx, owner, repo, pr);
     return;
   }
+  const botAuthored =
+    pr.authorLogin.toLowerCase() === ctx.userName.toLowerCase() &&
+    pr.authorType.toLowerCase() === "bot";
+  const guardedAutomationMerge = botAuthored && (
+    owned || automation?.mergeAfterHumanApproval === true
+  );
+  if (guardedAutomationMerge && !(await hasSafeHumanApprovedHead(ctx, owner, repo, pr))) {
+    return;
+  }
   const decision = decideMerge({
-    autoMerge: owned ? ctx.options.autoMerge !== false : automation?.autoMerge === true,
+    autoMerge: owned
+      ? ctx.options.autoMerge !== false
+      : automation?.autoMerge === true || guardedAutomationMerge,
     draft: pr.draft,
     holdLabel: ctx.options.holdLabel ?? "do-not-merge",
     labels: pr.labels,
@@ -1477,6 +1649,7 @@ async function tryMerge(
         repo,
         pull_number: number,
         merge_method: ctx.options.mergeMethod ?? "squash",
+        sha: pr.headSha,
       });
       traceLog(ctx.options, "githubbot_merged", trace, { pr: `${owner}/${repo}#${number}` });
       if (

@@ -60,6 +60,8 @@ function makeState() {
 
 function prPayload(input: {
   assignees?: { login: string }[];
+  authorLogin?: string;
+  authorType?: string;
   changedLines?: number;
   headRepoFullName: string;
   headSha?: string;
@@ -82,6 +84,10 @@ function prPayload(input: {
     number: input.number ?? 7,
     state: "open",
     title: "Test PR",
+    user: {
+      login: input.authorLogin ?? "developer",
+      type: input.authorType ?? "User",
+    },
   };
 }
 
@@ -297,6 +303,122 @@ describe("decideMerge", () => {
 });
 
 describe("PR management webhooks", () => {
+  function guardedMergeCtx(input: {
+    approvalCommit?: string;
+    approvalAssociation?: string;
+    unresolved?: boolean;
+  } = {}) {
+    let mergeCalls = 0;
+    let mergedSha: string | undefined;
+    const ctx = {
+      octokit: {
+        graphql: async (query: string) => {
+          if (query.includes("reviewThreads")) {
+            return {
+              repository: {
+                pullRequest: {
+                  reviewThreads: {
+                    nodes: [{ isResolved: !input.unresolved }],
+                    pageInfo: { endCursor: null, hasNextPage: false },
+                  },
+                },
+              },
+            };
+          }
+          return {
+            repository: {
+              object: {
+                statusCheckRollup: {
+                  contexts: {
+                    nodes: [{
+                      __typename: "CheckRun",
+                      conclusion: "SUCCESS",
+                      name: "test",
+                      status: "COMPLETED",
+                    }],
+                    pageInfo: { endCursor: null, hasNextPage: false },
+                  },
+                  state: "SUCCESS",
+                },
+              },
+            },
+          };
+        },
+        rest: {
+          pulls: {
+            get: async () => ({
+              data: prPayload({
+                assignees: [],
+                authorLogin: "centaur-bot",
+                authorType: "Bot",
+                headRepoFullName: "base/repo",
+              }),
+            }),
+            listReviews: async () => ({
+              data: [{
+                author_association: input.approvalAssociation ?? "MEMBER",
+                commit_id: input.approvalCommit ?? "abc123",
+                state: "APPROVED",
+                user: { login: "reviewer", type: "User" },
+              }],
+            }),
+            merge: async (request: { sha?: string }) => {
+              mergeCalls += 1;
+              mergedSha = request.sha;
+              return { data: {} };
+            },
+          },
+          git: { deleteRef: async () => ({ data: {} }) },
+        },
+      },
+      options: {
+        apiUrl: "http://localhost",
+        deleteBranchOnMerge: false,
+        logger: { debug() {}, warn() {}, error() {}, info() {} },
+      },
+      state: makeState(),
+      userName: "centaur-bot",
+    } as unknown as PrManagerContext;
+    return { ctx, mergeCalls: () => mergeCalls, mergedSha: () => mergedSha };
+  }
+
+  test("merges a bot-authored PR at the exact human-approved green head", async () => {
+    const test = guardedMergeCtx();
+    await handleReviewEvent(
+      test.ctx,
+      JSON.stringify({
+        action: "submitted",
+        repository: { full_name: "base/repo" },
+        pull_request: { number: 7 },
+        review: { id: 123, state: "approved", user: { login: "reviewer" } },
+      }),
+      { mergeAfterHumanApproval: true },
+    );
+    expect(test.mergeCalls()).toBe(1);
+    expect(test.mergedSha()).toBe("abc123");
+  });
+
+  test("does not merge when approval is stale, external, or feedback is unresolved", async () => {
+    for (const input of [
+      { approvalCommit: "old-head" },
+      { approvalAssociation: "COLLABORATOR" },
+      { unresolved: true },
+    ]) {
+      const test = guardedMergeCtx(input);
+      await handleReviewEvent(
+        test.ctx,
+        JSON.stringify({
+          action: "submitted",
+          repository: { full_name: "base/repo" },
+          pull_request: { number: 7 },
+          review: { id: 123, state: "approved", user: { login: "reviewer" } },
+        }),
+        { mergeAfterHumanApproval: true },
+      );
+      expect(test.mergeCalls()).toBe(0);
+    }
+  });
+
   test("does not delete a base-repo branch after merging a fork PR", async () => {
     let deleteRefCalls = 0;
     let mergeCalls = 0;

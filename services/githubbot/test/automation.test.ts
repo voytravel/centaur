@@ -118,6 +118,7 @@ describe("evaluateGithubAutomation", () => {
 
     expect(decisions).toEqual([
       expect.objectContaining({
+        mergeAfterHumanApproval: false,
         actions: [ "review" ],
         decision: "act",
         reviewOrchestration: { max_concurrency: 2, mode: "cross_model" },

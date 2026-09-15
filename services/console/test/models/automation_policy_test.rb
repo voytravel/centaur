@@ -940,6 +940,40 @@ class AutomationPolicyTest < ActiveSupport::TestCase
     assert_equal [ "evaluate_merge" ], check["actions"]
   end
 
+  test "human-approved bot PR merge evaluates lifecycle events without enabling broad auto merge" do
+    policy = github_policy(
+      mode: "act",
+      settings: {
+        "github" => {
+          "merge_after_human_approval" => true,
+          "base_branches" => [ "main" ]
+        }
+      }
+    )
+
+    pull_request = policy.evaluate(
+      "repository" => "acme/widgets",
+      "event_type" => "pull_request",
+      "event_action" => "opened",
+      "base_branch" => "main",
+      "draft" => false,
+      "labels" => []
+    )
+    assert_equal [ "evaluate_merge" ], pull_request["actions"]
+    assert_equal false, pull_request["auto_merge"]
+    assert_equal true, pull_request["merge_after_human_approval"]
+
+    review = policy.evaluate(
+      "repository" => "acme/widgets",
+      "event_type" => "pull_request_review",
+      "event_action" => "submitted",
+      "base_branch" => "main",
+      "draft" => false,
+      "labels" => []
+    )
+    assert_equal [ "evaluate_merge" ], review["actions"]
+  end
+
   test "keeps valid managed-source provenance outside provider evaluation settings" do
     policy = AutomationPolicy.create!(
       name: "Managed widgets",

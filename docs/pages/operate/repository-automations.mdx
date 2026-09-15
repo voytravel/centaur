@@ -81,6 +81,10 @@ A GitHub policy scopes to one `owner/repository`. It can independently enable:
   base-branch, required-label, and excluded-label gates; and
 - deterministic auto-merge, explicitly opt-in and still constrained by branch
   protection, draft state, and the hold label.
+- squash-merge of Centaur-authored PRs after the current head has an Owner or
+  Member approval, no unresolved review threads or change request, clean
+  mergeability, and settled green checks. This narrower mode is independent of
+  broad auto-merge and sends the exact reviewed head SHA to GitHub.
 
 Automatic review is organized into review epochs. By default, each epoch gets
 one broad/new-risk review and two repair-validation rounds

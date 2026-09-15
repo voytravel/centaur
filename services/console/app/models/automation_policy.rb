@@ -213,6 +213,7 @@ class AutomationPolicy < ApplicationRecord
       "conflicts" => "observe",
       "manual_mentions" => false,
       "auto_merge" => false,
+      "merge_after_human_approval" => false,
       "base_branches" => [],
       "required_labels" => [],
       "excluded_labels" => [],
@@ -345,6 +346,9 @@ class AutomationPolicy < ApplicationRecord
         errors.add(:settings, "has an invalid #{key} mode") unless GITHUB_REPAIR_MODES.include?(config[key])
       end
       errors.add(:settings, "manual mentions must be true or false") unless boolean?(config["manual_mentions"])
+      unless boolean?(config["merge_after_human_approval"])
+        errors.add(:settings, "merge after human approval must be true or false")
+      end
       validate_github_review_orchestration(config)
     elsif linear?
       config = linear_settings
@@ -565,14 +569,14 @@ class AutomationPolicy < ApplicationRecord
       actions << "review" if github_review_enabled?(event)
       actions << "resolve_conflict" if github_repair_enabled?("conflicts", event) &&
                                        GITHUB_CONFLICT_ACTIONS.include?(event["event_action"])
-      actions << "evaluate_merge" if github_settings["auto_merge"] == true &&
+      actions << "evaluate_merge" if github_merge_enabled? &&
                                       GITHUB_MERGE_ACTIONS.include?(event["event_action"])
       actions
     when "pull_request_review"
       if event["event_action"] == "submitted"
         actions = []
         actions << "address_feedback" if github_repair_enabled?("feedback", event)
-        actions << "evaluate_merge" if github_settings["auto_merge"] == true
+        actions << "evaluate_merge" if github_merge_enabled?
         actions
       else
         []
@@ -580,7 +584,7 @@ class AutomationPolicy < ApplicationRecord
     when *CHECK_EVENT_TYPES
       actions = []
       actions << "fix_checks" if github_repair_enabled?("checks", event)
-      actions << "evaluate_merge" if github_settings["auto_merge"] == true
+      actions << "evaluate_merge" if github_merge_enabled?
       actions
     else
       []
@@ -799,6 +803,8 @@ class AutomationPolicy < ApplicationRecord
       "reason" => mode == "act" ? "policy authorizes automation" : "policy is in observe mode",
       "actions" => actions,
       "auto_merge" => github? && github_settings["auto_merge"] == true,
+      "merge_after_human_approval" => github? &&
+        github_settings["merge_after_human_approval"] == true,
       "review_orchestration" => github? ? github_settings["review_orchestration"] : nil,
       "github_repository" => route["repository"],
       "base_branch" => route["base_branch"],
@@ -809,6 +815,11 @@ class AutomationPolicy < ApplicationRecord
       "reviewer_logins" => reviewer_logins,
       "reviewer_team_slugs" => reviewer_team_slugs
     }
+  end
+
+  def github_merge_enabled?
+    config = github_settings
+    config["auto_merge"] == true || config["merge_after_human_approval"] == true
   end
 
   def validate_linear_repository_routes(config)
