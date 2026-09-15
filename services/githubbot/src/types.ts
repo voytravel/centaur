@@ -127,6 +127,12 @@ export type GithubbotOptions = {
    */
   reviewPrompt?: string;
   /**
+   * Optional internal workflow webhook that receives verified successful
+   * deployment-status payloads. The slug is deployment-owned and is never
+   * taken from a GitHub request.
+   */
+  releaseWebhookSlug?: string;
+  /**
    * Full issue-work methodology used when an issue is assigned to the bot.
    * Defaults to the bundled DEFAULT_ISSUE_PROMPT; a deployment can fully replace
    * it via GITHUBBOT_ISSUE_PROMPT(_FILE) so org playbooks override ours wholesale.
