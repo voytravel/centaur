@@ -284,6 +284,9 @@ COPY --link --chmod=755 services/sandbox/compose_system_prompt.py /usr/local/bin
 COPY --link --chmod=755 services/sandbox/repo_cache_sync.py /usr/local/bin/repo-cache-sync
 COPY --link --chmod=755 services/sandbox/repo_cache_watch.py /usr/local/bin/repo-cache-watch
 COPY --link --chmod=755 services/sandbox/entrypoint.sh /entrypoint.sh
+# Keep the vendored Cargo patch at the path referenced by harness-server's
+# manifest after that crate is relocated into the image.
+COPY --link --chown=1001:1001 third_party/hickory-proto/ /opt/third_party/hickory-proto/
 COPY --link --chown=1001:1001 crates/harness-server/ /opt/centaur/harness-server-src/
 
 USER agent
