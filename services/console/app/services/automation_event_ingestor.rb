@@ -241,7 +241,12 @@ class AutomationEventIngestor
   end
 
   def enqueue_activity_report(record)
-    AutomationActivityReportJob.perform_later(record.id)
+    report = AutomationActivityReport.new(record)
+    if (delivery_at = report.delivery_at)
+      AutomationActivityReportJob.set(wait_until: delivery_at).perform_later(record.id)
+    else
+      AutomationActivityReportJob.perform_later(record.id)
+    end
   rescue StandardError => e
     # Reporting must not make verified ingress retry or prevent the already
     # authorized workstream from starting. The durable event remains visible in
