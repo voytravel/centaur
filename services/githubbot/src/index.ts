@@ -23,6 +23,7 @@ import {
   issueWorkThreadKey,
 } from "./issue-manager";
 import { extractMessageOverrides } from "./overrides";
+import { forwardGithubReleaseWebhook } from "./release-webhook";
 import {
   evaluateGithubAutomation,
   evaluateGithubManualMention,
@@ -198,7 +199,6 @@ export function createGithubbot(options: GithubbotOptions): Githubbot {
   const handleGithubWebhook = async (c: Context) => {
     const eventType = c.req.header("x-github-event") ?? "";
     const deliveryId = c.req.header("x-github-delivery") ?? "";
-    await ensureChatInitialized();
     const context = {
       retryableErrors: [],
       waitUntil: (p: Promise<unknown>) => waitUntil(c, p),
@@ -211,6 +211,7 @@ export function createGithubbot(options: GithubbotOptions): Githubbot {
       eventType === "issue_comment" ||
       eventType === "pull_request_review_comment"
     ) {
+      await ensureChatInitialized();
       return requestContext.run(context, () =>
         chat.webhooks.github(c.req.raw, {
           waitUntil: (p) => waitUntil(c, p),
@@ -234,6 +235,20 @@ export function createGithubbot(options: GithubbotOptions): Githubbot {
     ) {
       return new globalThis.Response("invalid signature", { status: 401 });
     }
+    if (eventType === "deployment_status") {
+      const result = await requestContext.run(context, () =>
+        forwardGithubReleaseWebhook(options, {
+          deliveryId,
+          rawBody,
+          signature: c.req.header("x-hub-signature-256") ?? "",
+        })
+      );
+      return new globalThis.Response(
+        result === "failed" ? "release workflow unavailable" : "ok",
+        { status: result === "failed" ? 503 : 200 },
+      );
+    }
+    await ensureChatInitialized();
     const handled = requestContext.run(context, () =>
       Promise.all([
         routeLifecycleEvent(eventType, rawBody, {
@@ -660,6 +675,7 @@ const LIFECYCLE_EVENTS = new Set([
   "check_suite",
   "status",
   "workflow_run",
+  "deployment_status",
 ]);
 
 /**

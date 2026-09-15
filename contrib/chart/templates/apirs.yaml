@@ -2,6 +2,7 @@
 {{- $console := include "centaur.consoleValues" . | fromYaml -}}
 {{- $mcpPublicUrl := default .Values.slackbotv2.mcpPublicUrl .Values.apiRs.mcpPublicUrl -}}
 {{- $apiRsName := include "centaur.componentName" (dict "root" . "component" "api-rs") -}}
+{{- $githubWebhookSecret := .Values.apiRs.githubWebhookSecret | default dict -}}
 {{- $repoCacheStorageType := include "centaur.repoCacheStorageType" . -}}
 {{- $repoCacheUsePvc := eq $repoCacheStorageType "persistentVolumeClaim" -}}
 {{- $repoCachePvcName := include "centaur.repoCachePvcName" . -}}
@@ -192,6 +193,9 @@ spec:
       annotations:
         checksum/infra-secrets: {{ include "centaur.infraSecretsChecksum" . }}
         checksum/overlay: {{ dict "overlay" .Values.overlay "overlays" .Values.overlays | toJson | sha256sum }}
+{{- with (get $githubWebhookSecret "existingSecretName") }}
+        checksum/github-webhook-secret: {{ include "centaur.secretResourceVersion" (dict "root" $ "name" .) | quote }}
+{{- end }}
 {{- with $apiRsMetricsAnnotations }}
 {{ toYaml . | nindent 8 }}
 {{- end }}
@@ -224,6 +228,13 @@ spec:
                 secretKeyRef:
                   name: {{ include "centaur.secretEnvName" . }}
                   key: {{ printf "%sCENTAUR_JWT_SIGNING_SECRET" .Values.secretManager.envPrefix }}
+{{- with (get $githubWebhookSecret "existingSecretName") }}
+            - name: GITHUB_WEBHOOK_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ . | quote }}
+                  key: {{ required "apiRs.githubWebhookSecret.secretKey is required when an existing Secret is configured" (get $githubWebhookSecret "secretKey") | quote }}
+{{- end }}
 {{- range $ingress := list
   (dict "enabled" .Values.slackbotv2.enabled "key" "SLACKBOT_API_KEY")
   (dict "enabled" .Values.discordbot.enabled "key" "DISCORDBOT_API_KEY")

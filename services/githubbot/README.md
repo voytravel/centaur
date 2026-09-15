@@ -221,7 +221,8 @@ automatically recognizes the GitHub Markdown mention form `@centaur-hz`.
 
 Webhook events to subscribe: **Issue comments**, **Pull request review comments**, **Issues**, **Pull
 requests**, **Pull request reviews**, **Check runs**, **Check suites**, and **Workflow runs**
-(**Issues** drives issue-work-on-assignment; the last four drive v2 PR self-management).
+(**Issues** drives issue-work-on-assignment; the last four drive v2 PR self-management). Also
+subscribe to **Deployment statuses** when `GITHUBBOT_RELEASE_WEBHOOK_SLUG` is configured.
 
 ## Environment
 
@@ -233,6 +234,7 @@ requests**, **Pull request reviews**, **Check runs**, **Check suites**, and **Wo
 | `GITHUB_BOT_USERNAME` | ✅ | The bot account's GitHub login — drives `@`-mention and requested-reviewer matching (or `GITHUBBOT_USER_NAME`). |
 | `GITHUBBOT_DATABASE_URL` | ✅ | Postgres for chat-SDK state (falls back to `DATABASE_URL` / `POSTGRES_URL`). |
 | `CENTAUR_API_URL` | — | api-rs control plane, default `http://127.0.0.1:8080`. |
+| `GITHUBBOT_RELEASE_WEBHOOK_SLUG` | — | Fixed internal api-rs workflow webhook slug. When set, successful signed `deployment_status` payloads are forwarded unchanged for independent HMAC verification and durable ingestion. |
 | `CENTAUR_AUTOMATION_API_URL` | — | Console base URL for verified policy-event evaluation. Both automation variables must be set to enable it. |
 | `CENTAUR_AUTOMATION_INGRESS_TOKEN` | — | Single-purpose bearer for Console's normalized automation-event endpoint; not an operator API key. |
 | `GITHUBBOT_API_KEY` | — | Dedicated bearer sent to api-rs. |

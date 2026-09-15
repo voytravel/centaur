@@ -444,6 +444,11 @@ apiRs:
   workflowAllowedNames: ""
   # Requests/limits for the workflow-host sandbox pod (k8s resources map).
   workflowHostResources: {}
+  # Optional provider HMAC available only to api-rs for durable workflow
+  # webhooks that are forwarded by another verified ingress component.
+  githubWebhookSecret:
+    existingSecretName: ""
+    secretKey: webhook-secret
   # Scheduled ETL workflow configuration. The chart renders these into api-rs
   # env so workflow discovery sees the right schedules, then derives the
   # workflow-host passthrough list from the same non-secret config.
