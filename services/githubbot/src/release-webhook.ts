@@ -43,6 +43,7 @@ export async function forwardGithubReleaseWebhook(
           "X-Hub-Signature-256": input.signature,
         },
         method: "POST",
+        redirect: "error",
         signal: AbortSignal.timeout(5_000),
       },
     );

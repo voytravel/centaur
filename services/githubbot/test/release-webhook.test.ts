@@ -43,6 +43,7 @@ describe("forwardGithubReleaseWebhook", () => {
     );
     expect(request?.body).toBe(successfulPayload);
     expect(request?.method).toBe("POST");
+    expect(request?.redirect).toBe("error");
     expect(request?.headers).toEqual({
       "Content-Type": "application/json",
       "X-GitHub-Delivery": "delivery-1",
