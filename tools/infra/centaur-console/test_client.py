@@ -1,6 +1,7 @@
 import httpx
 import pytest
 from client import (
+    SANDBOX_AUTOMATION_INTERACTION_REVIEW_PATH,
     SANDBOX_OAUTH_APPS_PATH,
     SANDBOX_PERMISSIONS_PATH,
     ConsoleClient,
@@ -91,6 +92,32 @@ def test_sandbox_oauth_apps_wraps_http_errors():
 
     with pytest.raises(RuntimeError, match="HTTP 401"):
         make_client(handler).sandbox_oauth_apps()
+
+
+def test_interaction_review_fetches_bounded_evidence():
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "GET"
+        assert request.url.path == SANDBOX_AUTOMATION_INTERACTION_REVIEW_PATH
+        assert request.url.params["days"] == "7"
+        return json_response(
+            {
+                "data": {
+                    "schema_version": 1,
+                    "window": {"days": 7},
+                    "availability": {"workflow_runs": "available"},
+                    "evidence": []
+                }
+            }
+        )
+
+    result = make_client(handler).automation_interaction_review(days=7)
+
+    assert result["window"] == {"days": 7}
+
+
+def test_interaction_review_rejects_invalid_local_windows():
+    with pytest.raises(ValueError, match="between 1 and 14"):
+        make_client(lambda _request: json_response({})).automation_interaction_review(days=15)
 
 
 def test_health_returns_identity_details():
