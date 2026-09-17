@@ -73,7 +73,7 @@ class AutomationActivityReportTest < ActiveSupport::TestCase
     input = AutomationActivityReport.new(event).workflow_input
 
     assert_includes input.fetch("text"),
-      "Issue: <https://linear.app/acme/issue/ENG-1423|ENG-1423 — Show the automated issue in activity notices>"
+      "• <https://linear.app/acme/issue/ENG-1423|ENG-1423 — Show the automated issue in activity notices> — will implement"
   end
 
   test "omits a malformed public console URL rather than emitting it" do
