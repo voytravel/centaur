@@ -107,23 +107,20 @@ class AutomationActivityReport
     @workstream.provider == "linear" ? "Issue" : "Source"
   end
 
-  def linear_issue_label
-    return unless @workstream.provider == "linear"
+  def linear_issue_label(workstream = @workstream)
+    return unless workstream.provider == "linear"
 
-    identifier = @workstream.metadata["linear_issue_identifier"].to_s.strip
+    identifier = workstream.metadata["linear_issue_identifier"].to_s.strip
     return unless identifier.match?(AutomationQaDispatch::ISSUE_IDENTIFIER_PATTERN)
 
     title = AutomationWorkstream.normalize_linear_issue_title(
-      @workstream.metadata["linear_issue_title"]
+      workstream.metadata["linear_issue_title"]
     )
     [ identifier, title ].compact.join(" — ")
   end
 
   def linear_issue_reference(workstream)
-    metadata = workstream.metadata
-    identifier = metadata["linear_issue_identifier"].to_s.strip
-    title = metadata["linear_issue_title"].to_s.strip
-    label = [ identifier.presence, title.presence ].compact.join(" — ").presence || "Linear issue"
+    label = linear_issue_label(workstream) || "Linear issue"
     slack_link(workstream.safe_source_url, label) || slack_escape(label)
   end
 

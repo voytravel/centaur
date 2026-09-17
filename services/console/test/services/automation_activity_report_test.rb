@@ -156,6 +156,7 @@ class AutomationActivityReportTest < ActiveSupport::TestCase
       linear_team_id: "team-1",
       enabled: true,
       mode: "act",
+      execution_role: automation_role,
       created_by: users(:acme_admin),
       settings: {
         "linear" => {
@@ -191,6 +192,15 @@ class AutomationActivityReportTest < ActiveSupport::TestCase
       action_kind: "implement_issue",
       metadata: { "activity_report" => { "kind" => "accepted", "slack_channel" => "C0123456789" } },
       received_at: received_at
+    )
+  end
+
+  def automation_role
+    @automation_role ||= Role.create!(
+      foreign_id: "automation-activity-report-test-#{SecureRandom.hex(6)}",
+      name: "Automation activity report test role",
+      labels: { Role::AUTOMATION_EXECUTION_LABEL => "true" },
+      created_by: users(:acme_admin)
     )
   end
 end
