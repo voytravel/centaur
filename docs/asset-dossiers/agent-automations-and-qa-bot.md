@@ -105,3 +105,4 @@ The QA runner currently supports two named repositories. Some checks need a work
 - Centaur Overlay: `workflows/linear_qa_control_plane.py`, `workflows/linear_qa_routes.json`, and `tools/github-actions-qa/` in `voytravel/centaur-overlay`.
 - Voy: `scripts/qa-bot/`, `.github/workflows/qa-bot.yml`, `docs/qa-bot/README.md`, and `docs/qa-bot/run-audit-2026-09.md` in `voytravel/voy`.
 - Existing work: ENG-900, ENG-911, ENG-1362, ENG-1363, ENG-1365, and ENG-1390. See Section 8 for the new extraction issues.
+- Transfer review: [`agent-automations-transfer-inventory.md`](agent-automations-transfer-inventory.md) records the scoped code, dependencies, data categories, and unresolved rights checks.
