@@ -29,8 +29,13 @@ must be reviewed; it is not a statement that every item can be transferred.
 - Commit history identifies Michael Wu as the main technical contributor to
   the scoped paths. Commit authorship alone does not establish IP title.
 - Produce a dependency bill of materials from Centaur's Cargo, pnpm, Python,
-  and Ruby locks, Voy's pnpm lock, and the overlay's Python packages. Review
-  license texts and notices for packages actually distributed with an install.
+  and Ruby locks, Voy's pnpm lock, and the overlay's Python packages. The
+  inspected lockfiles are `pnpm-lock.yaml`, `services/console/Gemfile.lock`,
+  `services/api-rs/Cargo.lock`, and `crates/harness-server/Cargo.lock` in
+  Centaur, plus `pnpm-lock.yaml` in Voy. The overlay QA client declares its
+  Python package in `tools/github-actions-qa/pyproject.toml`; it has no checked-in
+  dependency lock. Review license texts and notices for the packages actually
+  distributed with an install.
 - Review model prompts, generated sample code, test images, and any imported
   third-party fixtures for separate rights or attribution requirements.
 
@@ -48,6 +53,15 @@ must be reviewed; it is not a statement that every item can be transferred.
 Voy's Actions workflow has artifact retention settings of 1, 14, and 30 days
 for different outputs. Confirm the provider-side retention and deletion state
 before relying on those settings as proof that old data is gone.
+
+Use [the synthetic example set](examples/automation-transfer-sample.json) for
+contract walkthroughs. Its names, IDs, decisions, and QA outcome are invented;
+it is not an enabled route or proof of a customer pilot. Before a transfer,
+export no historical issue records, source snapshots, QA artifacts, model
+context, or credentials by default. An operator must inventory each selected
+data store, confirm its retention and deletion controls with the provider, and
+record the approved disposition and evidence of deletion or exclusion. Fresh
+customer credentials, accounts, and test data must be provisioned separately.
 
 ## Release gate for a reusable package
 

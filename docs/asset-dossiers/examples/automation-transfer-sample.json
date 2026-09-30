@@ -1,0 +1,54 @@
+{
+  "description": "Synthetic examples for an automation IP transfer review; not a dispatchable installation configuration",
+  "normalized_events": [
+    {
+      "provider": "github",
+      "event_type": "pull_request",
+      "event_action": "opened",
+      "deduplication_key": "github:sample-delivery-1:12",
+      "repository": "example/widgets",
+      "subject_number": 12,
+      "labels": ["ready"]
+    },
+    {
+      "provider": "linear",
+      "event_type": "Issue",
+      "event_action": "update",
+      "deduplication_key": "linear:sample-delivery-2",
+      "linear_issue_id": "sample-issue-42",
+      "linear_team_id": "sample-team",
+      "linear_issue_identifier": "EX-42",
+      "status": "Ready for QA",
+      "labels": []
+    }
+  ],
+  "example_decisions": [
+    {
+      "decision": "ignored",
+      "actions": [],
+      "reason": "No approved policy matched",
+      "session_key": "github-manage:example/widgets:12"
+    },
+    {
+      "decision": "act",
+      "actions": ["run_qa"],
+      "reason": "Approved status transition",
+      "session_key": "linear:sample-issue-42"
+    }
+  ],
+  "example_qa_outcome": {
+    "schemaVersion": 1,
+    "githubRunId": "42",
+    "runAttempt": "1",
+    "issueIdentifier": "EX-42",
+    "runUrl": "https://github.com/example/qa-executor/actions/runs/42",
+    "publicationStatus": "complete",
+    "status": "blocked",
+    "coverage": "0 verified checks",
+    "confidence": "No release confidence",
+    "blockers": ["Sample test environment did not start"],
+    "nextAction": "Repair the sample environment and rerun",
+    "workflowFailures": ["setup-target"],
+    "reportUrl": null
+  }
+}
