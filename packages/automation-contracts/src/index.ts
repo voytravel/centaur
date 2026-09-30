@@ -52,6 +52,47 @@ export type AutomationDecisionV1 = {
   policy_id?: string;
 };
 
+export type ParsedAutomationDecisionV1 = {
+  actions: string[];
+  decision: "act" | "ignored" | "observe";
+  policyId?: string;
+  reason: string;
+  sessionKey: string;
+  workstreamId?: string;
+  /** Provider-specific policy fields remain untrusted until their bot reads them. */
+  fields: Record<string, unknown>;
+};
+
+/** Parse only the common fields accepted by both existing bots. */
+export function parseAutomationDecisionV1(value: unknown): ParsedAutomationDecisionV1 | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const fields = value as Record<string, unknown>;
+  const decision = stringValue(fields.decision);
+  const sessionKey = stringValue(fields.session_key);
+  if (!sessionKey || (decision !== "act" && decision !== "observe" && decision !== "ignored")) {
+    return null;
+  }
+  return {
+    actions: stringArray(fields.actions),
+    decision,
+    fields,
+    policyId: stringValue(fields.policy_id),
+    reason: stringValue(fields.reason) ?? "policy result",
+    sessionKey,
+    workstreamId: stringValue(fields.workstream_id),
+  };
+}
+
+function stringValue(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function stringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string")
+    : [];
+}
+
 type Fetcher = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
 /** Send only an already verified, normalized event to Console's policy plane. */

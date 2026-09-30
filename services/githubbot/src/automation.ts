@@ -1,4 +1,4 @@
-import { submitAutomationEventV1 } from "@centaur/automation-contracts";
+import { parseAutomationDecisionV1, submitAutomationEventV1 } from "@centaur/automation-contracts";
 import type { GithubbotFetch, GithubbotOptions } from "./types";
 import { errorMessage, noopLogger, stringValue } from "./utils";
 
@@ -265,27 +265,20 @@ async function submitEvent(
       return null;
     }
     const body = (await response.json()) as { data?: unknown };
-    const data = body.data;
-    if (!isRecord(data)) return null;
-    const decision = stringValue(data.decision);
-    const sessionKey = stringValue(data.session_key);
-    if (
-      !sessionKey ||
-      (decision !== "act" && decision !== "observe" && decision !== "ignored")
-    ) {
-      return null;
-    }
+    const common = parseAutomationDecisionV1(body.data);
+    if (!common) return null;
+    const data = common.fields;
     return {
-      actions: stringArray(data.actions),
+      actions: common.actions,
       autoMerge: data.auto_merge === true,
-      decision,
-      policyId: stringValue(data.policy_id),
-      reason: stringValue(data.reason) ?? "policy result",
+      decision: common.decision,
+      policyId: common.policyId,
+      reason: common.reason,
       ...(data.review_orchestration === undefined
         ? {}
         : { reviewOrchestration: data.review_orchestration }),
-      sessionKey,
-      workstreamId: stringValue(data.workstream_id),
+      sessionKey: common.sessionKey,
+      workstreamId: common.workstreamId,
     };
   } catch (error) {
     logger.warn("githubbot_automation_policy_lookup_failed", {
@@ -319,12 +312,6 @@ function parseJson(value: string): JsonRecord | null {
 
 function numberValue(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
-
-function stringArray(value: unknown): string[] {
-  return Array.isArray(value)
-    ? value.filter((item): item is string => typeof item === "string")
-    : [];
 }
 
 function isRecord(value: unknown): value is JsonRecord {

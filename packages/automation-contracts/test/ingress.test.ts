@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   AUTOMATION_INGRESS_CONTRACT_VERSION,
+  parseAutomationDecisionV1,
   submitAutomationEventV1,
   type AutomationEventV1,
 } from "../src/index";
@@ -34,5 +35,37 @@ describe("automation ingress v1", () => {
       "Content-Type": "application/json",
     });
     expect(JSON.parse(String(request?.init?.body))).toEqual({ event });
+  });
+
+  test("parses the common decision without changing bot fallback behavior", () => {
+    const parsed = parseAutomationDecisionV1({
+      actions: ["review", 42, "run_qa"],
+      decision: "act",
+      policy_id: "  aut_123  ",
+      reason: "  ",
+      session_key: "  linear:issue-42  ",
+      workstream_id: "aws_42",
+      qa_target: "voy",
+    });
+    expect(parsed).toEqual({
+      actions: ["review", "run_qa"],
+      decision: "act",
+      fields: {
+        actions: ["review", 42, "run_qa"],
+        decision: "act",
+        policy_id: "  aut_123  ",
+        reason: "  ",
+        session_key: "  linear:issue-42  ",
+        workstream_id: "aws_42",
+        qa_target: "voy",
+      },
+      policyId: "aut_123",
+      reason: "policy result",
+      sessionKey: "linear:issue-42",
+      workstreamId: "aws_42",
+    });
+    expect(parseAutomationDecisionV1({ decision: "act", session_key: " " })).toBeNull();
+    expect(parseAutomationDecisionV1({ decision: "allow", session_key: "x" })).toBeNull();
+    expect(parseAutomationDecisionV1([])).toBeNull();
   });
 });

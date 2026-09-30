@@ -24,6 +24,9 @@ Console and both bots so old and new deployments can overlap safely.
 
 Console returns `{ "data": { ... } }` with `decision` (`act`, `observe`, or
 `ignored`), `session_key`, `actions`, and provider-specific policy output.
+The shared `parseAutomationDecisionV1` checks the common decision and session
+fields and keeps the bots' existing fallback for absent reason/actions. Each
+bot still interprets its own provider-specific policy fields.
 The bots treat missing credentials, an unavailable Console, a non-success HTTP
 response, or a malformed decision as no new policy authorization. Console
 persists an event for each provider/deduplication key and rechecks current
