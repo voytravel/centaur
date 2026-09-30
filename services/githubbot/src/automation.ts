@@ -1,3 +1,4 @@
+import { submitAutomationEventV1 } from "@centaur/automation-contracts";
 import type { GithubbotFetch, GithubbotOptions } from "./types";
 import { errorMessage, noopLogger, stringValue } from "./utils";
 
@@ -251,16 +252,11 @@ async function submitEvent(
   const logger = options.logger ?? noopLogger;
   const fetcher: GithubbotFetch = options.fetch ?? globalThis.fetch;
   try {
-    const response = await fetcher(
-      options.automationApiUrl!.replace(/\/$/, "") + "/api/internal/automation_events",
-      {
-        body: JSON.stringify({ event }),
-        headers: {
-          Authorization: "Bearer " + options.automationIngressToken,
-          "Content-Type": "application/json",
-        },
-        method: "POST",
-      },
+    const response = await submitAutomationEventV1(
+      fetcher,
+      options.automationApiUrl!,
+      options.automationIngressToken!,
+      event,
     );
     if (!response.ok) {
       logger.warn("githubbot_automation_policy_lookup_failed", {

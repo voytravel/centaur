@@ -26,6 +26,8 @@ importers:
 
   .: {}
 
+  packages/automation-contracts: {}
+
   packages/api-client:
     dependencies:
       axios:
@@ -121,6 +123,9 @@ importers:
 
   services/githubbot:
     dependencies:
+      '@centaur/automation-contracts':
+        specifier: workspace:*
+        version: link:../../packages/automation-contracts
       '@centaur/harness-events':
         specifier: workspace:*
         version: link:../../packages/harness-events
@@ -170,6 +175,9 @@ importers:
 
   services/linearbot:
     dependencies:
+      '@centaur/automation-contracts':
+        specifier: workspace:*
+        version: link:../../packages/automation-contracts
       '@centaur/harness-events':
         specifier: workspace:*
         version: link:../../packages/harness-events

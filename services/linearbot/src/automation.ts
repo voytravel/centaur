@@ -1,3 +1,4 @@
+import { submitAutomationEventV1 } from "@centaur/automation-contracts";
 import type { LinearbotFetch, LinearbotOptions } from "./types";
 import { errorMessage, noopLogger, stringValue } from "./utils";
 
@@ -48,16 +49,11 @@ export async function evaluateLinearAutomation(
   const fetcher: LinearbotFetch = options.fetch ?? globalThis.fetch;
   const logger = options.logger ?? noopLogger;
   try {
-    const response = await fetcher(
-      options.automationApiUrl!.replace(/\/$/, "") + "/api/internal/automation_events",
-      {
-        body: JSON.stringify({ event }),
-        headers: {
-          Authorization: "Bearer " + options.automationIngressToken,
-          "Content-Type": "application/json",
-        },
-        method: "POST",
-      },
+    const response = await submitAutomationEventV1(
+      fetcher,
+      options.automationApiUrl!,
+      options.automationIngressToken!,
+      event,
     );
     if (!response.ok) {
       logger.warn("linearbot_automation_policy_lookup_failed", {
