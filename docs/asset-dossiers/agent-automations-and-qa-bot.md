@@ -8,7 +8,7 @@
 
 **Lives in:** `voytravel/centaur` (automation policies, agent and review bots), `voytravel/centaur-overlay` (`workflows/linear_qa_control_plane.py`, `tools/github-actions-qa/`), and `voytravel/voy` (`scripts/qa-bot/`, `.github/workflows/qa-bot.yml`).
 
-**Last updated:** 2026-09-28
+**Last updated:** 2026-09-30
 
 ## 1. Summary
 
@@ -66,15 +66,15 @@ These are behavior checks in the code, not a promise that every deployment is co
 
 | Change | Why it's needed | Effort | Issue |
 | --- | --- | --- | --- |
-| Agree on the event, QA request, and report formats | The two repos rely on shared behavior that is not yet a standalone contract | 3–5 days | [ENG-1517](https://linear.app/voytravel/issue/ENG-1517/define-versioned-automation-and-qa-transfer-contracts) |
-| Make approved repositories and test profiles configurable | The runner currently names two codebases and embeds their test commands | 1–2 weeks | [ENG-1518](https://linear.app/voytravel/issue/ENG-1518/extract-trusted-qa-target-and-profile-registry-from-voy-defaults) |
-| Make the QA runner installable outside Voy | Its workflow assumes Voy's checkout, secrets, runners, and report destination | 1–2 weeks | [ENG-1519](https://linear.app/voytravel/issue/ENG-1519/make-adaptive-qa-executor-portable-across-host-repositories) |
+| Agree on the event, QA request, and report formats | The first contracts and compatibility checks are in place; the complete transfer format still needs a pilot | 3–5 days | [ENG-1517](https://linear.app/voytravel/issue/ENG-1517/define-versioned-automation-and-qa-transfer-contracts) |
+| Make approved repositories and test profiles configurable | The runner currently names two codebases and embeds their test commands; defer internal changes until a later phase | 1–2 weeks | [ENG-1518](https://linear.app/voytravel/issue/ENG-1518/extract-trusted-qa-target-and-profile-registry-from-voy-defaults) |
+| Make the QA runner installable outside Voy | Its workflow assumes Voy's checkout, secrets, runners, and report destination; defer internal changes until a later phase | 1–2 weeks | [ENG-1519](https://linear.app/voytravel/issue/ENG-1519/make-adaptive-qa-executor-portable-across-host-repositories) |
 | Package the QA coordination workflow and its fixed executor adapter | Its source is now located in Centaur Overlay, but it still depends on a reviewed Voy-only route and Actions tool | 3–5 days | [ENG-1520](https://linear.app/voytravel/issue/ENG-1520/inventory-and-package-centaur-qa-dispatch-workflow) |
 | Prepare an ownership and data inventory | A buyer needs to know what code and data can actually move | 3–5 days, plus legal review | [ENG-1521](https://linear.app/voytravel/issue/ENG-1521/prepare-agent-automation-and-qa-bot-ip-transfer-inventory) |
 
 ## 9. Licensing and data constraints
 
-- **Code itself:** Centaur offers Apache-2.0 or MIT licensing. Voy's root license contains MIT terms but names an earlier copyright holder; it does not, by itself, prove ownership of later QA bot code. Check contributor agreements, third-party packages, copied material, and the missing coordination workflow before a transfer.
+- **Code itself:** Centaur offers Apache-2.0 or MIT licensing. Voy's root license contains MIT terms but names an earlier copyright holder; it does not, by itself, prove ownership of later QA bot code. Centaur Overlay has no root license file in the inspected checkout. Check contributor agreements, third-party packages, and copied material before a transfer.
 - **Data that feeds it:** Issues, pull requests, test fixtures, code, screenshots, and model responses come from different systems. Their terms and the organization's commitments determine what may be reused.
 - **User data:** Reports and artifacts may contain customer details, personal information, private code, or secrets in logs. A transfer should use synthetic examples unless retention, redaction, permission, and deletion rules for real data have been settled.
 
@@ -88,7 +88,7 @@ The QA runner currently supports two named repositories. Some checks need a work
 | --- | --- | --- |
 | 0. Inventory | Confirm what is owned across all three repos and decide what data may move | 3–5 days plus legal review |
 | 1. Define boundaries | Publish shared formats and isolate rules from GitHub/Linear-specific handling | 1–2 weeks |
-| 2. Make QA portable | Configure targets and tests outside the runner; remove Voy-specific hosting assumptions | 1–2 weeks |
+| 2. Make QA portable | Package the current runner interface and host boundary first; defer runner internals, target configuration, and test changes to a later phase | 1–2 weeks for later runner work |
 | 3. Pilot | Try one new codebase with synthetic data, including approved, rejected, failed, and passing cases | 1–2 weeks |
 
 ## 12. Open decisions before Phase 1
