@@ -37,7 +37,7 @@
         </span>
       <% end %>
       <div class="ml-auto">
-        <% unless @workflow_name == GithubDependencyMaintenanceFinding::ACTION_WORKFLOW_NAME %>
+        <% unless [ GithubDependencyMaintenanceFinding::ACTION_WORKFLOW_NAME, AutomationInteractionReviewFinding::ACTION_WORKFLOW_NAME ].include?(@workflow_name) %>
         <%= button_to "Manually Trigger", run_console_workflow_path(@workflow_name), method: :post,
               class: "btn-primary",
               data: { turbo_confirm: "Manually trigger a #{@workflow_name} run?#{schedule ? " It starts with the registered schedule input." : ""}" } %>
@@ -109,6 +109,13 @@
                  maintenance_run_detail: @maintenance_run_detail,
                  action_runs: @maintenance_action_runs %>
     <% end %>
+  <% end %>
+
+  <% if @workflow_name == AutomationInteractionReviewFinding::WORKFLOW_NAME && @interaction_review_findings.present? %>
+    <%= render "interaction_review_findings",
+               findings: @interaction_review_findings,
+               interaction_review_run_detail: @maintenance_run_detail,
+               action_runs: @interaction_review_action_runs %>
   <% end %>
 
   <% debug_rows = [] %>

@@ -52,6 +52,8 @@ const DEFAULT_AGENT_BATCH_CONCURRENCY: usize = 4;
 const MAX_AGENT_BATCH_CONCURRENCY: usize = 16;
 const MAX_AGENT_BATCH_SIZE: usize = 32;
 const MAX_AGENT_BATCH_NAME_BYTES: usize = 128;
+const DEFAULT_CONTEXT_WORKFLOW_HISTORY_LIMIT: i64 = 10;
+const MAX_CONTEXT_WORKFLOW_HISTORY_LIMIT: i64 = 20;
 const WORKFLOW_HOST_CLAIM_EXTENSION: Duration = Duration::from_secs(5 * 60);
 const WORKFLOW_HOST_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(60);
 const WORKFLOW_RECONCILE_INTERVAL_SECS_ENV: &str = "WORKFLOW_RECONCILE_INTERVAL_SECS";
@@ -3434,6 +3436,12 @@ async fn handle_python_context_request(
                 Err(error) => Err(error.to_string()),
             }
         }
+        Some("ctx.workflow.history") => {
+            match previous_python_workflow_runs(message, ctx, input, workflow_clients).await {
+                Ok(value) => Ok(value),
+                Err(error) => Err(error.to_string()),
+            }
+        }
         Some("ctx.call_tool") => match call_python_workflow_tool(message).await {
             Ok(value) => Ok(value),
             Err(error) => Err(error.to_string()),
@@ -3516,6 +3524,78 @@ async fn start_python_child_workflow(
         "run_id": spawn.run_id,
         "created": spawn.created,
     }))
+}
+
+/// Return a bounded, result-only history for the calling workflow itself.
+///
+/// The workflow name and queue are derived exclusively from the durable task
+/// input, rather than the Python request, so a workflow cannot read another
+/// workflow's inputs, failures, or results.
+async fn previous_python_workflow_runs(
+    message: &Value,
+    ctx: &TaskContext,
+    input: &WorkflowTaskInput,
+    workflow_clients: &WorkflowQueueClients,
+) -> Result<Value, WorkflowRuntimeError> {
+    let limit = parse_python_workflow_history_limit(message)?;
+    let queue_class = workflow_queue_class(&input.workflow_name);
+    let queue_name = queue_name_for_class(queue_class);
+    let client = match queue_class {
+        WorkflowQueueClass::Standard => &workflow_clients.standard,
+        WorkflowQueueClass::SlackLive => &workflow_clients.slack_live,
+        WorkflowQueueClass::Etl => &workflow_clients.etl,
+        WorkflowQueueClass::EtlBackfill => &workflow_clients.etl_backfill,
+    };
+    let (task_table, run_table) = absurd_queue_tables(queue_name)?;
+    let rows = sqlx::query(&format!(
+        r#"
+        select
+            r.run_id::text as run_id,
+            t.state,
+            t.completed_payload
+        from {task_table} t
+        join {run_table} r on r.run_id = t.last_attempt_run
+        where coalesce(t.params->>'workflow_name', '{WORKFLOW_TASK}') = $1
+          and t.state = 'completed'
+          and r.run_id::text <> $2
+        order by t.enqueue_at desc, t.task_id desc
+        limit $3
+        "#,
+    ))
+    .bind(&input.workflow_name)
+    .bind(ctx.run_id())
+    .bind(limit)
+    .fetch_all(client.pool())
+    .await?;
+
+    let runs = rows
+        .into_iter()
+        .map(|row| {
+            Ok(json!({
+                "run_id": row.try_get::<String, _>("run_id")?,
+                "status": row.try_get::<String, _>("state")?,
+                "result": row.try_get::<Option<Value>, _>("completed_payload")?,
+            }))
+        })
+        .collect::<Result<Vec<_>, sqlx::Error>>()?;
+    Ok(json!({"runs": runs}))
+}
+
+fn parse_python_workflow_history_limit(message: &Value) -> Result<i64, WorkflowRuntimeError> {
+    let Some(value) = message.get("limit") else {
+        return Ok(DEFAULT_CONTEXT_WORKFLOW_HISTORY_LIMIT);
+    };
+    let limit = value.as_i64().ok_or_else(|| {
+        WorkflowRuntimeError::BadRequest(
+            "ctx.workflow.history limit must be an integer between 1 and 20".to_owned(),
+        )
+    })?;
+    if !(1..=MAX_CONTEXT_WORKFLOW_HISTORY_LIMIT).contains(&limit) {
+        return Err(WorkflowRuntimeError::BadRequest(
+            "ctx.workflow.history limit must be an integer between 1 and 20".to_owned(),
+        ));
+    }
+    Ok(limit)
 }
 
 fn parse_python_duration_seconds(message: &Value) -> Result<Duration, String> {
@@ -4986,6 +5066,31 @@ mod tests {
 
         assert!(payload.get("username").is_none());
         assert!(payload.get("icon_emoji").is_none());
+    }
+
+    #[test]
+    fn python_workflow_history_limit_is_bounded() {
+        assert_eq!(
+            parse_python_workflow_history_limit(&json!({"type": "ctx.workflow.history"})).unwrap(),
+            DEFAULT_CONTEXT_WORKFLOW_HISTORY_LIMIT
+        );
+        assert_eq!(
+            parse_python_workflow_history_limit(
+                &json!({"type": "ctx.workflow.history", "limit": 3}),
+            )
+            .unwrap(),
+            3
+        );
+
+        for limit in [json!(0), json!(21), json!(true), json!(1.5), json!("3")] {
+            let error = parse_python_workflow_history_limit(&json!({
+                "type": "ctx.workflow.history",
+                "limit": limit,
+            }))
+            .unwrap_err();
+            assert!(matches!(error, WorkflowRuntimeError::BadRequest(_)));
+            assert!(error.to_string().contains("between 1 and 20"));
+        }
     }
 
     #[test]

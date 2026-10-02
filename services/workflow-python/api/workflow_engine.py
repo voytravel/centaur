@@ -179,6 +179,25 @@ class WorkflowContext:
             request["idempotency_key"] = idempotency_key
         return await self._rpc.request(request)
 
+    async def previous_workflow_runs(self, *, limit: int = 10) -> list[dict[str, Any]]:
+        """Return a bounded, result-only history for this workflow name.
+
+        The control plane enforces the same-workflow boundary. This is intended
+        for small durable reconciliation state such as notification
+        deduplication; it never exposes workflow inputs or failures.
+        """
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 20:
+            raise ValueError("previous_workflow_runs limit must be an integer between 1 and 20")
+        value = await self._rpc.request(
+            {
+                "type": "ctx.workflow.history",
+                "limit": limit,
+            }
+        )
+        if not isinstance(value, dict) or not isinstance(value.get("runs"), list):
+            raise RuntimeError("ctx.workflow.history returned an invalid response")
+        return value["runs"]
+
     async def call_tool(self, tool: str, method: str, args: dict[str, Any] | None = None) -> Any:
         return await WorkflowToolManager(self._rpc).call_tool_raw(tool, method, args or {})
 
