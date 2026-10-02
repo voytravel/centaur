@@ -105,6 +105,7 @@ jobs:
             '^\.github/workflows/ci\.yml$'
           set_output githubbot_checks \
             '^services/githubbot/' \
+            '^packages/automation-contracts/' \
             '^package\.json$' \
             '^pnpm-lock\.yaml$' \
             '^pnpm-workspace\.yaml$' \
@@ -421,6 +422,9 @@ jobs:
       - name: Linearbot tests
         working-directory: services/linearbot
         run: bun test test
+
+      - name: Automation ingress contract tests
+        run: bun test packages/automation-contracts/test
 
   discordbot-checks:
     name: Discordbot typecheck and tests
