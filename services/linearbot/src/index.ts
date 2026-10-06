@@ -1096,7 +1096,10 @@ async function runThreadTurn(input: {
       });
       if (collector.failed) {
         failed = true;
-        body = buildFailedReplyBody();
+        body = buildFailedReplyBody({
+          modelAccessDenied: fallback.modelAccessDenied(),
+          projectMissing: !issueContext?.projectId,
+        });
       } else {
         const extracted = extractStatusMarker(
           collector.answer || fallback.text(),
@@ -1123,7 +1126,10 @@ async function runThreadTurn(input: {
         error: errorMessage(error),
       });
       failed = true;
-      body = buildFailedReplyBody();
+      body = buildFailedReplyBody({
+        modelAccessDenied: isModelAccessDenied(errorMessage(error)),
+        projectMissing: !issueContext?.projectId,
+      });
       break;
     }
   }
@@ -1309,6 +1315,7 @@ async function applyAssignmentStatusMarker(
 
 class LinearRenderFallback {
   private terminalText = "";
+  private deniedModelAccess = false;
 
   async *collectSource(
     stream: AsyncIterable<LinearbotRendererSource>,
@@ -1323,6 +1330,10 @@ class LinearRenderFallback {
     return this.terminalText.trim();
   }
 
+  modelAccessDenied(): boolean {
+    return this.deniedModelAccess;
+  }
+
   private captureTerminalText(event: LinearbotRendererSource): void {
     if (!event || typeof event !== "object") return;
     const eventKind = String(
@@ -1332,6 +1343,20 @@ class LinearRenderFallback {
           ? event.event
           : "",
     );
+    if (
+      eventKind === "session.execution_failed" ||
+      eventKind === "session.stream_error"
+    ) {
+      const data = "data" in event ? event.data : undefined;
+      if (
+        data &&
+        typeof data === "object" &&
+        "error" in data &&
+        isModelAccessDenied(data.error)
+      ) {
+        this.deniedModelAccess = true;
+      }
+    }
     if (
       eventKind !== "session.execution_completed" &&
       eventKind !== "session.execution_cancelled" &&
@@ -1346,6 +1371,12 @@ class LinearRenderFallback {
     const text = terminalResultText(data);
     if (text) this.terminalText = text;
   }
+}
+
+function isModelAccessDenied(value: unknown): boolean {
+  return (
+    typeof value === "string" && value.includes("LiteLLM Virtual Key expected")
+  );
 }
 
 function isTerminalCodexAppServerEvent(event: unknown): boolean {
