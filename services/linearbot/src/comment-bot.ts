@@ -13,7 +13,7 @@ export const FAILED_REPLY_BODY =
   "⚠️ I couldn’t complete this run. The technical details are available in Centaur Console; retry or ask me to investigate.";
 
 export const MISSING_PROJECT_MODEL_ACCESS_REPLY_BODY =
-  "⚠️ I can’t work on this issue yet because it has no project, so I don’t have an approved place to make changes. Add the appropriate project and set the issue to Todo to retry.";
+  "⚠️ I can’t work on this issue yet because it has no project, so I don’t have an approved place to make changes. Add the appropriate project, set the issue to Todo, then mention me in a new comment.";
 
 /**
  * True when the comment addresses the bot. Linear encodes a mention as the

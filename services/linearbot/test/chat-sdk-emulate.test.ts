@@ -672,6 +672,7 @@ describe("linearbot comment-thread pipeline", () => {
       (comment) => comment.issueId === ISSUE_ID && comment.body.includes("no project"),
     )!;
     expect(reply.body).toContain("set the issue to Todo");
+    expect(reply.body).toContain("mention me in a new comment");
     expect(reply.body).not.toContain("401");
     expect(reply.body).not.toContain("OPEN");
   });
