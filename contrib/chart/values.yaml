@@ -697,6 +697,8 @@ githubbot:
   # Materially changed risk surfaces can start this many epochs automatically.
   # Later epochs require an explicit human review request or a split PR.
   reviewMaxEpochs: 3
+  # Hard ceiling for public GitHub comments on one PR per UTC day.
+  prPostsPerDay: 25
   # Non-generated diff growth that starts a new epoch. New production files and
   # dependency/auth/data/API/infra surfaces can start one below this threshold.
   reviewEpochMinChangedLines: 50

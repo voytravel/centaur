@@ -21,6 +21,18 @@ export const DEFAULT_ALLOWED_AUTHOR_ASSOCIATIONS = [
   "COLLABORATOR",
 ] as const;
 
+/** Bot comments never start conversational turns, even under a permissive allowlist. */
+export function isBotCommentAuthor(raw: unknown): boolean {
+  if (!raw || typeof raw !== "object") return false;
+  const comment = (raw as { comment?: unknown }).comment;
+  if (!comment || typeof comment !== "object") return false;
+  const user = (comment as { user?: unknown }).user;
+  if (!user || typeof user !== "object") return false;
+  const actor = user as { type?: unknown; login?: unknown };
+  return actor.type === "Bot" ||
+    (typeof actor.login === "string" && actor.login.toLowerCase().endsWith("[bot]"));
+}
+
 const ALLOW_ALL = "*";
 
 /** Pull `author_association` out of the adapter's raw comment message. */
@@ -52,6 +64,7 @@ export function isCommentAuthorAllowed(
   raw: unknown,
   options: Pick<GithubbotOptions, "allowedAuthorAssociations">,
 ): boolean {
+  if (isBotCommentAuthor(raw)) return false;
   const allowed = resolveAllowedAuthorAssociations(
     options.allowedAuthorAssociations,
   );

@@ -160,6 +160,8 @@ export type GithubbotOptions = {
   reviewMaxBotFeedbackRoundsPerEpoch?: number;
   /** Max automatically created review epochs per PR. Default 3. */
   reviewMaxEpochs?: number;
+  /** Hard ceiling for public GitHub posts on one PR per UTC day. Default 25. */
+  prPostsPerDay?: number;
   /**
    * Non-generated changed lines that constitute a new risk surface and start a
    * review epoch. Boundary/dependency/new-production-file rules can trigger an

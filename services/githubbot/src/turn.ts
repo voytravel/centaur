@@ -4,7 +4,7 @@ import {
   type RendererEvent,
 } from "@centaur/rendering";
 import type { GitHubAdapter } from "@chat-adapter/github";
-import type { Thread } from "chat";
+import type { StateAdapter, Thread } from "chat";
 import {
   buildFailedReplyBody,
   buildPublicCommentReply,
@@ -15,6 +15,7 @@ import {
 } from "./comment-bot";
 import { runExclusive } from "./context";
 import { resolveStickyProvider } from "./overrides";
+import { PR_POST_PAUSE_MESSAGE, reservePrPost } from "./pr-post-budget";
 import {
   executeSessionTurn,
   forwardToSessionApi,
@@ -242,6 +243,7 @@ export function githubTurnPreamble(preamble?: string): string {
   const publicReplyContract = [
     "Public GitHub response contract:",
     "- An acknowledgement is already visible. Work silently; do not narrate intermediate reasoning, plans, commands, raw logs, or tool output in GitHub.",
+    "- The ingress publishes your final reply. Do not post or reply to GitHub comments or reviews through gh, the GitHub API, or other tools; that would bypass the PR output budget.",
     "- Keep detailed execution evidence in Console. Your terminal text must be exactly one concise block in this form (use one short factual sentence or phrase per field; use `None.` for a field with no relevant value):\nGITHUB_SUMMARY:\nOutcome: ...\nChanges: ...\nVerification: ...\nCI: ...\nNext: ...\nThe GitHub renderer turns a complete block into a compact Markdown update. For reviews, report the verdict and high-level next step only; keep code walkthroughs, command lines, hashes, timings, detailed nit lists, and baseline diagnosis in Console.",
     "- If you change code, inspect the repository CI workflow and run the closest local equivalent before pushing. Do not call CI green based only on a narrow test subset when a broader local equivalent is available.",
     "- When relevant and feasible, start the local app or preview needed to validate the change. After pushing, monitor checks for the new head; if a check fails because of your change, diagnose, fix, and verify it before finalizing. If you cannot run a check, name it and explain why.",
@@ -356,6 +358,7 @@ export async function runSessionTurn(input: {
   conversationName?: string;
   executeMessage: GithubbotApiMessage;
   options: GithubbotOptions;
+  state: StateAdapter;
   overrides: { harnessType?: string; model?: string; provider?: string };
   /** Comment to react to (👀 → 🚀/😕); the triggering comment, if any. */
   reactMessageId?: string;
@@ -384,12 +387,15 @@ export async function runSessionTurn(input: {
     trace,
   } = input;
   const logger = options.logger ?? noopLogger;
-  try {
-    await thread.post(buildWorkingReplyBody(input.workingReplyKind));
-  } catch (error) {
-    logger.warn("githubbot_thread_acknowledgement_failed", {
-      error: errorMessage(error),
-    });
+  const prRef = parseGithubThreadKey(threadKey);
+  if (prRef?.type !== "pr") {
+    try {
+      await thread.post(buildWorkingReplyBody(input.workingReplyKind));
+    } catch (error) {
+      logger.warn("githubbot_thread_acknowledgement_failed", {
+        error: errorMessage(error),
+      });
+    }
   }
   // The 👀 working ack is fired by the caller (handleMessage) before this turn's
   // setup so it lands instantly; here we only settle it to 🚀/😕 at the end.
@@ -429,19 +435,66 @@ export async function runSessionTurn(input: {
   });
   const publicReply = buildTurnPublicReply(options, trace, result);
   const body = publicReply.body;
-  try {
-    await thread.post(body);
-  } catch (error) {
-    logger.warn("githubbot_thread_reply_failed", {
-      error: errorMessage(error),
-    });
+  let postAllowed = true;
+  if (prRef?.type === "pr") {
+    let dedupId = `turn:${trace.messageId}`;
+    if (prRef.reviewCommentId !== undefined) {
+      try {
+        const { data } = await adapter.octokit.rest.pulls.get({
+          owner: prRef.owner,
+          repo: prRef.repo,
+          pull_number: prRef.number,
+        });
+        dedupId = `review-thread:${prRef.reviewCommentId}:head:${data.head.sha}`;
+      } catch {
+        postAllowed = false;
+      }
+    }
+    if (postAllowed) {
+      const reservation = await reservePrPost({
+        state: input.state,
+        options,
+        owner: prRef.owner,
+        repo: prRef.repo,
+        number: prRef.number,
+        dedupId,
+      });
+      if (reservation === "pause") {
+        try {
+          await adapter.octokit.rest.issues.createComment({
+            owner: prRef.owner,
+            repo: prRef.repo,
+            issue_number: prRef.number,
+            body: PR_POST_PAUSE_MESSAGE,
+          });
+        } catch (error) {
+          logger.warn("githubbot_pr_post_pause_failed", { error: errorMessage(error) });
+        }
+      }
+      postAllowed = reservation === "reserved";
+      if (!postAllowed) {
+        traceLog(options, "githubbot_pr_post_suppressed", trace, {
+          reason: reservation,
+        });
+      }
+    }
+  }
+  if (postAllowed) {
+    try {
+      await thread.post(body);
+    } catch (error) {
+      postAllowed = false;
+      logger.warn("githubbot_thread_reply_failed", {
+        error: errorMessage(error),
+      });
+    }
   }
   if (reactMessageId) {
     await reactSafe(
       adapter,
       threadKey,
       reactMessageId,
-      result.failed ? "confused" : "rocket",
+      result.failed || !postAllowed ? "confused" : "rocket",
       logger,
     );
   }
