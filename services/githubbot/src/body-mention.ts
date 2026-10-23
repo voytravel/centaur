@@ -2,6 +2,7 @@ import { resolveAllowedAuthorAssociations } from "./authorization";
 import { backgroundWaitUntil } from "./context";
 import { buildWorkingReplyBody } from "./comment-bot";
 import type { PrManagerContext } from "./pr-manager";
+import { PR_POST_PAUSE_MESSAGE, reservePrPost } from "./pr-post-budget";
 import { reactWorkingOnSubject, settleSubjectReaction } from "./reactions";
 import {
   buildTurnPublicReply,
@@ -110,17 +111,19 @@ export function handleBodyMention(
       subject: `${repo.owner}/${repo.repo}#${number}`,
     });
     await reactWorkingOnSubject(ctx.octokit, repo.owner, repo.repo, number, logger);
-    try {
-      await ctx.octokit.rest.issues.createComment({
-        owner: repo.owner,
-        repo: repo.repo,
-        issue_number: number,
-        body: buildWorkingReplyBody(),
-      });
-    } catch (error) {
-      logger.warn("githubbot_body_mention_acknowledgement_failed", {
-        error: errorMessage(error),
-      });
+    if (!isPr) {
+      try {
+        await ctx.octokit.rest.issues.createComment({
+          owner: repo.owner,
+          repo: repo.repo,
+          issue_number: number,
+          body: buildWorkingReplyBody(),
+        });
+      } catch (error) {
+        logger.warn("githubbot_body_mention_acknowledgement_failed", {
+          error: errorMessage(error),
+        });
+      }
     }
 
     const forwardInput: ForwardSessionInput = {
@@ -138,17 +141,42 @@ export function handleBodyMention(
 
     const result = await runTurnStream(options, forwardInput);
     const publicReply = buildTurnPublicReply(options, trace, result);
-    try {
-      await ctx.octokit.rest.issues.createComment({
-        owner: repo.owner,
-        repo: repo.repo,
-        issue_number: number,
-        body: publicReply.body,
-      });
-    } catch (error) {
-      logger.warn("githubbot_body_mention_reply_failed", {
-        error: errorMessage(error),
-      });
+    const reservation = isPr
+      ? await reservePrPost({
+          state,
+          options,
+          owner: repo.owner,
+          repo: repo.repo,
+          number,
+          dedupId: "body-mention",
+        })
+      : "reserved";
+    if (reservation === "reserved") {
+      try {
+        await ctx.octokit.rest.issues.createComment({
+          owner: repo.owner,
+          repo: repo.repo,
+          issue_number: number,
+          body: publicReply.body,
+        });
+      } catch (error) {
+        logger.warn("githubbot_body_mention_reply_failed", {
+          error: errorMessage(error),
+        });
+      }
+    } else if (reservation === "pause") {
+      try {
+        await ctx.octokit.rest.issues.createComment({
+          owner: repo.owner,
+          repo: repo.repo,
+          issue_number: number,
+          body: PR_POST_PAUSE_MESSAGE,
+        });
+      } catch (error) {
+        logger.warn("githubbot_pr_post_pause_failed", { error: errorMessage(error) });
+      }
+    } else {
+      traceLog(options, "githubbot_pr_post_suppressed", trace, { reason: reservation });
     }
     await settleSubjectReaction(
       ctx.octokit,

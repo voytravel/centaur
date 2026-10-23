@@ -23,6 +23,7 @@ import {
   issueWorkThreadKey,
 } from "./issue-manager";
 import { extractMessageOverrides } from "./overrides";
+import { PR_POST_PAUSE_MESSAGE, reservePrPost } from "./pr-post-budget";
 import { forwardGithubReleaseWebhook } from "./release-webhook";
 import {
   evaluateGithubAutomation,
@@ -393,6 +394,7 @@ async function handleMessage(
     backgroundWaitUntil(
       runSessionTurn({
         adapter,
+        state: input.prManagerCtx.state,
         contextPreamble: githubContextPreamble(
           threadKey,
           reviewComment,
@@ -476,7 +478,6 @@ async function authorizeManualMention(
   messageText: string,
 ): Promise<ManualMentionAuthorization | undefined | null> {
   const { adapter, options, prManagerCtx } = input;
-  const logger = options.logger ?? noopLogger;
   if (!options.automationApiUrl || !options.automationIngressToken) return undefined;
 
   const ref = parseGithubThreadKey(threadKey);
@@ -487,7 +488,7 @@ async function authorizeManualMention(
       threadKey,
       message.id,
       "I can only start policy-authorized agent work from a pull request.",
-      logger,
+      prManagerCtx,
     );
     return null;
   }
@@ -505,7 +506,7 @@ async function authorizeManualMention(
       threadKey,
       message.id,
       "I couldn't verify this pull request's policy context, so I didn't start an agent run.",
-      logger,
+      prManagerCtx,
     );
     return null;
   }
@@ -544,7 +545,7 @@ async function authorizeManualMention(
       threadKey,
       message.id,
       "I couldn't start an agent run because this pull request is not enabled for a Centaur manual mention.",
-      logger,
+      prManagerCtx,
     );
     return null;
   }
@@ -569,8 +570,38 @@ async function refuseManualMention(
   threadKey: string,
   messageId: string,
   body: string,
-  logger: GithubbotOptions["logger"],
+  ctx: PrManagerContext,
 ): Promise<void> {
+  const logger = ctx.options.logger;
+  const ref = parseGithubThreadKey(threadKey);
+  if (ref?.type === "pr") {
+    const reservation = await reservePrPost({
+      state: ctx.state,
+      options: ctx.options,
+      owner: ref.owner,
+      repo: ref.repo,
+      number: ref.number,
+      dedupId: `refusal:${messageId}`,
+    });
+    if (reservation === "pause") {
+      try {
+        await adapter.octokit.rest.issues.createComment({
+          owner: ref.owner,
+          repo: ref.repo,
+          issue_number: ref.number,
+          body: PR_POST_PAUSE_MESSAGE,
+        });
+      } catch (error) {
+        (logger ?? noopLogger).warn("githubbot_pr_post_pause_failed", { error: errorMessage(error) });
+      }
+      await reactSafe(adapter, threadKey, messageId, "confused", logger);
+      return;
+    }
+    if (reservation !== "reserved") {
+      await reactSafe(adapter, threadKey, messageId, "confused", logger);
+      return;
+    }
+  }
   try {
     await thread.post(body);
   } catch (error) {

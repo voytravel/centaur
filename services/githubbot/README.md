@@ -134,6 +134,14 @@ fixes, newly changed risk surfaces, and regressions—not the whole PR again.
 Finding fingerprints persist in GitHub review comments, so line movement cannot
 turn an accepted, rejected, or fixed finding into a new one.
 
+Public PR comments are separately bounded by `GITHUBBOT_PR_POSTS_PER_DAY`
+(default 25 per UTC day). The receiver reserves a durable slot before posting,
+fails closed if its state store is unavailable, and allows one reply per review
+thread per PR head. The final slot posts one pause notice for a human instead
+of another automated answer. PR turns acknowledge with a reaction instead of
+an extra working comment. A human review request can start another bounded
+review epoch, but it does not reset the public post ceiling.
+
 A new production file, newly touched auth/data/API/infra boundary, dependency
 manifest, or at least `GITHUBBOT_REVIEW_EPOCH_MIN_CHANGED_LINES` non-generated
 changed lines (default 50) starts another epoch. Test/docs/generated-only
