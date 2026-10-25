@@ -58,6 +58,23 @@ def oauth_apps(
     console.print_json(json.dumps({"data": result}, default=str))
 
 
+@app.command("interaction-review")
+def interaction_review(
+    days: int = typer.Option(7, "--days", min=1, max=14, help="Completed UTC days to summarize"),
+    url: str | None = typer.Option(None, "--url", help="centaur-console base URL"),
+    bearer_token: str | None = typer.Option(
+        None,
+        "--bearer-token",
+        help="Local/debug bearer token override",
+        envvar="CENTAUR_CONSOLE_BEARER_TOKEN",
+    ),
+):
+    """Print redacted aggregate evidence for the weekly interaction review."""
+    with get_client(url=url, bearer_token=bearer_token) as client:
+        result = client.automation_interaction_review(days=days)
+    console.print_json(json.dumps(result, default=str))
+
+
 @app.command()
 def health(
     url: str | None = typer.Option(None, "--url", help="centaur-console base URL"),
