@@ -3,14 +3,14 @@
 # in githubbot/linearbot, while this service owns durable audit state, policy
 # evaluation, and stable session/workstream identity.
 class AutomationEventIngestor
-  class InvalidEvent < StandardError; end
+  InvalidEvent = AutomationIngressContractV1::InvalidEvent
 
   def initialize(event)
     @event = event.deep_stringify_keys
   end
 
   def call
-    validate_event!
+    AutomationIngressContractV1.validate!(@event)
     policy = resolve_policy
     existing = AutomationEvent.find_by(
       provider: @event.fetch("provider"),
@@ -81,22 +81,6 @@ class AutomationEventIngestor
   end
 
   private
-
-  def validate_event!
-    provider = @event["provider"]
-    raise InvalidEvent, "provider is required" unless AutomationPolicy::PROVIDERS.include?(provider)
-    raise InvalidEvent, "event_type is required" if @event["event_type"].blank?
-    raise InvalidEvent, "deduplication_key is required" if @event["deduplication_key"].blank?
-
-    case provider
-    when "github"
-      raise InvalidEvent, "repository is required" unless @event["repository"].to_s.match?(%r{\A[^/\s]+/[^/\s]+\z})
-      raise InvalidEvent, "subject_number is required" unless @event["subject_number"].to_s.match?(/\A\d+\z/)
-    when "linear"
-      raise InvalidEvent, "linear_issue_id is required" if @event["linear_issue_id"].blank?
-      raise InvalidEvent, "linear_team_id is required" if @event["linear_team_id"].blank?
-    end
-  end
 
   def find_or_create_workstream!
     provider = @event.fetch("provider")

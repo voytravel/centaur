@@ -1,3 +1,4 @@
+import { parseAutomationDecisionV1, submitAutomationEventV1 } from "@centaur/automation-contracts";
 import type { LinearbotFetch, LinearbotOptions } from "./types";
 import { errorMessage, noopLogger, stringValue } from "./utils";
 
@@ -48,16 +49,11 @@ export async function evaluateLinearAutomation(
   const fetcher: LinearbotFetch = options.fetch ?? globalThis.fetch;
   const logger = options.logger ?? noopLogger;
   try {
-    const response = await fetcher(
-      options.automationApiUrl!.replace(/\/$/, "") + "/api/internal/automation_events",
-      {
-        body: JSON.stringify({ event }),
-        headers: {
-          Authorization: "Bearer " + options.automationIngressToken,
-          "Content-Type": "application/json",
-        },
-        method: "POST",
-      },
+    const response = await submitAutomationEventV1(
+      fetcher,
+      options.automationApiUrl!,
+      options.automationIngressToken!,
+      event,
     );
     if (!response.ok) {
       logger.warn("linearbot_automation_policy_lookup_failed", {
@@ -66,29 +62,22 @@ export async function evaluateLinearAutomation(
       return null;
     }
     const body = (await response.json()) as { data?: unknown };
-    const data = body.data;
-    if (!isRecord(data)) return null;
-    const decision = stringValue(data.decision);
-    const sessionKey = stringValue(data.session_key);
-    if (
-      !sessionKey ||
-      (decision !== "act" && decision !== "observe" && decision !== "ignored")
-    ) {
-      return null;
-    }
+    const common = parseAutomationDecisionV1(body.data);
+    if (!common) return null;
+    const data = common.fields;
     return {
-      actions: stringArray(data.actions),
-      decision,
+      actions: common.actions,
+      decision: common.decision,
       githubRepository: stringValue(data.github_repository),
       baseBranch: stringValue(data.base_branch),
       moveToInProgress: data.move_to_in_progress !== false,
       previewLabel: stringValue(data.preview_label),
-      policyId: stringValue(data.policy_id),
-      reason: stringValue(data.reason) ?? "policy result",
+      policyId: common.policyId,
+      reason: common.reason,
       reviewerLogins: stringArray(data.reviewer_logins),
       reviewerTeamSlugs: stringArray(data.reviewer_team_slugs),
-      sessionKey,
-      workstreamId: stringValue(data.workstream_id),
+      sessionKey: common.sessionKey,
+      workstreamId: common.workstreamId,
     };
   } catch (error) {
     logger.warn("linearbot_automation_policy_lookup_failed", {
