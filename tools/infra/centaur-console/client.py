@@ -9,6 +9,7 @@ import httpx
 
 SANDBOX_PERMISSIONS_PATH = "/api/v1/sandbox/permissions"
 SANDBOX_OAUTH_APPS_PATH = "/api/v1/sandbox/oauth_apps"
+SANDBOX_AUTOMATION_INTERACTION_REVIEW_PATH = "/api/v1/sandbox/automation_interaction_review"
 
 
 class ConsoleClient:
@@ -92,6 +93,28 @@ class ConsoleClient:
     def oauth_apps(self) -> list[dict[str, Any]]:
         """Alias for tool bridge calls."""
         return self.sandbox_oauth_apps()
+
+    def automation_interaction_review(self, *, days: int = 7) -> dict[str, Any]:
+        """Return bounded, aggregate-only evidence for a weekly review.
+
+        The Console authorizes this separately from permission introspection.
+        It never returns chat text, provider payloads, execution errors, or
+        credentials.
+        """
+        if isinstance(days, bool) or not isinstance(days, int) or not 1 <= days <= 14:
+            raise ValueError("days must be an integer between 1 and 14")
+        response = self.client.get(SANDBOX_AUTOMATION_INTERACTION_REVIEW_PATH, params={"days": days})
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            detail = _response_error_detail(exc.response)
+            raise RuntimeError(f"centaur-console interaction review request failed: {detail}") from exc
+
+        payload = response.json()
+        data = payload.get("data")
+        if not isinstance(data, dict):
+            raise RuntimeError("centaur-console interaction review response did not include a data object")
+        return data
 
     def health(self) -> dict[str, Any]:
         """Assert the sandbox permissions endpoint is reachable and authorized."""
