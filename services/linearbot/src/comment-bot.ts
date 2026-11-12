@@ -12,6 +12,9 @@ export const WORKING_REPLY_BODY =
 export const FAILED_REPLY_BODY =
   "⚠️ I couldn’t complete this run. The technical details are available in Centaur Console; retry or ask me to investigate.";
 
+export const MISSING_PROJECT_MODEL_ACCESS_REPLY_BODY =
+  "⚠️ I can’t work on this issue yet because it has no project, so I don’t have an approved place to make changes. Add the appropriate project, set the issue to Todo, then mention me in a new comment.";
+
 /**
  * True when the comment addresses the bot. Linear encodes a mention as the
  * mentioned profile's plain URL in the markdown body
@@ -90,6 +93,11 @@ export function buildCommentReplyBody(input: {
  * durable session record and service logs, where operators can diagnose it
  * without exposing credentials, provider details, or tool output to a thread.
  */
-export function buildFailedReplyBody(): string {
-  return FAILED_REPLY_BODY;
+export function buildFailedReplyBody(input: {
+  modelAccessDenied?: boolean;
+  projectMissing?: boolean;
+} = {}): string {
+  return input.modelAccessDenied && input.projectMissing
+    ? MISSING_PROJECT_MODEL_ACCESS_REPLY_BODY
+    : FAILED_REPLY_BODY;
 }

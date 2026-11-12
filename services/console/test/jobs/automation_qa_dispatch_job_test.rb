@@ -42,6 +42,18 @@ class AutomationQaDispatchJobTest < ActiveJob::TestCase
     assert_equal "acme/widgets", request.dig(:input, "repository")
     assert_equal [ "ios_smoke" ], request.dig(:input, "profiles")
     assert_equal "auto", request.dig(:input, "target")
+    expected_input = {
+      "automation_event_id" => event.id,
+      "issue_id" => "issue-42",
+      "issue_identifier" => "ENG-42",
+      "issue_title" => "Verify it",
+      "issue_url" => "https://linear.app/acme/issue/ENG-42/verify",
+      "repository" => "acme/widgets",
+      "profiles" => [ "ios_smoke" ],
+      "target" => "auto",
+      "workstream_id" => event.automation_workstream.oid
+    }
+    assert_equal expected_input, request[:input]
     assert_equal "workflow-qa-123", event.reload.metadata.dig("qa_workflow", "run_id")
   end
 

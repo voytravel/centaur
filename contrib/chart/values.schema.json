@@ -316,6 +316,13 @@
         "sandboxHotIdleGraceSecs": { "type": "integer", "minimum": 0 },
         "workflowHostSandbox": { "type": "boolean" },
         "workflowHostResources": { "type": "object" },
+        "githubWebhookSecret": {
+          "type": "object",
+          "properties": {
+            "existingSecretName": { "type": "string" },
+            "secretKey": { "type": "string", "minLength": 1 }
+          }
+        },
         "etl": {
           "type": "object",
           "properties": {

@@ -38,3 +38,4 @@ uuid = { version = "1.19", features = ["v4"] }
 
 [patch.crates-io]
 hickory-proto = { path = "../../third_party/hickory-proto" }
+rmcp-1 = { path = "../../third_party/rmcp-1/src/rmcp", package = "rmcp" }

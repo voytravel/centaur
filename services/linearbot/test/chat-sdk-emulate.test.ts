@@ -651,6 +651,32 @@ describe("linearbot comment-thread pipeline", () => {
     ).toHaveLength(1);
   });
 
+  it("explains missing project access without exposing the model gateway error", async () => {
+    linearApi.setIssueProject(null);
+    const threadKey = `linear:${ISSUE_ID}`;
+    await postWebhook(
+      issueAssignmentPayload({ updatedAt: "2026-06-16T04:10:00.000Z" }),
+    );
+    await waitFor(() =>
+      codexApi.executes.some((execution) => execution.threadKey === threadKey),
+    );
+    codexApi.emitSessionEvent(threadKey, "session.execution_failed", {
+      error: "unexpected status 401 Unauthorized: LiteLLM Virtual Key expected. Received=OPEN****_KEY",
+    });
+    await waitFor(() =>
+      linearApi.botComments.some(
+        (comment) => comment.issueId === ISSUE_ID && comment.body.includes("no project"),
+      ),
+    );
+    const reply = linearApi.botComments.find(
+      (comment) => comment.issueId === ISSUE_ID && comment.body.includes("no project"),
+    )!;
+    expect(reply.body).toContain("set the issue to Todo");
+    expect(reply.body).toContain("mention me in a new comment");
+    expect(reply.body).not.toContain("401");
+    expect(reply.body).not.toContain("OPEN");
+  });
+
   it("does not run a turn on a non-assignee edit to an issue the bot owns", async () => {
     await postWebhook(
       issueAssignmentPayload({
@@ -1361,6 +1387,7 @@ type FakeLinearApi = {
   removedReactionIds: string[];
   reset(): void;
   setIssueDelegate(userId: string | null): void;
+  setIssueProject(projectId: string | null): void;
   unhandledOperations: string[];
   url: string;
 };
@@ -1382,6 +1409,7 @@ function startFakeLinearApi(): FakeLinearApi {
   const unhandledOperations: string[] = [];
   const issueStateUpdates: Array<{ issueId: string; stateId: string }> = [];
   let issueDelegateId: string | null = null;
+  let issueProjectId: string | null = "project-1";
   let issueStateId = "st-todo";
   let idCounter = 0;
   const nextId = (prefix: string) => `${prefix}-${++idCounter}`;
@@ -1446,7 +1474,7 @@ function startFakeLinearApi(): FakeLinearApi {
           state: { name: "Todo" },
           delegate: issueDelegateId ? { id: issueDelegateId } : null,
           team: { id: "team-1" },
-          project: { id: "project-1" },
+          project: issueProjectId ? { id: issueProjectId } : null,
           labels: { nodes: [] },
           inverseRelations: { nodes: [], pageInfo: { hasNextPage: false } },
         },
@@ -1673,6 +1701,9 @@ function startFakeLinearApi(): FakeLinearApi {
     setIssueDelegate(userId) {
       issueDelegateId = userId;
     },
+    setIssueProject(projectId) {
+      issueProjectId = projectId;
+    },
     addUserComment(input) {
       const id = nextId("comment");
       comments.set(id, {
@@ -1699,6 +1730,7 @@ function startFakeLinearApi(): FakeLinearApi {
       unhandledOperations.length = 0;
       issueStateUpdates.length = 0;
       issueDelegateId = null;
+      issueProjectId = "project-1";
       issueStateId = "st-todo";
       idCounter = 0;
     },

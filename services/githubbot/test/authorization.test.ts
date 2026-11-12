@@ -43,6 +43,11 @@ describe("resolveAllowedAuthorAssociations", () => {
 });
 
 describe("isCommentAuthorAllowed", () => {
+  test("rejects bot authors even when every association is allowed", () => {
+    expect(isCommentAuthorAllowed({
+      comment: { author_association: "MEMBER", user: { login: "reviewer[bot]", type: "Bot" } },
+    }, { allowedAuthorAssociations: ["*"] })).toBe(false);
+  });
   test("allows the default collaborator-and-up set", () => {
     for (const assoc of ["OWNER", "MEMBER", "COLLABORATOR"]) {
       expect(isCommentAuthorAllowed(raw(assoc), {})).toBe(true);

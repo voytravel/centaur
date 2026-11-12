@@ -144,7 +144,7 @@ describe("handleBodyMention", () => {
     expect(spies.comments).toBe(0);
   });
 
-  test("acknowledges then replies once for an authorized mention; dedups redelivery", async () => {
+  test("replies once for an authorized PR mention; dedups redelivery", async () => {
     const spies = { reactions: 0, comments: 0, commentBodies: [] as string[] };
     const ctx = makeCtx(spies);
     const first = handleBodyMention(
@@ -160,8 +160,8 @@ describe("handleBodyMention", () => {
       "pull_request",
       openedPr("@centaur-bot please review"),
     );
-    expect(spies.comments).toBe(2);
-    expect(spies.commentBodies[0]).toContain("carry out the requested work");
+    expect(spies.comments).toBe(1);
+    expect(spies.commentBodies[0]).toContain("execution ended before a verified outcome");
     expect(spies.reactions).toBeGreaterThanOrEqual(1);
   });
 });

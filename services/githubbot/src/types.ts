@@ -127,6 +127,12 @@ export type GithubbotOptions = {
    */
   reviewPrompt?: string;
   /**
+   * Optional internal workflow webhook that receives verified successful
+   * deployment-status payloads. The slug is deployment-owned and is never
+   * taken from a GitHub request.
+   */
+  releaseWebhookSlug?: string;
+  /**
    * Full issue-work methodology used when an issue is assigned to the bot.
    * Defaults to the bundled DEFAULT_ISSUE_PROMPT; a deployment can fully replace
    * it via GITHUBBOT_ISSUE_PROMPT(_FILE) so org playbooks override ours wholesale.
@@ -154,6 +160,8 @@ export type GithubbotOptions = {
   reviewMaxBotFeedbackRoundsPerEpoch?: number;
   /** Max automatically created review epochs per PR. Default 3. */
   reviewMaxEpochs?: number;
+  /** Hard ceiling for public GitHub posts on one PR per UTC day. Default 25. */
+  prPostsPerDay?: number;
   /**
    * Non-generated changed lines that constitute a new risk surface and start a
    * review epoch. Boundary/dependency/new-production-file rules can trigger an

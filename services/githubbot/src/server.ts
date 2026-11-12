@@ -160,11 +160,13 @@ const options: GithubbotOptions = {
   idleTimeoutMs: optionalNumberEnv("SESSION_IDLE_TIMEOUT_MS"),
   maxDurationMs: optionalNumberEnv("SESSION_MAX_DURATION_MS"),
   postgresUrl,
+  releaseWebhookSlug: optionalEnv("GITHUBBOT_RELEASE_WEBHOOK_SLUG"),
   reviewPrompt,
   reviewEpochMinChangedLines: optionalNumberEnv(
     "GITHUBBOT_REVIEW_EPOCH_MIN_CHANGED_LINES",
   ),
   reviewMaxEpochs: optionalNumberEnv("GITHUBBOT_REVIEW_MAX_EPOCHS"),
+  prPostsPerDay: optionalNumberEnv("GITHUBBOT_PR_POSTS_PER_DAY"),
   reviewMaxRoundsPerEpoch: optionalNumberEnv(
     "GITHUBBOT_REVIEW_MAX_ROUNDS_PER_EPOCH",
   ),

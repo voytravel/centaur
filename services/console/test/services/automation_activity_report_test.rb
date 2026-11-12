@@ -73,7 +73,7 @@ class AutomationActivityReportTest < ActiveSupport::TestCase
     input = AutomationActivityReport.new(event).workflow_input
 
     assert_includes input.fetch("text"),
-      "Issue: <https://linear.app/acme/issue/ENG-1423|ENG-1423 — Show the automated issue in activity notices>"
+      "• <https://linear.app/acme/issue/ENG-1423|ENG-1423 — Show the automated issue in activity notices> — will implement"
   end
 
   test "omits a malformed public console URL rather than emitting it" do
@@ -83,6 +83,36 @@ class AutomationActivityReportTest < ActiveSupport::TestCase
       assert_includes text, "Audit: `#{workstream.oid}`"
       assert_no_match "example.test", text
     end
+  end
+
+  test "batches and describes Linear accepted work without audit identifiers" do
+    received_at = Time.zone.parse("2026-09-08 09:01:12 UTC")
+    policy = linear_policy
+    first = configured_linear_event(
+      issue_id: "issue-1422", identifier: "ENG-1422", title: "Clear stale sign-out button",
+      received_at: received_at, policy: policy
+    )
+    configured_linear_event(
+      issue_id: "issue-1423", identifier: "ENG-1423", title: "Improve session recovery",
+      received_at: received_at + 20.seconds, policy: policy
+    )
+
+    report = AutomationActivityReport.new(first)
+    input = report.workflow_input
+
+    assert_equal "accepted", input.fetch("kind")
+    assert_equal [
+      ":gear: *Centaur accepted 2 Linear issues*",
+      "• <https://linear.app/voytravel/issue/ENG-1422/clear-stale-sign-out-button|ENG-1422 — Clear stale sign-out button> — will implement",
+      "• <https://linear.app/voytravel/issue/ENG-1423/improve-session-recovery|ENG-1423 — Improve session recovery> — will implement"
+    ].join("\n"), input.fetch("text")
+    assert_equal(
+      "automation-activity-report:accepted-linear:C0123456789:#{received_at.beginning_of_minute.to_i}",
+      report.idempotency_key
+    )
+    assert_equal received_at.beginning_of_minute + 75.seconds, report.delivery_at
+    assert_not_includes input.fetch("text"), "Audit:"
+    assert_not_includes input.fetch("text"), "linear:issue-"
   end
 
   private
@@ -117,5 +147,60 @@ class AutomationActivityReportTest < ActiveSupport::TestCase
       received_at: Time.current
     )
     [ event, workstream ]
+  end
+
+  def linear_policy
+    AutomationPolicy.create!(
+      name: "Linear activity reporting #{SecureRandom.hex(4)}",
+      provider: "linear",
+      linear_team_id: "team-1",
+      enabled: true,
+      mode: "act",
+      execution_role: automation_role,
+      created_by: users(:acme_admin),
+      settings: {
+        "linear" => {
+          "issue" => "ready_issues",
+          "ready_statuses" => [ "Ready" ],
+          "github_repository" => "acme/widgets"
+        }
+      }
+    )
+  end
+
+  def configured_linear_event(issue_id:, identifier:, title:, received_at:, policy:)
+    workstream = AutomationWorkstream.create!(
+      automation_policy: policy,
+      provider: "linear",
+      repository: "acme/widgets",
+      subject_key: "linear:#{issue_id}",
+      session_key: "linear:#{issue_id}",
+      last_event_at: received_at,
+      metadata: {
+        "linear_issue_identifier" => identifier,
+        "linear_issue_title" => title,
+        "linear_issue_url" => "https://linear.app/voytravel/issue/#{identifier}/#{title.parameterize}"
+      }
+    )
+    AutomationEvent.create!(
+      automation_workstream: workstream,
+      provider: "linear",
+      deduplication_key: "activity-report-#{issue_id}",
+      event_type: "Issue",
+      event_action: "create",
+      decision: "act",
+      action_kind: "implement_issue",
+      metadata: { "activity_report" => { "kind" => "accepted", "slack_channel" => "C0123456789" } },
+      received_at: received_at
+    )
+  end
+
+  def automation_role
+    @automation_role ||= Role.create!(
+      foreign_id: "automation-activity-report-test-#{SecureRandom.hex(6)}",
+      name: "Automation activity report test role",
+      labels: { Role::AUTOMATION_EXECUTION_LABEL => "true" },
+      created_by: users(:acme_admin)
+    )
   end
 end

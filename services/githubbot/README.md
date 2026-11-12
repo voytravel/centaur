@@ -134,6 +134,14 @@ fixes, newly changed risk surfaces, and regressions—not the whole PR again.
 Finding fingerprints persist in GitHub review comments, so line movement cannot
 turn an accepted, rejected, or fixed finding into a new one.
 
+Public PR comments are separately bounded by `GITHUBBOT_PR_POSTS_PER_DAY`
+(default 25 per UTC day). The receiver reserves a durable slot before posting,
+fails closed if its state store is unavailable, and allows one reply per review
+thread per PR head. The final slot posts one pause notice for a human instead
+of another automated answer. PR turns acknowledge with a reaction instead of
+an extra working comment. A human review request can start another bounded
+review epoch, but it does not reset the public post ceiling.
+
 A new production file, newly touched auth/data/API/infra boundary, dependency
 manifest, or at least `GITHUBBOT_REVIEW_EPOCH_MIN_CHANGED_LINES` non-generated
 changed lines (default 50) starts another epoch. Test/docs/generated-only
@@ -221,7 +229,8 @@ automatically recognizes the GitHub Markdown mention form `@centaur-hz`.
 
 Webhook events to subscribe: **Issue comments**, **Pull request review comments**, **Issues**, **Pull
 requests**, **Pull request reviews**, **Check runs**, **Check suites**, and **Workflow runs**
-(**Issues** drives issue-work-on-assignment; the last four drive v2 PR self-management).
+(**Issues** drives issue-work-on-assignment; the last four drive v2 PR self-management). Also
+subscribe to **Deployment statuses** when `GITHUBBOT_RELEASE_WEBHOOK_SLUG` is configured.
 
 ## Environment
 
@@ -233,6 +242,7 @@ requests**, **Pull request reviews**, **Check runs**, **Check suites**, and **Wo
 | `GITHUB_BOT_USERNAME` | ✅ | The bot account's GitHub login — drives `@`-mention and requested-reviewer matching (or `GITHUBBOT_USER_NAME`). |
 | `GITHUBBOT_DATABASE_URL` | ✅ | Postgres for chat-SDK state (falls back to `DATABASE_URL` / `POSTGRES_URL`). |
 | `CENTAUR_API_URL` | — | api-rs control plane, default `http://127.0.0.1:8080`. |
+| `GITHUBBOT_RELEASE_WEBHOOK_SLUG` | — | Fixed internal api-rs workflow webhook slug. When set, successful signed `deployment_status` payloads are forwarded unchanged for independent HMAC verification and durable ingestion. |
 | `CENTAUR_AUTOMATION_API_URL` | — | Console base URL for verified policy-event evaluation. Both automation variables must be set to enable it. |
 | `CENTAUR_AUTOMATION_INGRESS_TOKEN` | — | Single-purpose bearer for Console's normalized automation-event endpoint; not an operator API key. |
 | `GITHUBBOT_API_KEY` | — | Dedicated bearer sent to api-rs. |

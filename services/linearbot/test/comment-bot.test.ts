@@ -5,6 +5,7 @@ import {
   buildWorkingReplyBody,
   CommentReplyCollector,
   FAILED_REPLY_BODY,
+  MISSING_PROJECT_MODEL_ACCESS_REPLY_BODY,
   WORKING_REPLY_BODY,
 } from "../src/comment-bot";
 import type { ChatSDKStreamChunk } from "@centaur/rendering";
@@ -66,5 +67,15 @@ describe("Linear reply bodies", () => {
     expect(body).toBe("About a day.");
     expect(body).not.toContain("Chain of thought");
     expect(body).not.toContain(">>>");
+  });
+
+  it("explains a missing project only for a confirmed model access failure", () => {
+    expect(buildFailedReplyBody({ modelAccessDenied: true, projectMissing: true }))
+      .toBe(MISSING_PROJECT_MODEL_ACCESS_REPLY_BODY);
+    expect(buildFailedReplyBody({ modelAccessDenied: true, projectMissing: false }))
+      .toBe(FAILED_REPLY_BODY);
+    expect(buildFailedReplyBody({ modelAccessDenied: false, projectMissing: true }))
+      .toBe(FAILED_REPLY_BODY);
+    expect(MISSING_PROJECT_MODEL_ACCESS_REPLY_BODY).not.toContain("LiteLLM");
   });
 });

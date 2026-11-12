@@ -142,6 +142,8 @@ spec:
               value: {{ .Values.githubbot.reviewMaxBotFeedbackRoundsPerEpoch | quote }}
             - name: GITHUBBOT_REVIEW_MAX_EPOCHS
               value: {{ .Values.githubbot.reviewMaxEpochs | quote }}
+            - name: GITHUBBOT_PR_POSTS_PER_DAY
+              value: {{ .Values.githubbot.prPostsPerDay | quote }}
             - name: GITHUBBOT_REVIEW_EPOCH_MIN_CHANGED_LINES
               value: {{ .Values.githubbot.reviewEpochMinChangedLines | quote }}
             - name: GITHUBBOT_WORKFLOW_EVENTS
